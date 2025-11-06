@@ -10,7 +10,7 @@ permissions:
 
 on:
   push:
-    branches: [master,feture/avoid-node-id-change]
+    branches: [master]
     paths-ignore:
       - "**/*.md"
   workflow_dispatch:
