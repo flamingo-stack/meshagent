@@ -221,7 +221,7 @@ jobs:
       - name: Prepare release artifacts
         run: |
           set -e
-          ls -lR final-artifacts
+          ls -lR release-artifacts
           mkdir -p final-artifacts/clients
 
           # macOS
