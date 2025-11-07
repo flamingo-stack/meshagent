@@ -10,7 +10,7 @@ permissions:
 
 on:
   push:
-    branches: [master, feature/release]
+    branches: [master]
     paths-ignore:
       - "**/*.md"
   workflow_dispatch:
@@ -207,7 +207,8 @@ jobs:
     needs: [build_client, create_universal_macos]
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'push'
+      github.event_name == 'workflow_dispatch' && 
+      inputs.version != ''
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -247,15 +248,11 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: 0.0.1  #${{ inputs.version }}
-          name: "🦩 0.0.1"  #${{ inputs.version }}"
+          tag_name: ${{ inputs.version }}
+          name: "🦩 ${{ inputs.version }}"
           draft: false
           prerelease: false
           token: ${{ secrets.GITHUB_TOKEN }}
           body_path: RELEASE_HEADER.md
           files: |
             final-artifacts/clients/*
-
-
-      # github.event_name == 'workflow_dispatch' && 
-      # inputs.version != ''
