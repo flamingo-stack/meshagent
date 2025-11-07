@@ -257,3 +257,4 @@ jobs:
           body_path: RELEASE_HEADER.md
           files: |
             final-artifacts/clients/*
+
