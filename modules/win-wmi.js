@@ -24,6 +24,11 @@ const WBEM_FLAG_ALWAYS = 0;
 const E_NOINTERFACE = 0x80004002;
 var OleAut32 = GM.CreateNativeProxy('OleAut32.dll');
 OleAut32.CreateMethod('SafeArrayAccessData');
+OleAut32.CreateMethod('SafeArrayUnaccessData');
+OleAut32.CreateMethod('SafeArrayGetLBound');
+OleAut32.CreateMethod('SafeArrayGetUBound');
+
+const VT_ARRAY = 0x2000;
 
 var wmi_handlers = {};
 
@@ -264,7 +269,87 @@ function enumerateProperties(j, fields)
             // https://learn.microsoft.com/en-us/windows/win32/api/wbemcli/nf-wbemcli-iwbemclassobject-get
             //
 
-            switch (tmp1.toBuffer().readUInt16LE())
+            var varType = tmp1.toBuffer().readUInt16LE();
+
+            // Check if this is an array type (VT_ARRAY flag is set)
+            if ((varType & VT_ARRAY) === VT_ARRAY)
+            {
+                // Extract base type (remove VT_ARRAY flag)
+                var baseType = varType & 0x0FFF;
+
+                // Get SAFEARRAY pointer from VARIANT (at offset 8)
+                var safeArray = tmp1.Deref(8, GM.PointerSize);
+
+                // Get array bounds
+                var lowerBound = GM.CreateVariable(4);
+                var upperBound = GM.CreateVariable(4);
+
+                if (OleAut32.SafeArrayGetLBound(safeArray, 1, lowerBound).Val == 0 &&
+                    OleAut32.SafeArrayGetUBound(safeArray, 1, upperBound).Val == 0)
+                {
+                    var lower = lowerBound.toBuffer().readInt32LE();
+                    var upper = upperBound.toBuffer().readInt32LE();
+                    var arrayLength = upper - lower + 1;
+
+                    // Access array data
+                    var dataPtr = GM.CreatePointer();
+                    if (OleAut32.SafeArrayAccessData(safeArray, dataPtr).Val == 0)
+                    {
+                        var jsArray = [];
+                        var data = dataPtr.Deref();
+
+                        // Extract array elements based on base type
+                        for (var idx = 0; idx < arrayLength; idx++)
+                        {
+                            switch (baseType)
+                            {
+                                case 0x0002:    // VT_I2
+                                    jsArray.push(data.Deref(idx * 2, 2).toBuffer().readInt16LE());
+                                    break;
+                                case 0x0003:    // VT_I4
+                                    jsArray.push(data.Deref(idx * 4, 4).toBuffer().readInt32LE());
+                                    break;
+                                case 0x000B:    // VT_BOOL
+                                    jsArray.push(data.Deref(idx * 4, 4).toBuffer().readInt32LE() != 0);
+                                    break;
+                                case 0x0010:    // VT_I1
+                                    jsArray.push(data.Deref(idx, 1).toBuffer().readInt8());
+                                    break;
+                                case 0x0011:    // VT_UI1
+                                    jsArray.push(data.Deref(idx, 1).toBuffer().readUInt8());
+                                    break;
+                                case 0x0012:    // VT_UI2
+                                    jsArray.push(data.Deref(idx * 2, 2).toBuffer().readUInt16LE());
+                                    break;
+                                case 0x0013:    // VT_UI4
+                                    jsArray.push(data.Deref(idx * 4, 4).toBuffer().readUInt32LE());
+                                    break;
+                                case 0x0008:    // VT_BSTR
+                                    var bstrPtr = data.Deref(idx * GM.PointerSize, GM.PointerSize);
+                                    if (!bstrPtr.isNull())
+                                    {
+                                        jsArray.push(bstrPtr.Deref().Wide2UTF8);
+                                    }
+                                    else
+                                    {
+                                        jsArray.push(null);
+                                    }
+                                    break;
+                                default:
+                                    console.info1('Unhandled array base type: 0x' + baseType.toString(16));
+                                    break;
+                            }
+                        }
+
+                        values[properties[i]] = jsArray;
+                        OleAut32.SafeArrayUnaccessData(safeArray);
+                    }
+                }
+            }
+            else
+            {
+                // Scalar type - use existing switch statement
+                switch (varType)
             {
                 case 0x0000:    // VT_EMPTY
                 case 0x0001:    // VT_NULL
@@ -305,6 +390,7 @@ function enumerateProperties(j, fields)
                 default:
                     console.info1('VARTYPE: ' + tmp1.toBuffer().readUInt16LE());
                     break;
+            }
             }
         }
     }
