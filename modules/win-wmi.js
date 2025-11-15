@@ -25,8 +25,6 @@ const E_NOINTERFACE = 0x80004002;
 var OleAut32 = GM.CreateNativeProxy('OleAut32.dll');
 OleAut32.CreateMethod('SafeArrayAccessData');
 OleAut32.CreateMethod('SafeArrayUnaccessData');
-OleAut32.CreateMethod('SafeArrayGetLBound');
-OleAut32.CreateMethod('SafeArrayGetUBound');
 
 const VT_ARRAY = 0x2000;
 
@@ -280,20 +278,13 @@ function enumerateProperties(j, fields)
                 // Get SAFEARRAY pointer from VARIANT (at offset 8)
                 var safeArray = tmp1.Deref(8, GM.PointerSize);
 
-                // Get array bounds
-                var lowerBound = GM.CreateVariable(4);
-                var upperBound = GM.CreateVariable(4);
+                // Read array bounds directly from SAFEARRAY structure (same pattern as line 250)
+                // SAFEARRAY.rgsabound[0].cElements is at offset 16 (32-bit) or 24 (64-bit)
+                var arrayLength = safeArray.Deref().Deref(GM.PointerSize == 8 ? 24 : 16, 4).toBuffer().readUInt32LE();
 
-                if (OleAut32.SafeArrayGetLBound(safeArray, 1, lowerBound).Val == 0 &&
-                    OleAut32.SafeArrayGetUBound(safeArray, 1, upperBound).Val == 0)
-                {
-                    var lower = lowerBound.toBuffer().readInt32LE();
-                    var upper = upperBound.toBuffer().readInt32LE();
-                    var arrayLength = upper - lower + 1;
-
-                    // Access array data
-                    var dataPtr = GM.CreatePointer();
-                    if (OleAut32.SafeArrayAccessData(safeArray, dataPtr).Val == 0)
+                // Access array data
+                var dataPtr = GM.CreatePointer();
+                if (OleAut32.SafeArrayAccessData(safeArray.Deref(), dataPtr).Val == 0)
                     {
                         var jsArray = [];
                         var data = dataPtr.Deref();
@@ -342,9 +333,8 @@ function enumerateProperties(j, fields)
                         }
 
                         values[properties[i]] = jsArray;
-                        OleAut32.SafeArrayUnaccessData(safeArray);
+                        OleAut32.SafeArrayUnaccessData(safeArray.Deref());
                     }
-                }
             }
             else
             {
