@@ -590,12 +590,12 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 			}
 		}
 
-		// Fallback: Discover serviceId by parsing LaunchAgent plist (backward compatibility)
+		// Discover serviceId by parsing LaunchAgent plist
 		if (serviceId == NULL)
 		{
 			char binaryPath[PATH_MAX];
 
-			printf("KVM: No --serviceId parameter provided, using fallback discovery\n");
+			printf("KVM: No --serviceId parameter provided, discovering from LaunchAgent plist\n");
 
 			// Get absolute path of our binary
 			if (realpath(argv[0], binaryPath) != NULL)
@@ -608,7 +608,7 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 
 				if (serviceId != NULL)
 				{
-					printf("KVM: Discovered serviceId from plist fallback: %s\n", serviceId);
+					printf("KVM: Discovered serviceId from LaunchAgent plist: %s\n", serviceId);
 				}
 				else
 				{

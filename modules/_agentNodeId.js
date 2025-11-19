@@ -17,20 +17,15 @@ limitations under the License.
 function _meshNodeId()
 {
     var ret = '';
-    // Determine database path - use configured path from plist if available (macOS)
+    // Determine database path
     var dbPath;
-    if (process.configuredDbPath)
-    {
-        // macOS: Use path from /Library/Preferences/{serviceID}.plist
-        dbPath = process.configuredDbPath;
-    }
-    else if (process.platform == 'win32')
+    if (process.platform == 'win32')
     {
         dbPath = process.execPath.replace('.exe', '.db');
     }
     else
     {
-        // Standalone binary or Linux - use traditional path next to executable
+        // Linux/macOS - use path next to executable
         dbPath = process.execPath + '.db';
     }
 
