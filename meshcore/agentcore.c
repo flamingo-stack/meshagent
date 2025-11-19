@@ -6143,7 +6143,22 @@ void MeshAgent_ScriptMode(MeshAgentHostContainer *agentHost, int argc, char **ar
 
 	agentHost->meshCoreCtx = ILibDuktape_ScriptContainer_InitializeJavaScriptEngineEx(secFlags, execTimeout, agentHost->chain, scriptArgs, connectAgent != 0 ? agentHost->masterDb : NULL, agentHost->exePath, agentHost->pipeManager, connectAgent == 0 ? MeshAgent_RunScriptOnly_Finalizer : NULL, agentHost);
 	ILibDuktape_SetNativeUncaughtExceptionHandler(agentHost->meshCoreCtx, MeshAgent_ScriptMode_UncaughtExceptionSink, agentHost);
-		
+
+#ifdef __APPLE__
+	// Expose configured paths to JavaScript process object
+	duk_push_global_object(agentHost->meshCoreCtx);								// [global]
+	duk_get_prop_string(agentHost->meshCoreCtx, -1, "process");					// [global][process]
+	if (agentHost->configuredDbPath != NULL) {
+		duk_push_string(agentHost->meshCoreCtx, agentHost->configuredDbPath);	// [global][process][string]
+		duk_put_prop_string(agentHost->meshCoreCtx, -2, "configuredDbPath");	// [global][process]
+	}
+	if (agentHost->configuredMshPath != NULL) {
+		duk_push_string(agentHost->meshCoreCtx, agentHost->configuredMshPath);	// [global][process][string]
+		duk_put_prop_string(agentHost->meshCoreCtx, -2, "configuredMshPath");	// [global][process]
+	}
+	duk_pop_2(agentHost->meshCoreCtx);											// ...
+#endif
+
 	if (connectAgent != 0) 
 	{ 
 		ILibDuktape_MeshAgent_Init(agentHost->meshCoreCtx, agentHost->chain, agentHost); 

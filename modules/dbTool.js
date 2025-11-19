@@ -32,18 +32,16 @@ if (process.argv.length > 1)
     }
 }
 
-// Determine database path - for macOS bundles, use install directory to avoid modifying signed bundle
+// Determine database path - use configured path from plist if available (macOS)
 var dbPath;
-if (process.platform == 'win32')
+if (process.configuredDbPath)
+{
+    // macOS: Use path from /Library/Preferences/{serviceID}.plist
+    dbPath = process.configuredDbPath;
+}
+else if (process.platform == 'win32')
 {
     dbPath = process.execPath.replace('.exe', '.db');
-}
-else if (process.platform == 'darwin' && process.execPath.indexOf('.app/Contents/MacOS/') !== -1)
-{
-    // Running from macOS bundle - use working directory (install path) for database
-    // This prevents modifying the signed bundle which would break code signature
-    var path = require('path');
-    dbPath = path.join(process.cwd(), 'meshagent.db');
 }
 else
 {
