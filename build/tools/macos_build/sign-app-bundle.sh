@@ -74,42 +74,12 @@ else
     exit 1
 fi
 
-# Check if bundle is universal and extract slices if so
+# Display architecture information
 EXECUTABLE="$BUNDLE_PATH/Contents/MacOS/meshagent"
 if [ -f "$EXECUTABLE" ]; then
-    if lipo -info "$EXECUTABLE" 2>/dev/null | grep -q "Non-fat file"; then
-        echo ""
-        echo "Single architecture bundle (no extraction needed)"
-        lipo -info "$EXECUTABLE"
-    elif lipo -info "$EXECUTABLE" 2>/dev/null | grep -q "Architectures in the fat file"; then
-        echo ""
-        echo "Universal bundle detected"
-        lipo -info "$EXECUTABLE"
-
-        # Get parent directory of bundle
-        BUNDLE_DIR="$(dirname "$BUNDLE_PATH")"
-        BUNDLE_NAME="$(basename "$BUNDLE_PATH" .app)"
-
-        # Extract x86_64 bundle
-        if lipo -info "$EXECUTABLE" | grep -q "x86_64"; then
-            X86_BUNDLE="$BUNDLE_DIR/${BUNDLE_NAME}-x86_64.app"
-            echo ""
-            echo "Extracting x86_64 bundle to: $X86_BUNDLE"
-            cp -R "$BUNDLE_PATH" "$X86_BUNDLE"
-            lipo "$EXECUTABLE" -thin x86_64 -output "$X86_BUNDLE/Contents/MacOS/meshagent"
-            echo "✓ x86_64 bundle created"
-        fi
-
-        # Extract arm64 bundle
-        if lipo -info "$EXECUTABLE" | grep -q "arm64"; then
-            ARM_BUNDLE="$BUNDLE_DIR/${BUNDLE_NAME}-arm64.app"
-            echo ""
-            echo "Extracting arm64 bundle to: $ARM_BUNDLE"
-            cp -R "$BUNDLE_PATH" "$ARM_BUNDLE"
-            lipo "$EXECUTABLE" -thin arm64 -output "$ARM_BUNDLE/Contents/MacOS/meshagent"
-            echo "✓ arm64 bundle created"
-        fi
-    fi
+    echo ""
+    echo "Bundle architecture:"
+    lipo -info "$EXECUTABLE"
 fi
 
 echo ""
