@@ -32,7 +32,8 @@ CODE_UTILS_BUILD="no"               # Code-utils build: KVM=0, minimal module se
 SKIP_BUILD="no"                     # Skip build step (use existing binary)
 SKIP_SIGN="no"						# Skip signing step
 CODE_SIGN="bundle"					# bundle/binary its one or the other NOT both default bundle
-SKIP_NOTARY="no"                    # Skip notarization step
+SKIP_NOTARY="no"					# Skip notarization step
+SKIP_STAPLE="no"                    # Skip notarization stapling step
 SKIP_GIT_PULL="yes"                 # Skip git pull before building
 MSH_EXEC="no"                       # Execute the meshagent as root at the end of the build process with MSH-* inputs
 MSH_COMMAND=""                      # meshagent command: install, fullinstall, upgrade, uninstall, fulluninstall
@@ -81,6 +82,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-notary)
             SKIP_NOTARY="yes"
+            shift
+            ;;
+        --skip-staple)
+            SKIP_STAPLE="yes"
             shift
             ;;
         --git-pull)
@@ -132,6 +137,7 @@ while [[ $# -gt 0 ]]; do
             echo "                                  bundle = Sign .app bundle (recommended for distribution)"
             echo "                                  binary = Sign standalone binary only"
             echo "  --skip-notary                 Skip notarization step"
+            echo "  --skip-staple                 Skip stapling step (notarize but don't staple ticket)"
             echo "  --git-pull                    Pull latest changes before building"
             echo ""
             echo "MeshAgent Execution Options:"
@@ -367,6 +373,9 @@ if [ "$SKIP_SIGN" = "no" ]; then
     echo "  → Sign Target:  $CODE_SIGN"
 fi
 echo "Skip Notary:      $SKIP_NOTARY"
+if [ "$SKIP_NOTARY" = "no" ]; then
+    echo "  → Skip Staple:  $SKIP_STAPLE"
+fi
 echo "Skip Git Pull:    $SKIP_GIT_PULL"
 echo ""
 if [ "$MSH_EXEC" = "yes" ] && [ -n "$MSH_COMMAND" ]; then
@@ -668,10 +677,16 @@ if [ "$SKIP_NOTARY" = "no" ]; then
         echo "  Path:   $BUNDLE_PATH"
 
         # Run notarization as the actual user (not root) to access user's keychain
-        # Notarize the .app bundle (includes signing verification, submission, and stapling)
-        sudo -u $SUDO_USER ./build/tools/macos_build/notarize-app-bundle.sh "$BUNDLE_PATH"
-        echo "[$(date '+%H:%M:%S')] Notarization and stapling complete"
-        echo "✓ Bundle notarization and stapling complete"
+        # Notarize the .app bundle (includes signing verification, submission, and optional stapling)
+        sudo -u $SUDO_USER SKIP_STAPLE="$SKIP_STAPLE" ./build/tools/macos_build/notarize-app-bundle.sh "$BUNDLE_PATH"
+
+        if [ "$SKIP_STAPLE" = "yes" ]; then
+            echo "[$(date '+%H:%M:%S')] Notarization complete (stapling skipped)"
+            echo "✓ Bundle notarization complete (not stapled)"
+        else
+            echo "[$(date '+%H:%M:%S')] Notarization and stapling complete"
+            echo "✓ Bundle notarization and stapling complete"
+        fi
         echo ""
     elif [ "$CODE_SIGN" = "binary" ]; then
         echo "[4/6] Notarizing standalone binary..."

@@ -6,6 +6,7 @@ set -e  # Exit on any error
 
 BUNDLE_PATH="$1"
 NOTARY_PROFILE="${MACOS_NOTARY_PROFILE:-meshagent-notary}"
+SKIP_STAPLE="${SKIP_STAPLE:-no}"
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -94,24 +95,32 @@ if echo "$SUBMIT_OUTPUT" | grep -q "status: Accepted"; then
     echo ""
     echo "✓ Notarization succeeded!"
 
-    # Staple the notarization ticket to the bundle
-    echo ""
-    echo "Stapling notarization ticket..."
-    if xcrun stapler staple "$BUNDLE_PATH"; then
-        echo "✓ Notarization ticket stapled successfully"
-
-        # Verify stapling
+    # Staple the notarization ticket to the bundle (unless skipped)
+    if [ "$SKIP_STAPLE" = "yes" ]; then
         echo ""
-        echo "Verifying stapled ticket..."
-        if xcrun stapler validate "$BUNDLE_PATH"; then
-            echo "✓ Stapled ticket is valid"
-        else
-            echo "⚠ Warning: Staple validation failed"
-        fi
+        echo "Stapling - SKIPPED (SKIP_STAPLE=yes)"
+        echo ""
+        echo "Note: The bundle is notarized but the ticket is not stapled."
+        echo "Users will need internet connection for Gatekeeper to verify."
     else
-        echo "⚠ Warning: Failed to staple notarization ticket"
-        echo "The bundle is notarized but the ticket is not attached"
-        echo "Users will need internet connection for Gatekeeper to verify"
+        echo ""
+        echo "Stapling notarization ticket..."
+        if xcrun stapler staple "$BUNDLE_PATH"; then
+            echo "✓ Notarization ticket stapled successfully"
+
+            # Verify stapling
+            echo ""
+            echo "Verifying stapled ticket..."
+            if xcrun stapler validate "$BUNDLE_PATH"; then
+                echo "✓ Stapled ticket is valid"
+            else
+                echo "⚠ Warning: Staple validation failed"
+            fi
+        else
+            echo "⚠ Warning: Failed to staple notarization ticket"
+            echo "The bundle is notarized but the ticket is not attached"
+            echo "Users will need internet connection for Gatekeeper to verify"
+        fi
     fi
 
     # Verify with Gatekeeper
@@ -158,7 +167,11 @@ if echo "$SUBMIT_OUTPUT" | grep -q "status: Accepted"; then
     echo "The bundle is now:"
     echo "  ✓ Signed with hardened runtime"
     echo "  ✓ Notarized by Apple"
-    echo "  ✓ Stapled (offline verification enabled)"
+    if [ "$SKIP_STAPLE" = "yes" ]; then
+        echo "  ⊘ Not stapled (SKIP_STAPLE=yes, requires internet for verification)"
+    else
+        echo "  ✓ Stapled (offline verification enabled)"
+    fi
     echo "  ✓ Ready for distribution"
 
     exit 0
