@@ -71,7 +71,7 @@ sed -e "s/BUNDLE_IDENTIFIER/$BUNDLE_ID/g" \
 echo "  Generated Info.plist"
 
 # Copy icon
-ICON_PATH="$PROJECT_ROOT/build/tools/macos_build/icon/meshagent.icns"
+ICON_PATH="$PROJECT_ROOT/build/resources/icon/meshagent.icns"
 if [ -f "$ICON_PATH" ]; then
     cp "$ICON_PATH" "$BUNDLE_NAME/Contents/Resources/meshagent.icns"
     echo "  Copied icon: meshagent.icns"
