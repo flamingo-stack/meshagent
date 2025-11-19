@@ -881,6 +881,27 @@ macos:
 		fi; \
 	fi
 
+# Build macOS application bundle
+macos-bundle: macos
+	@echo "Creating application bundle..."
+	@BUILD_TIME=$$(date +%y.%m.%d.%H.%M.%S); \
+	./build/tools/macos_build/create-app-bundle.sh \
+		$(BUILD_OUTPUT_DIR)/$(EXENAME)_$(ARCHNAME) \
+		$(BUILD_OUTPUT_DIR)/MeshAgent.app \
+		$(BUNDLE_ID) \
+		$$BUILD_TIME
+	@echo "Bundle complete: $(BUILD_OUTPUT_DIR)/MeshAgent.app"
+
+# Install bundle to /Applications
+install-bundle: macos-bundle
+	@echo "Installing MeshAgent.app to /Applications..."
+	@if [ -d "/Applications/MeshAgent.app" ]; then \
+		echo "Removing existing installation..."; \
+		rm -rf "/Applications/MeshAgent.app"; \
+	fi
+	@cp -R $(BUILD_OUTPUT_DIR)/MeshAgent.app /Applications/
+	@echo "Installation complete: /Applications/MeshAgent.app"
+
 freebsd:
 	@mkdir -p $(BUILD_OUTPUT_DIR)/DEBUG
 	$(MAKE) EXENAME="$(BUILD_OUTPUT_DIR)/DEBUG/$(EXENAME)_$(ARCHNAME)$(EXENAME2)" ADDITIONALSOURCES="$(LINUXKVMSOURCES)"  AID="$(ARCHID)" CFLAGS="-std=gnu99 -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(ARCHID) -D_POSIX -D_FREEBSD -D_NOHECI -D_NOILIBSTACKDEBUG -DMICROSTACK_PROXY -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CEXTRA)" LDFLAGS="$(BSDSSL) $(BSDFLAGS) -L. -lpthread -ldl -lz -lutil $(LDFLAGS) $(LDEXTRA)"

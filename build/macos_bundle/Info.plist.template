@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Bundle Identification -->
+	<key>CFBundleIdentifier</key>
+	<string>BUNDLE_IDENTIFIER</string>
+
+	<key>CFBundleName</key>
+	<string>MeshAgent</string>
+
+	<key>CFBundleDisplayName</key>
+	<string>MeshAgent</string>
+
+	<key>CFBundleExecutable</key>
+	<string>meshagent</string>
+
+	<!-- Version Information -->
+	<key>CFBundleShortVersionString</key>
+	<string>BUILD_TIMESTAMP</string>
+
+	<key>CFBundleVersion</key>
+	<string>BUILD_TIMESTAMP</string>
+
+	<!-- Package Type -->
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+
+	<key>CFBundleSignature</key>
+	<string>MESH</string>
+
+	<!-- Icon -->
+	<key>CFBundleIconFile</key>
+	<string>meshagent.icns</string>
+
+	<!-- High Resolution Support -->
+	<key>NSHighResolutionCapable</key>
+	<true/>
+
+	<!-- Supported Platforms -->
+	<key>LSMinimumSystemVersion</key>
+	<string>10.13</string>
+
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+
+	<!-- Background Agent (no dock icon) -->
+	<key>LSUIElement</key>
+	<true/>
+
+	<!-- Background Modes -->
+	<key>LSBackgroundOnly</key>
+	<false/>
+
+	<!-- Permissions (for future permission wizard integration) -->
+	<key>NSCameraUsageDescription</key>
+	<string>MeshAgent needs camera access for video calls during remote sessions.</string>
+
+	<key>NSMicrophoneUsageDescription</key>
+	<string>MeshAgent needs microphone access for voice calls during remote sessions.</string>
+
+	<key>NSSystemAdministrationUsageDescription</key>
+	<string>MeshAgent needs administrative access to configure remote access.</string>
+
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>MeshAgent needs access to manage files during remote sessions.</string>
+
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>MeshAgent needs access to manage files during remote sessions.</string>
+
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>MeshAgent needs access to manage files during remote sessions.</string>
+
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>MeshAgent needs access to manage files on external drives during remote sessions.</string>
+
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>MeshAgent needs access to manage files on network volumes during remote sessions.</string>
+
+	<!-- Hardened Runtime Entitlements -->
+	<!-- Note: These are informational in Info.plist, actual entitlements must be in separate file for codesign -->
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+
+	<key>com.apple.security.network.client</key>
+	<true/>
+
+	<key>com.apple.security.network.server</key>
+	<true/>
+</dict>
+</plist>
