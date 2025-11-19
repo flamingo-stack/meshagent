@@ -59,7 +59,7 @@ chmod +x "$BUNDLE_NAME/Contents/MacOS/meshagent"
 echo "  Copied binary to Contents/MacOS/meshagent"
 
 # Generate Info.plist
-TEMPLATE_PATH="$PROJECT_ROOT/build/macos_bundle/Info.plist.template"
+TEMPLATE_PATH="$PROJECT_ROOT/build/resources/Info/bundle/_Info.plist"
 if [ ! -f "$TEMPLATE_PATH" ]; then
     echo "Error: Info.plist template not found: $TEMPLATE_PATH"
     exit 1

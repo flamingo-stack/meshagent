@@ -882,7 +882,7 @@ macos:
 			BUILD_TIME=$(BUILD_TIMESTAMP); \
 		fi; \
 		echo "Generating Info.plist with timestamp: $$BUILD_TIME and bundle ID: $(BUNDLE_ID)"; \
-		sed -e "s/BUILD_TIMESTAMP/$$BUILD_TIME/g" -e "s/BUNDLE_IDENTIFIER/$(BUNDLE_ID)/g" build/tools/macos_build/Info.plist/Info.plist.template > build/tools/macos_build/Info.plist/Info.plist; \
+		sed -e "s/BUILD_TIMESTAMP/$$BUILD_TIME/g" -e "s/BUNDLE_IDENTIFIER/$(BUNDLE_ID)/g" build/resources/Info/bundle/_Info.plist > build/tools/macos_build/Info.plist/Info.plist; \
 		$(MAKE) $(MAKEFILE) EXENAME="$(BUILD_OUTPUT_DIR)/DEBUG/$(EXENAME)_$(ARCHNAME)" ADDITIONALSOURCES="$(MACOSKVMSOURCES) $(MACOSUTILSOURCES)" CFLAGS="$(MACOSARCH) -std=gnu99 -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(ARCHID) -D_POSIX -D_NOILIBSTACKDEBUG -D_NOHECI -DMICROSTACK_PROXY -D__APPLE__ $(CWEBLOG) -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CEXTRA)" LDFLAGS="$(MACOSARCH) -Wl,-w $(MACSSL) $(MACOSFLAGS) -lz -sectcreate __CGPreLoginApp __cgpreloginapp /dev/null -sectcreate __TEXT __info_plist build/tools/macos_build/Info.plist/Info.plist -framework IOKit -framework ApplicationServices -framework SystemConfiguration -framework CoreServices -framework CoreGraphics -framework CoreFoundation -framework Security -fconstant-cfstrings $(LDFLAGS) $(LDEXTRA)"; \
 		if [ "$(DEBUG)" != "1" ]; then \
 			cp $(BUILD_OUTPUT_DIR)/DEBUG/$(EXENAME)_$(ARCHNAME) $(BUILD_OUTPUT_DIR)/$(EXENAME)_$(ARCHNAME); \
