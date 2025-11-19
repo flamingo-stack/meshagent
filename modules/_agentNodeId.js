@@ -17,13 +17,31 @@ limitations under the License.
 function _meshNodeId()
 {
     var ret = '';
+    // Determine database path - for macOS bundles, use install directory
+    var dbPath;
+    if (process.platform == 'win32')
+    {
+        dbPath = process.execPath.replace('.exe', '.db');
+    }
+    else if (process.platform == 'darwin' && process.execPath.indexOf('.app/Contents/MacOS/') !== -1)
+    {
+        // Running from macOS bundle - use working directory (install path) for database
+        var path = require('path');
+        dbPath = path.join(process.cwd(), 'meshagent.db');
+    }
+    else
+    {
+        // Standalone binary or Linux - use traditional path next to executable
+        dbPath = process.execPath + '.db';
+    }
+
     switch (process.platform)
     {
         case 'linux':
         case 'darwin':
             try
             {
-                var db = require('SimpleDataStore').Create(process.execPath + '.db', { readOnly: true });
+                var db = require('SimpleDataStore').Create(dbPath, { readOnly: true });
                 ret = require('tls').loadCertificate({ pfx: db.GetBuffer('SelfNodeCert'), passphrase: 'hidden' }).getKeyHash().toString('hex');
             }
             catch(e)
@@ -34,7 +52,7 @@ function _meshNodeId()
             // First Check if the db Contains the NodeID
             try
             {
-                var db = require('SimpleDataStore').Create(process.execPath.replace('.exe', '.db'), { readOnly: true });
+                var db = require('SimpleDataStore').Create(dbPath, { readOnly: true });
                 var v = db.GetBuffer('SelfNodeCert');
                 if (v)
                 {

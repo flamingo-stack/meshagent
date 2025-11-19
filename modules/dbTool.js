@@ -32,14 +32,26 @@ if (process.argv.length > 1)
     }
 }
 
+// Determine database path - for macOS bundles, use install directory to avoid modifying signed bundle
+var dbPath;
 if (process.platform == 'win32')
 {
-    db = require('SimpleDataStore').Create(process.execPath.replace('.exe', '.db'), { readOnly: readonlyDb });
+    dbPath = process.execPath.replace('.exe', '.db');
+}
+else if (process.platform == 'darwin' && process.execPath.indexOf('.app/Contents/MacOS/') !== -1)
+{
+    // Running from macOS bundle - use working directory (install path) for database
+    // This prevents modifying the signed bundle which would break code signature
+    var path = require('path');
+    dbPath = path.join(process.cwd(), 'meshagent.db');
 }
 else
 {
-    db = require('SimpleDataStore').Create(process.execPath + '.db', { readOnly: readonlyDb });
+    // Standalone binary - use traditional path next to executable
+    dbPath = process.execPath + '.db';
 }
+
+db = require('SimpleDataStore').Create(dbPath, { readOnly: readonlyDb });
 
 
 if (process.argv.length > 1)

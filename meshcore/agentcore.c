@@ -28,6 +28,9 @@ limitations under the License.
 #include "signcheck.h"
 #include "meshdefines.h"
 #include "meshinfo.h"
+#ifdef __APPLE__
+#include "MacOS/bundle_detection.h"
+#endif
 #include "microscript/ILibDuktape_Commit.h"
 #include "microscript/ILibDuktape_Polyfills.h"
 #include "microscript/ILibDuktape_Helpers.h"
@@ -4978,7 +4981,17 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 	}
 
 	// We are a Mesh Agent
-	if (agentHost->masterDb == NULL) { agentHost->masterDb = ILibSimpleDataStore_Create(MeshAgent_MakeAbsolutePath(agentHost->exePath, ".db")); }
+	if (agentHost->masterDb == NULL) {
+#ifdef __APPLE__
+		if (agentHost->configuredDbPath != NULL) {
+			agentHost->masterDb = ILibSimpleDataStore_Create(agentHost->configuredDbPath);
+		} else {
+			agentHost->masterDb = ILibSimpleDataStore_Create(MeshAgent_MakeAbsolutePath(agentHost->exePath, ".db"));
+		}
+#else
+		agentHost->masterDb = ILibSimpleDataStore_Create(MeshAgent_MakeAbsolutePath(agentHost->exePath, ".db"));
+#endif
+	}
 
 	int ixr = 0;
 	int installFlag = 0;
@@ -5576,7 +5589,15 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 		close(STDOUT_FILENO);
 		close(STDERR_FILENO);
 		parseCommands = 0;
+#ifdef __APPLE__
+		if (agentHost->configuredDbPath != NULL) {
+			agentHost->masterDb = ILibSimpleDataStore_Create(agentHost->configuredDbPath);
+		} else {
+			agentHost->masterDb = ILibSimpleDataStore_Create(MeshAgent_MakeAbsolutePath(agentHost->exePath, ".db"));
+		}
+#else
 		agentHost->masterDb = ILibSimpleDataStore_Create(MeshAgent_MakeAbsolutePath(agentHost->exePath, ".db"));
+#endif
 	}
 	else if (options) { exit(EXIT_SUCCESS); }
 #endif
@@ -6084,7 +6105,15 @@ void MeshAgent_ScriptMode(MeshAgentHostContainer *agentHost, int argc, char **ar
 				}
 				if (agentHost->masterDb == NULL)
 				{
+#ifdef __APPLE__
+					if (agentHost->configuredDbPath != NULL) {
+						agentHost->masterDb = ILibSimpleDataStore_Create(agentHost->configuredDbPath);
+					} else {
+						agentHost->masterDb = ILibSimpleDataStore_Create(MeshAgent_MakeAbsolutePath(agentHost->exePath, ".db"));
+					}
+#else
 					agentHost->masterDb = ILibSimpleDataStore_Create(MeshAgent_MakeAbsolutePath(agentHost->exePath, ".db"));
+#endif
 				}
 			}
 			else
@@ -6319,6 +6348,84 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 		exePath[x] = 0;
 #endif
 	}
+
+#ifdef __APPLE__
+	// Initialize configured paths to NULL
+	agentHost->configuredDbPath = NULL;
+	agentHost->configuredMshPath = NULL;
+
+	// Read configuration from preferences plist
+	// This applies to both bundle and standalone binary modes
+	char serviceID[512];
+	char dbPath[PATH_MAX];
+	char mshPath[PATH_MAX];
+
+	if (get_service_id_from_launchdaemon(agentHost->exePath, serviceID) == 0)
+	{
+		if (read_bundle_config_from_plist(serviceID, dbPath, mshPath) == 0)
+		{
+			// Validate that at least one path points to an existing file
+			int dbExists = (strlen(dbPath) > 0 && access(dbPath, F_OK) == 0);
+			int mshExists = (strlen(mshPath) > 0 && access(mshPath, F_OK) == 0);
+
+			if (dbExists || mshExists)
+			{
+				// Store configured paths
+				if (strlen(dbPath) > 0)
+				{
+					agentHost->configuredDbPath = ILibString_Copy(dbPath, 0);
+					printf("MeshAgent: Using configured DB path: %s\n", dbPath);
+				}
+				if (strlen(mshPath) > 0)
+				{
+					agentHost->configuredMshPath = ILibString_Copy(mshPath, 0);
+					printf("MeshAgent: Using configured MSH path: %s\n", mshPath);
+				}
+			}
+			else
+			{
+				// Plist exists but paths don't point to valid files
+				fprintf(stderr, "\n");
+				fprintf(stderr, "================================================================================\n");
+				fprintf(stderr, "MeshAgent ERROR: No valid configuration found\n");
+				fprintf(stderr, "================================================================================\n");
+				fprintf(stderr, "Configuration plist exists: /Library/Preferences/%s.plist\n", serviceID);
+				fprintf(stderr, "But the specified paths do not point to valid files:\n");
+				if (strlen(dbPath) > 0) fprintf(stderr, "  db: %s %s\n", dbPath, dbExists ? "[EXISTS]" : "[NOT FOUND]");
+				if (strlen(mshPath) > 0) fprintf(stderr, "  msh: %s %s\n", mshPath, mshExists ? "[EXISTS]" : "[NOT FOUND]");
+				fprintf(stderr, "\n");
+				fprintf(stderr, "At least one file must exist with valid server connection information.\n");
+				fprintf(stderr, "Exiting to prevent creating empty database.\n");
+				fprintf(stderr, "================================================================================\n");
+				fprintf(stderr, "\n");
+				exit(1);
+			}
+		}
+		else
+		{
+			// Plist not found or invalid
+			fprintf(stderr, "\n");
+			fprintf(stderr, "================================================================================\n");
+			fprintf(stderr, "MeshAgent ERROR: No valid configuration found\n");
+			fprintf(stderr, "================================================================================\n");
+			fprintf(stderr, "Expected: /Library/Preferences/%s.plist\n", serviceID);
+			fprintf(stderr, "Required keys:\n");
+			fprintf(stderr, "  - db: /full/path/to/meshagent.db\n");
+			fprintf(stderr, "  - msh: /full/path/to/meshagent.msh\n");
+			fprintf(stderr, "\n");
+			fprintf(stderr, "At least one file must exist with valid server connection information.\n");
+			fprintf(stderr, "Exiting to prevent creating empty database.\n");
+			fprintf(stderr, "================================================================================\n");
+			fprintf(stderr, "\n");
+			exit(1);
+		}
+	}
+	else
+	{
+		fprintf(stderr, "MeshAgent ERROR: Could not determine serviceID\n");
+		exit(1);
+	}
+#endif
 
 	// Perform a self SHA384 Hash
 	GenerateSHA384FileHash(agentHost->exePath, agentHost->agentHash);
