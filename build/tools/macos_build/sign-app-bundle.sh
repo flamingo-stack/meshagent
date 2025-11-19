@@ -1,16 +1,11 @@
 #!/bin/bash
-# Sign macOS Application Bundle with hardened runtime and entitlements
+# Sign macOS Application Bundle with hardened runtime
 # This script signs .app bundles for distribution
 
 set -e  # Exit on any error
 
 BUNDLE_PATH="$1"
 SIGN_CERT="${MACOS_SIGN_CERT}"
-
-# Get the directory where this script is located
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-ENTITLEMENTS_PATH="$PROJECT_ROOT/build/macos_bundle/meshagent.entitlements"
 
 if [ -z "$BUNDLE_PATH" ]; then
     echo "Usage: $0 <bundle_path>"
@@ -37,15 +32,9 @@ if [ -z "$SIGN_CERT" ]; then
     exit 1
 fi
 
-if [ ! -f "$ENTITLEMENTS_PATH" ]; then
-    echo "Error: Entitlements file not found: $ENTITLEMENTS_PATH"
-    exit 1
-fi
-
 echo "Signing macOS application bundle"
 echo "  Bundle: $BUNDLE_PATH"
 echo "  Certificate: $SIGN_CERT"
-echo "  Entitlements: $ENTITLEMENTS_PATH"
 
 # Verify certificate exists in keychain
 if ! security find-identity -v -p codesigning | grep -q "$SIGN_CERT"; then
@@ -56,11 +45,10 @@ if ! security find-identity -v -p codesigning | grep -q "$SIGN_CERT"; then
     exit 1
 fi
 
-# Sign the bundle with entitlements
+# Sign the bundle with hardened runtime
 echo ""
 echo "Signing bundle..."
 codesign --sign "$SIGN_CERT" \
-         --entitlements "$ENTITLEMENTS_PATH" \
          --options runtime \
          --timestamp \
          --deep \

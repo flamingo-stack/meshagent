@@ -76,19 +76,5 @@
 
 	<key>NSNetworkVolumesUsageDescription</key>
 	<string>MeshAgent needs access to manage files on network volumes during remote sessions.</string>
-
-	<!-- Hardened Runtime Entitlements -->
-	<!-- Note: These are informational in Info.plist, actual entitlements must be in separate file for codesign -->
-	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-	<true/>
-
-	<key>com.apple.security.cs.disable-library-validation</key>
-	<true/>
-
-	<key>com.apple.security.network.client</key>
-	<true/>
-
-	<key>com.apple.security.network.server</key>
-	<true/>
 </dict>
 </plist>
