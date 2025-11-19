@@ -669,30 +669,44 @@ function deletePlists(serviceId) {
 function backupInstallation(installPath) {
     var fs = require('fs');
     var timestamp = Date.now().toString();
+    var backedUp = false;
 
     try {
-        // Check what exists and back it up
+        // Check for bundle and back it up
         if (fs.existsSync(installPath + 'MeshAgent.app')) {
             // Backup bundle by renaming
             var bundlePath = installPath + 'MeshAgent.app';
             var backupPath = installPath + 'MeshAgent.app.' + timestamp;
             fs.renameSync(bundlePath, backupPath);
             process.stdout.write('   Created backup: MeshAgent.app.' + timestamp + '\n');
-            return backupPath;
-        } else if (fs.existsSync(installPath + 'meshagent')) {
-            // Backup standalone binary
+            backedUp = true;
+        }
+
+        // Check for standalone binary and back it up (handles edge case where both exist)
+        if (fs.existsSync(installPath + 'meshagent')) {
             var binaryPath = installPath + 'meshagent';
             var backupPath = installPath + 'meshagent.' + timestamp;
             fs.copyFileSync(binaryPath, backupPath);
             fs.unlinkSync(binaryPath);
             process.stdout.write('   Created backup: meshagent.' + timestamp + '\n');
-            return backupPath;
-        } else {
-            process.stdout.write('   No existing installation to backup\n');
-            return null;
+            backedUp = true;
         }
+
+        if (!backedUp) {
+            process.stdout.write('   No existing installation to backup\n');
+        }
+
+        return null;
     } catch (e) {
-        throw new Error('Could not backup installation: ' + e.message);
+        var errorMsg = 'Could not backup installation: ';
+        if (e && e.message) {
+            errorMsg += e.message;
+        } else if (e && typeof e === 'string') {
+            errorMsg += e;
+        } else {
+            errorMsg += JSON.stringify(e) || 'Unknown error';
+        }
+        throw new Error(errorMsg);
     }
 }
 
@@ -983,21 +997,27 @@ function createLaunchDaemon(serviceName, companyName, installPath, serviceId, in
     try {
         // Determine binary path based on installation type
         var servicePath;
-        if (installType === 'bundle') {
-            servicePath = installPath + 'MeshAgent.app/Contents/MacOS/meshagent';
-        } else {
-            servicePath = installPath + 'meshagent';
-        }
-
         var options = {
             name: serviceName,
             target: 'meshagent',
-            servicePath: servicePath,
             startType: 'AUTO_START',
-            installPath: installPath,
             parameters: ['--serviceId=' + serviceId],
             companyName: companyName
         };
+
+        if (installType === 'bundle') {
+            // For bundle installations, reference the binary inside the bundle
+            // Set servicePath === installPath + target to prevent service-manager from copying the binary
+            servicePath = installPath + 'MeshAgent.app/Contents/MacOS/meshagent';
+            options.servicePath = servicePath;
+            options.installPath = installPath + 'MeshAgent.app/Contents/MacOS/';
+            options.target = 'meshagent';
+        } else {
+            // For standalone installations, let service-manager copy the binary if needed
+            servicePath = installPath + 'meshagent';
+            options.servicePath = servicePath;
+            options.installPath = installPath;
+        }
 
         require('service-manager').manager.installService(options);
         process.stdout.write('   LaunchDaemon created\n');
