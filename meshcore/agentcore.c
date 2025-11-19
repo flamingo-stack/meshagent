@@ -6374,6 +6374,8 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 	char serviceID[512];
 	char dbPath[PATH_MAX];
 	char mshPath[PATH_MAX];
+	int isBundle = is_running_from_bundle();
+	int plistFound = 0;
 
 	if (get_service_id_from_launchdaemon(agentHost->exePath, serviceID) == 0)
 	{
@@ -6385,7 +6387,8 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 
 			if (dbExists || mshExists)
 			{
-				// Store configured paths
+				// Store configured paths from plist
+				plistFound = 1;
 				if (strlen(dbPath) > 0)
 				{
 					agentHost->configuredDbPath = ILibString_Copy(dbPath, 0);
@@ -6400,33 +6403,66 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 			else
 			{
 				// Plist exists but paths don't point to valid files
-				fprintf(stderr, "\n");
-				fprintf(stderr, "================================================================================\n");
-				fprintf(stderr, "MeshAgent ERROR: No valid configuration found\n");
-				fprintf(stderr, "================================================================================\n");
-				fprintf(stderr, "Configuration plist exists: /Library/Preferences/%s.plist\n", serviceID);
-				fprintf(stderr, "But the specified paths do not point to valid files:\n");
-				if (strlen(dbPath) > 0) fprintf(stderr, "  db: %s %s\n", dbPath, dbExists ? "[EXISTS]" : "[NOT FOUND]");
-				if (strlen(mshPath) > 0) fprintf(stderr, "  msh: %s %s\n", mshPath, mshExists ? "[EXISTS]" : "[NOT FOUND]");
-				fprintf(stderr, "\n");
-				fprintf(stderr, "At least one file must exist with valid server connection information.\n");
-				fprintf(stderr, "Exiting to prevent creating empty database.\n");
-				fprintf(stderr, "================================================================================\n");
-				fprintf(stderr, "\n");
-				exit(1);
+				// For bundles, this is fatal. For binaries, we'll check fallback below.
+				if (isBundle)
+				{
+					fprintf(stderr, "\n");
+					fprintf(stderr, "================================================================================\n");
+					fprintf(stderr, "MeshAgent ERROR: No valid configuration found\n");
+					fprintf(stderr, "================================================================================\n");
+					fprintf(stderr, "Configuration plist exists: /Library/Preferences/%s.plist\n", serviceID);
+					fprintf(stderr, "But the specified paths do not point to valid files:\n");
+					if (strlen(dbPath) > 0) fprintf(stderr, "  db: %s %s\n", dbPath, dbExists ? "[EXISTS]" : "[NOT FOUND]");
+					if (strlen(mshPath) > 0) fprintf(stderr, "  msh: %s %s\n", mshPath, mshExists ? "[EXISTS]" : "[NOT FOUND]");
+					fprintf(stderr, "\n");
+					fprintf(stderr, "At least one file must exist with valid server connection information.\n");
+					fprintf(stderr, "Exiting to prevent creating empty database.\n");
+					fprintf(stderr, "================================================================================\n");
+					fprintf(stderr, "\n");
+					exit(1);
+				}
+			}
+		}
+	}
+
+	// If no plist config found and we're a standalone binary, check for files next to executable
+	if (!plistFound && !isBundle)
+	{
+		// Note: MeshAgent_MakeAbsolutePath returns a static buffer, so we must copy immediately
+		char fallbackDbPath[PATH_MAX];
+		char fallbackMshPath[PATH_MAX];
+		strcpy(fallbackDbPath, MeshAgent_MakeAbsolutePath(agentHost->exePath, ".db"));
+		strcpy(fallbackMshPath, MeshAgent_MakeAbsolutePath(agentHost->exePath, ".msh"));
+
+		int dbExists = (access(fallbackDbPath, F_OK) == 0);
+		int mshExists = (access(fallbackMshPath, F_OK) == 0);
+
+		if (dbExists || mshExists)
+		{
+			// Use fallback paths next to binary
+			printf("MeshAgent: No plist found, using files next to executable\n");
+			if (dbExists)
+			{
+				agentHost->configuredDbPath = ILibString_Copy(fallbackDbPath, 0);
+				printf("MeshAgent: Using fallback DB path: %s\n", fallbackDbPath);
+			}
+			if (mshExists)
+			{
+				agentHost->configuredMshPath = ILibString_Copy(fallbackMshPath, 0);
+				printf("MeshAgent: Using fallback MSH path: %s\n", fallbackMshPath);
 			}
 		}
 		else
 		{
-			// Plist not found or invalid
+			// No plist and no local files - exit with error
 			fprintf(stderr, "\n");
 			fprintf(stderr, "================================================================================\n");
 			fprintf(stderr, "MeshAgent ERROR: No valid configuration found\n");
 			fprintf(stderr, "================================================================================\n");
-			fprintf(stderr, "Expected: /Library/Preferences/%s.plist\n", serviceID);
-			fprintf(stderr, "Required keys:\n");
-			fprintf(stderr, "  - db: /full/path/to/meshagent.db\n");
-			fprintf(stderr, "  - msh: /full/path/to/meshagent.msh\n");
+			fprintf(stderr, "No configuration plist at: /Library/Preferences/%s.plist\n", serviceID);
+			fprintf(stderr, "No configuration files next to executable:\n");
+			fprintf(stderr, "  - %s\n", fallbackDbPath);
+			fprintf(stderr, "  - %s\n", fallbackMshPath);
 			fprintf(stderr, "\n");
 			fprintf(stderr, "At least one file must exist with valid server connection information.\n");
 			fprintf(stderr, "Exiting to prevent creating empty database.\n");
@@ -6435,9 +6471,23 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 			exit(1);
 		}
 	}
-	else
+
+	// For bundles, plist is mandatory
+	if (isBundle && !plistFound)
 	{
-		fprintf(stderr, "MeshAgent ERROR: Could not determine serviceID\n");
+		fprintf(stderr, "\n");
+		fprintf(stderr, "================================================================================\n");
+		fprintf(stderr, "MeshAgent ERROR: No valid configuration found\n");
+		fprintf(stderr, "================================================================================\n");
+		fprintf(stderr, "Application bundles require: /Library/Preferences/%s.plist\n", serviceID);
+		fprintf(stderr, "Required keys:\n");
+		fprintf(stderr, "  - db: /full/path/to/meshagent.db\n");
+		fprintf(stderr, "  - msh: /full/path/to/meshagent.msh\n");
+		fprintf(stderr, "\n");
+		fprintf(stderr, "At least one file must exist with valid server connection information.\n");
+		fprintf(stderr, "Exiting to prevent creating empty database.\n");
+		fprintf(stderr, "================================================================================\n");
+		fprintf(stderr, "\n");
 		exit(1);
 	}
 #endif
