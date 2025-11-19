@@ -57,36 +57,6 @@ char* get_bundle_path(void);
  */
 void adjust_working_directory_for_bundle(void);
 
-/**
- * Read configuration paths from macOS preferences plist
- *
- * Reads /Library/Preferences/{serviceID}.plist and extracts:
- * - db: full path to meshagent.db
- * - msh: full path to meshagent.msh
- *
- * @param serviceID The service identifier (e.g., "meshagent" or "meshagent.companyname")
- * @param dbPath Output buffer for database path (PATH_MAX size)
- * @param mshPath Output buffer for msh path (PATH_MAX size)
- * @return 0 on success, -1 on error (plist not found or keys missing)
- */
-int read_bundle_config_from_plist(const char *serviceID, char *dbPath, char *mshPath, char *logPath);
-
-/**
- * Determine serviceID for current installation
- *
- * Searches /Library/LaunchDaemons for plist files with ProgramArguments[0]
- * matching the current executable path, then extracts the Label field.
- *
- * Priority:
- * 1. Read from LaunchDaemon plist Label (searches for binary path match)
- * 2. Default to "meshagent"
- *
- * @param exePath Path to current binary
- * @param serviceID Output buffer (512 bytes minimum)
- * @return 0 on success, -1 on error
- */
-int get_service_id_from_launchdaemon(const char *exePath, char *serviceID);
-
 #endif /* __APPLE__ */
 
 #endif /* MACOS_BUNDLE_DETECTION_H */

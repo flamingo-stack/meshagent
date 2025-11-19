@@ -177,11 +177,6 @@ typedef struct MeshAgentHostContainer
 	ILibWebClient_RequestManager httpClientManager;
 	ILibSimpleDataStore masterDb;
 	int configPathUsesCWD;
-#ifdef __APPLE__
-	char* configuredDbPath;   // Path from plist (NULL if not configured)
-	char* configuredMshPath;  // Path from plist (NULL if not configured)
-	char* configuredLogPath;  // Path from plist (NULL if not configured)
-#endif
 	ILibWebClient_StateObject controlChannel;
 	struct sockaddr_in6* proxyServer;
 	int proxyFailed;
