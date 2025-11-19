@@ -6472,23 +6472,79 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 		}
 	}
 
-	// For bundles, plist is mandatory
+	// For bundles, try fallback to ../../../meshagent.db/msh if no plist found
 	if (isBundle && !plistFound)
 	{
-		fprintf(stderr, "\n");
-		fprintf(stderr, "================================================================================\n");
-		fprintf(stderr, "MeshAgent ERROR: No valid configuration found\n");
-		fprintf(stderr, "================================================================================\n");
-		fprintf(stderr, "Application bundles require: /Library/Preferences/%s.plist\n", serviceID);
-		fprintf(stderr, "Required keys:\n");
-		fprintf(stderr, "  - db: /full/path/to/meshagent.db\n");
-		fprintf(stderr, "  - msh: /full/path/to/meshagent.msh\n");
-		fprintf(stderr, "\n");
-		fprintf(stderr, "At least one file must exist with valid server connection information.\n");
-		fprintf(stderr, "Exiting to prevent creating empty database.\n");
-		fprintf(stderr, "================================================================================\n");
-		fprintf(stderr, "\n");
-		exit(1);
+		char* bundlePath = get_bundle_path();
+		if (bundlePath != NULL)
+		{
+			// Build fallback paths: bundle/../../../meshagent.db and bundle/../../../meshagent.msh
+			char fallbackDbPath[PATH_MAX];
+			char fallbackMshPath[PATH_MAX];
+			snprintf(fallbackDbPath, PATH_MAX, "%s/../../../meshagent.db", bundlePath);
+			snprintf(fallbackMshPath, PATH_MAX, "%s/../../../meshagent.msh", bundlePath);
+
+			// Resolve to absolute paths
+			char resolvedDbPath[PATH_MAX];
+			char resolvedMshPath[PATH_MAX];
+			realpath(fallbackDbPath, resolvedDbPath);
+			realpath(fallbackMshPath, resolvedMshPath);
+
+			int dbExists = (access(resolvedDbPath, F_OK) == 0);
+			int mshExists = (access(resolvedMshPath, F_OK) == 0);
+
+			if (dbExists || mshExists)
+			{
+				// Use fallback paths
+				printf("MeshAgent: No plist found, using fallback files relative to bundle\n");
+				if (dbExists)
+				{
+					agentHost->configuredDbPath = ILibString_Copy(resolvedDbPath, 0);
+					printf("MeshAgent: Using fallback DB path: %s\n", resolvedDbPath);
+				}
+				if (mshExists)
+				{
+					agentHost->configuredMshPath = ILibString_Copy(resolvedMshPath, 0);
+					printf("MeshAgent: Using fallback MSH path: %s\n", resolvedMshPath);
+				}
+				free(bundlePath);
+			}
+			else
+			{
+				// No plist and no fallback files - exit with error
+				fprintf(stderr, "\n");
+				fprintf(stderr, "================================================================================\n");
+				fprintf(stderr, "MeshAgent ERROR: No valid configuration found\n");
+				fprintf(stderr, "================================================================================\n");
+				fprintf(stderr, "No configuration plist at: /Library/Preferences/%s.plist\n", serviceID);
+				fprintf(stderr, "No fallback configuration files:\n");
+				fprintf(stderr, "  - %s\n", resolvedDbPath);
+				fprintf(stderr, "  - %s\n", resolvedMshPath);
+				fprintf(stderr, "\n");
+				fprintf(stderr, "At least one file must exist with valid server connection information.\n");
+				fprintf(stderr, "Exiting to prevent creating empty database.\n");
+				fprintf(stderr, "================================================================================\n");
+				fprintf(stderr, "\n");
+				free(bundlePath);
+				exit(1);
+			}
+		}
+		else
+		{
+			// Could not get bundle path - error
+			fprintf(stderr, "\n");
+			fprintf(stderr, "================================================================================\n");
+			fprintf(stderr, "MeshAgent ERROR: No valid configuration found\n");
+			fprintf(stderr, "================================================================================\n");
+			fprintf(stderr, "Could not determine bundle path for fallback configuration.\n");
+			fprintf(stderr, "Expected plist: /Library/Preferences/%s.plist\n", serviceID);
+			fprintf(stderr, "\n");
+			fprintf(stderr, "At least one file must exist with valid server connection information.\n");
+			fprintf(stderr, "Exiting to prevent creating empty database.\n");
+			fprintf(stderr, "================================================================================\n");
+			fprintf(stderr, "\n");
+			exit(1);
+		}
 	}
 #endif
 
