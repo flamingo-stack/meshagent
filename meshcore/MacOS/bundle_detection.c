@@ -108,13 +108,27 @@ void adjust_working_directory_for_bundle(void)
         char* bundleRoot = get_bundle_path();
         if (bundleRoot)
         {
-            if (chdir(bundleRoot) == 0)
+            // For bundle installations, change to the parent directory (install path)
+            // This allows .msh and .db files to be found in the same location as standalone
+            char* lastSlash = strrchr(bundleRoot, '/');
+            if (lastSlash && lastSlash != bundleRoot)
             {
-                printf("MeshAgent: Running from bundle: %s\n", bundleRoot);
+                *lastSlash = '\0';  // Truncate to get parent directory
+                if (chdir(bundleRoot) == 0)
+                {
+                    // Restore the slash for the print statement
+                    *lastSlash = '/';
+                    printf("MeshAgent: Running from bundle: %s\n", bundleRoot);
+                }
+                else
+                {
+                    *lastSlash = '/';  // Restore on error too
+                    fprintf(stderr, "MeshAgent: Warning: Could not change to install directory: %s\n", bundleRoot);
+                }
             }
             else
             {
-                fprintf(stderr, "MeshAgent: Warning: Could not change to bundle root: %s\n", bundleRoot);
+                fprintf(stderr, "MeshAgent: Warning: Invalid bundle path: %s\n", bundleRoot);
             }
             free(bundleRoot);
         }
