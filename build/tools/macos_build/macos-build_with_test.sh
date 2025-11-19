@@ -31,6 +31,7 @@ MACOS_ONLY_POLYFILLS="yes"          # Generate polyfills from modules_macos only
 CODE_UTILS_BUILD="no"               # Code-utils build: KVM=0, minimal module set (8 modules vs 50) for polyfill generation
 SKIP_BUILD="no"                     # Skip build step (use existing binary)
 SKIP_SIGN="no"						# Skip signing step
+CODE_SIGN="bundle"					# bundle/binary its one or the other NOT both default bundle
 SKIP_NOTARY="no"                    # Skip notarization step
 SKIP_GIT_PULL="yes"                 # Skip git pull before building
 MSH_EXEC="no"                       # Execute the meshagent as root at the end of the build process with MSH-* inputs
@@ -73,6 +74,10 @@ while [[ $# -gt 0 ]]; do
         --skip-sign)
             SKIP_SIGN="yes"
             shift
+            ;;
+        --code-sign)
+            CODE_SIGN="$2"
+            shift 2
             ;;
         --skip-notary)
             SKIP_NOTARY="yes"
@@ -123,6 +128,9 @@ while [[ $# -gt 0 ]]; do
             echo "  --code-utils                  Code-utils build: KVM=0, minimal modules (8 vs 50) for polyfill gen"
             echo "  --skip-build                  Skip build step, use existing binary"
             echo "  --skip-sign                   Skip signing step"
+            echo "  --code-sign <bundle|binary>   What to sign: 'bundle' (default) or 'binary' (NOT both)"
+            echo "                                  bundle = Sign .app bundle (recommended for distribution)"
+            echo "                                  binary = Sign standalone binary only"
             echo "  --skip-notary                 Skip notarization step"
             echo "  --git-pull                    Pull latest changes before building"
             echo ""
@@ -212,6 +220,16 @@ if [ -n "$MSH_COMMAND" ]; then
         echo "Valid commands: install, fullinstall, upgrade, uninstall, fulluninstall"
         exit 1
     fi
+fi
+
+# Validate CODE_SIGN option
+if [[ "$CODE_SIGN" != "bundle" && "$CODE_SIGN" != "binary" ]]; then
+    echo "Error: Invalid CODE_SIGN value '$CODE_SIGN'"
+    echo "Must be either 'bundle' or 'binary'"
+    echo ""
+    echo "  bundle = Sign .app bundle (recommended for distribution)"
+    echo "  binary = Sign standalone binary only (NOT both)"
+    exit 1
 fi
 
 # Validate signing certificate if signing is enabled
@@ -345,6 +363,9 @@ if [ "$SKIP_POLYFILLS" = "no" ]; then
 fi
 echo "Skip Build:       $SKIP_BUILD"
 echo "Skip Sign:        $SKIP_SIGN"
+if [ "$SKIP_SIGN" = "no" ]; then
+    echo "  → Sign Target:  $CODE_SIGN"
+fi
 echo "Skip Notary:      $SKIP_NOTARY"
 echo "Skip Git Pull:    $SKIP_GIT_PULL"
 echo ""
@@ -574,24 +595,47 @@ fi
 #==============================================================================
 
 if [ "$SKIP_SIGN" = "no" ]; then
-    echo "[3/6] Signing application bundle..."
-    echo "[$(date '+%H:%M:%S')] Signing started"
+    if [ "$CODE_SIGN" = "bundle" ]; then
+        echo "[3/6] Signing application bundle..."
+        echo "[$(date '+%H:%M:%S')] Signing started"
 
-    # Verify bundle exists
-    if [ ! -d "$BUNDLE_PATH" ]; then
-        echo "Error: Bundle not found at $BUNDLE_PATH"
-        echo "The build step should have created this bundle."
-        exit 1
+        # Verify bundle exists
+        if [ ! -d "$BUNDLE_PATH" ]; then
+            echo "Error: Bundle not found at $BUNDLE_PATH"
+            echo "The build step should have created this bundle."
+            exit 1
+        fi
+
+        echo "  Target: Bundle"
+        echo "  Path:   $BUNDLE_PATH"
+
+        # Run signing as the actual user (not root) to access user's keychain
+        # Sign the .app bundle (recommended for distribution)
+        sudo -u $SUDO_USER MACOS_SIGN_CERT="$MACOS_SIGN_CERT" ./build/tools/macos_build/sign-app-bundle.sh "$BUNDLE_PATH"
+        echo "[$(date '+%H:%M:%S')] Signing complete"
+        echo "✓ Bundle signing complete"
+        echo ""
+    elif [ "$CODE_SIGN" = "binary" ]; then
+        echo "[3/6] Signing standalone binary..."
+        echo "[$(date '+%H:%M:%S')] Signing started"
+
+        # Verify binary exists
+        if [ ! -f "$BINARY_PATH" ]; then
+            echo "Error: Binary not found at $BINARY_PATH"
+            echo "The build step should have created this binary."
+            exit 1
+        fi
+
+        echo "  Target: Binary"
+        echo "  Path:   $BINARY_PATH"
+
+        # Run signing as the actual user (not root) to access user's keychain
+        # Sign the standalone binary (NOT the bundle)
+        sudo -u $SUDO_USER MACOS_SIGN_CERT="$MACOS_SIGN_CERT" ./build/tools/macos_build/macos-sign.sh "$BINARY_PATH"
+        echo "[$(date '+%H:%M:%S')] Signing complete"
+        echo "✓ Binary signing complete"
+        echo ""
     fi
-
-    echo "  Bundle: $BUNDLE_PATH"
-
-    # Run signing as the actual user (not root) to access user's keychain
-    # Sign the .app bundle, NOT the standalone binary
-    sudo -u $SUDO_USER MACOS_SIGN_CERT="$MACOS_SIGN_CERT" ./build/tools/macos_build/sign-app-bundle.sh "$BUNDLE_PATH"
-    echo "[$(date '+%H:%M:%S')] Signing complete"
-    echo "✓ Bundle signing complete"
-    echo ""
 else
     echo "[3/6] Signing - SKIPPED"
     echo ""
@@ -602,31 +646,63 @@ fi
 #==============================================================================
 
 if [ "$SKIP_NOTARY" = "no" ]; then
-    echo "[4/6] Notarizing and stapling application bundle..."
-    echo "[$(date '+%H:%M:%S')] Notarization started"
+    if [ "$CODE_SIGN" = "bundle" ]; then
+        echo "[4/6] Notarizing and stapling application bundle..."
+        echo "[$(date '+%H:%M:%S')] Notarization started"
 
-    # Verify bundle exists
-    if [ ! -d "$BUNDLE_PATH" ]; then
-        echo "Error: Bundle not found at $BUNDLE_PATH"
-        echo "The build step should have created this bundle."
-        exit 1
+        # Verify bundle exists
+        if [ ! -d "$BUNDLE_PATH" ]; then
+            echo "Error: Bundle not found at $BUNDLE_PATH"
+            echo "The build step should have created this bundle."
+            exit 1
+        fi
+
+        # Verify bundle is signed (required for notarization)
+        if ! codesign --verify --deep --strict "$BUNDLE_PATH" 2>/dev/null; then
+            echo "Error: Bundle must be signed before notarization"
+            echo "Please enable signing or sign the bundle first."
+            exit 1
+        fi
+
+        echo "  Target: Bundle"
+        echo "  Path:   $BUNDLE_PATH"
+
+        # Run notarization as the actual user (not root) to access user's keychain
+        # Notarize the .app bundle (includes signing verification, submission, and stapling)
+        sudo -u $SUDO_USER ./build/tools/macos_build/notarize-app-bundle.sh "$BUNDLE_PATH"
+        echo "[$(date '+%H:%M:%S')] Notarization and stapling complete"
+        echo "✓ Bundle notarization and stapling complete"
+        echo ""
+    elif [ "$CODE_SIGN" = "binary" ]; then
+        echo "[4/6] Notarizing standalone binary..."
+        echo "[$(date '+%H:%M:%S')] Notarization started"
+
+        # Verify binary exists
+        if [ ! -f "$BINARY_PATH" ]; then
+            echo "Error: Binary not found at $BINARY_PATH"
+            echo "The build step should have created this binary."
+            exit 1
+        fi
+
+        # Verify binary is signed (required for notarization)
+        if ! codesign --verify --strict "$BINARY_PATH" 2>/dev/null; then
+            echo "Error: Binary must be signed before notarization"
+            echo "Please enable signing or sign the binary first."
+            exit 1
+        fi
+
+        echo "  Target: Binary"
+        echo "  Path:   $BINARY_PATH"
+
+        # Run notarization as the actual user (not root) to access user's keychain
+        # Notarize the standalone binary (does NOT include stapling - binaries cannot be stapled)
+        sudo -u $SUDO_USER ./build/tools/macos_build/macos-notarize.sh "$BINARY_PATH"
+        echo "[$(date '+%H:%M:%S')] Notarization complete"
+        echo "✓ Binary notarization complete"
+        echo ""
+        echo "Note: Standalone binaries cannot be stapled. The notarization is stored in Apple's servers."
+        echo ""
     fi
-
-    # Verify bundle is signed (required for notarization)
-    if ! codesign --verify --deep --strict "$BUNDLE_PATH" 2>/dev/null; then
-        echo "Error: Bundle must be signed before notarization"
-        echo "Please enable signing or sign the bundle first."
-        exit 1
-    fi
-
-    echo "  Bundle: $BUNDLE_PATH"
-
-    # Run notarization as the actual user (not root) to access user's keychain
-    # Notarize the .app bundle (includes signing verification, submission, and stapling)
-    sudo -u $SUDO_USER ./build/tools/macos_build/notarize-app-bundle.sh "$BUNDLE_PATH"
-    echo "[$(date '+%H:%M:%S')] Notarization and stapling complete"
-    echo "✓ Bundle notarization and stapling complete"
-    echo ""
 else
     echo "[4/6] Notarization - SKIPPED"
     echo ""
