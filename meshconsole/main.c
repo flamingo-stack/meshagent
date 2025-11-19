@@ -44,6 +44,7 @@ limitations under the License.
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include "meshcore/MacOS/bundle_detection.h"
 #endif
 
 MeshAgentHostContainer *agentHost = NULL;
@@ -361,6 +362,10 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 #endif
 #endif
 
+#ifdef __APPLE__
+	// Adjust working directory if running from application bundle
+	adjust_working_directory_for_bundle();
+#endif
 
 	ILibDuktape_ScriptContainer_CheckEmbedded(&integratedJavaScript, &integratedJavaScriptLen);
 
