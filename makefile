@@ -558,12 +558,13 @@ ifeq ($(WEBLOG),1)
 CFLAGS += -D_REMOTELOGGINGSERVER -D_REMOTELOGGING
 endif
 
+# macOS utility sources (always compiled for macOS builds)
+MACOSUTILSOURCES = meshcore/MacOS/bundle_detection.c
+
 ifeq ($(KVM),1)
 # Mesh Agent KVM, this is only included in builds that have KVM support
 LINUXKVMSOURCES = meshcore/KVM/Linux/linux_kvm.c meshcore/KVM/Linux/linux_events.c meshcore/KVM/Linux/linux_tile.c meshcore/KVM/Linux/linux_compression.c
 MACOSKVMSOURCES = meshcore/KVM/MacOS/mac_kvm.c meshcore/KVM/MacOS/mac_events.c meshcore/KVM/MacOS/mac_tile.c meshcore/KVM/MacOS/mac_kvm_auth.c meshcore/KVM/Linux/linux_compression.c
-# macOS utility sources (non-KVM platform-specific code)
-MACOSUTILSOURCES = meshcore/MacOS/bundle_detection.c
 CFLAGS += -D_LINKVM
 	ifneq ($(JPEGVER),)
 		ifeq ($(LEGACY_LD),1)
@@ -727,6 +728,7 @@ clean:
 	rm -f meshcore/zlib/*.o
 	rm -f meshcore/KVM/Linux/*.o
 	rm -f meshcore/KVM/MacOS/*.o
+	rm -f meshcore/MacOS/*.o
 	rm -f microlms/lms/*.o
 	rm -f microlms/heci/*.o
 
