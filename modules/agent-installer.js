@@ -993,7 +993,7 @@ function forceKillProcesses(pids) {
 }
 
 // Helper to create LaunchDaemon
-function createLaunchDaemon(serviceName, companyName, installPath, serviceId, installType) {
+function createLaunchDaemon(serviceName, companyName, installPath, serviceId, installType, disableUpdate) {
     try {
         // Determine binary path based on installation type
         var servicePath;
@@ -1004,6 +1004,11 @@ function createLaunchDaemon(serviceName, companyName, installPath, serviceId, in
             parameters: ['--serviceId=' + serviceId],
             companyName: companyName
         };
+
+        // Add --disableUpdate flag if requested (for bundle installations)
+        if (disableUpdate) {
+            options.parameters.push('--disableUpdate=1');
+        }
 
         if (installType === 'bundle') {
             // For bundle installations, reference the binary inside the bundle
@@ -1264,6 +1269,17 @@ function installService(params)
             options.parameters.push('--serviceId=' + calculatedServiceId);
             options.serviceId = calculatedServiceId;
         }
+    }
+
+    // Check if --enableDisableUpdate flag was passed to enable disableUpdate
+    if ((i = options.parameters.getParameterIndex('enableDisableUpdate')) >= 0) {
+        var enableValue = options.parameters.getParameterValue(i);
+        if (enableValue === '1' || enableValue === 'true') {
+            // Add --disableUpdate=1 to prevent self-updates (important for bundle installations)
+            options.parameters.push('--disableUpdate=1');
+        }
+        // Remove the enableDisableUpdate flag itself (it's only used during installation)
+        options.parameters.splice(i, 1);
     }
 
     if (global.gOptions != null && global.gOptions.noParams === true) { options.parameters = []; }
@@ -2206,9 +2222,13 @@ function upgradeAgent(params) {
     var newServiceName = parms.getParameter('meshServiceName', null);
     var newCompanyName = parms.getParameter('companyName', null);
     var newServiceId = parms.getParameter('serviceId', null);
+    var enableDisableUpdate = parms.getParameter('enableDisableUpdate', null);
 
     // Track if installPath was explicitly provided by user (for path inference logic)
     var installPathWasUserProvided = (installPath !== null);
+
+    // Convert enableDisableUpdate to boolean
+    var disableUpdate = (enableDisableUpdate === '1' || enableDisableUpdate === 'true');
 
     // Determine if we should update configuration
     var useProvidedParams = (newServiceName !== null || newCompanyName !== null);
@@ -2700,7 +2720,7 @@ function upgradeAgent(params) {
     // plists are created with the existing configuration, even if user blanked .msh
     process.stdout.write('Recreating LaunchDaemon...\n');
     try {
-        createLaunchDaemon(currentServiceName, currentCompanyName, installPath, currentServiceId, newInstallType);
+        createLaunchDaemon(currentServiceName, currentCompanyName, installPath, currentServiceId, newInstallType, disableUpdate);
     } catch (e) {
         console.log('ERROR: ' + e.message);
         console.log('You may need to manually reinstall the agent.');
