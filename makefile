@@ -902,6 +902,41 @@ install-bundle: macos-bundle
 	@cp -R $(BUILD_OUTPUT_DIR)/MeshAgent.app /Applications/
 	@echo "Installation complete: /Applications/MeshAgent.app"
 
+# Sign macOS application bundle
+sign-bundle:
+	@if [ -z "$(MACOS_SIGN_CERT)" ]; then \
+		echo "Error: MACOS_SIGN_CERT environment variable not set"; \
+		echo "Please set it to your Developer ID Application certificate"; \
+		echo "Example: export MACOS_SIGN_CERT=\"Developer ID Application: Name (TEAMID)\""; \
+		exit 1; \
+	fi
+	@if [ ! -d "$(BUILD_OUTPUT_DIR)/MeshAgent.app" ]; then \
+		echo "Error: Bundle not found. Please run 'make macos-bundle' first"; \
+		exit 1; \
+	fi
+	@echo "Signing bundle..."
+	@./build/tools/macos_build/sign-app-bundle.sh $(BUILD_OUTPUT_DIR)/MeshAgent.app
+	@echo "Bundle signed: $(BUILD_OUTPUT_DIR)/MeshAgent.app"
+
+# Notarize macOS application bundle (requires signed bundle)
+notarize-bundle:
+	@if [ ! -d "$(BUILD_OUTPUT_DIR)/MeshAgent.app" ]; then \
+		echo "Error: Bundle not found. Please run 'make macos-bundle' first"; \
+		exit 1; \
+	fi
+	@echo "Notarizing bundle..."
+	@./build/tools/macos_build/notarize-app-bundle.sh $(BUILD_OUTPUT_DIR)/MeshAgent.app
+	@echo "Bundle notarized and stapled: $(BUILD_OUTPUT_DIR)/MeshAgent.app"
+
+# Build, sign, and notarize bundle (complete production workflow)
+macos-bundle-release: macos-bundle sign-bundle notarize-bundle
+	@echo ""
+	@echo "✓ Production bundle complete: $(BUILD_OUTPUT_DIR)/MeshAgent.app"
+	@echo "  - Signed with hardened runtime"
+	@echo "  - Notarized by Apple"
+	@echo "  - Stapled for offline verification"
+	@echo "  - Ready for distribution"
+
 freebsd:
 	@mkdir -p $(BUILD_OUTPUT_DIR)/DEBUG
 	$(MAKE) EXENAME="$(BUILD_OUTPUT_DIR)/DEBUG/$(EXENAME)_$(ARCHNAME)$(EXENAME2)" ADDITIONALSOURCES="$(LINUXKVMSOURCES)"  AID="$(ARCHID)" CFLAGS="-std=gnu99 -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(ARCHID) -D_POSIX -D_FREEBSD -D_NOHECI -D_NOILIBSTACKDEBUG -DMICROSTACK_PROXY -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CEXTRA)" LDFLAGS="$(BSDSSL) $(BSDFLAGS) -L. -lpthread -ldl -lz -lutil $(LDFLAGS) $(LDEXTRA)"

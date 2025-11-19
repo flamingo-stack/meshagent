@@ -38,6 +38,16 @@ echo "  Bundle ID: $BUNDLE_ID"
 echo "  Version: $BUILD_TIMESTAMP"
 echo "  Project root: $PROJECT_ROOT"
 
+# Detect if binary is universal
+if lipo -info "$BINARY_PATH" 2>/dev/null | grep -q "Architectures in the fat file"; then
+    echo "  Architecture: Universal ($(lipo -info "$BINARY_PATH" | sed 's/.*: //'))"
+elif lipo -info "$BINARY_PATH" 2>/dev/null | grep -q "Non-fat file"; then
+    ARCH=$(lipo -info "$BINARY_PATH" | sed 's/.*: //')
+    echo "  Architecture: $ARCH"
+else
+    echo "  Architecture: Unknown"
+fi
+
 # Create bundle structure
 # Standard macOS bundle layout: Contents/{MacOS,Resources}
 mkdir -p "$BUNDLE_NAME/Contents/MacOS"

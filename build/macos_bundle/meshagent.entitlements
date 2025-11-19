@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Hardened Runtime Entitlements for MeshAgent -->
+
+	<!-- Allow unsigned executable memory (required for JIT compilation in Duktape) -->
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+
+	<!-- Disable library validation (may be needed for dynamic loading) -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+
+	<!-- Network access (client - outbound connections) -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+
+	<!-- Network access (server - inbound connections) -->
+	<key>com.apple.security.network.server</key>
+	<true/>
+</dict>
+</plist>
