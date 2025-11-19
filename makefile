@@ -846,14 +846,16 @@ macos:
 	@mkdir -p $(BUILD_OUTPUT_DIR)/DEBUG
 	@if [ "$(ARCHID)" = "10005" ]; then \
 		BUILD_TIME=$$(date +%y.%m.%d.%H.%M.%S); \
+		BUILD_DATE=$$(echo $$BUILD_TIME | cut -d. -f1-3); \
+		BUILD_TIME_ONLY=$$(echo $$BUILD_TIME | cut -d. -f4-6); \
 		echo "Building macOS Universal (Intel + Apple Silicon)..."; \
-		echo "Build timestamp: $$BUILD_TIME"; \
+		echo "Build timestamp: $$BUILD_TIME (date: $$BUILD_DATE, time: $$BUILD_TIME_ONLY)"; \
 		echo "Building x86-64..."; \
 		$(MAKE) clean; \
-		$(MAKE) macos ARCHID=16 BUILD_TIMESTAMP=$$BUILD_TIME BUNDLE_ID=$(BUNDLE_ID); \
+		$(MAKE) macos ARCHID=16 BUILD_TIMESTAMP=$$BUILD_TIME BUILD_DATE=$$BUILD_DATE BUILD_TIME_ONLY=$$BUILD_TIME_ONLY BUNDLE_ID=$(BUNDLE_ID); \
 		echo "Building ARM64..."; \
 		$(MAKE) clean; \
-		$(MAKE) macos ARCHID=29 BUILD_TIMESTAMP=$$BUILD_TIME BUNDLE_ID=$(BUNDLE_ID); \
+		$(MAKE) macos ARCHID=29 BUILD_TIMESTAMP=$$BUILD_TIME BUILD_DATE=$$BUILD_DATE BUILD_TIME_ONLY=$$BUILD_TIME_ONLY BUNDLE_ID=$(BUNDLE_ID); \
 		echo "Creating universal binary..."; \
 		lipo -create \
 			$(BUILD_OUTPUT_DIR)/DEBUG/$(EXENAME)_osx-x86-64 \
@@ -870,7 +872,8 @@ macos:
 				$(BUILD_OUTPUT_DIR)/$(EXENAME)_osx-universal-64 \
 				$(BUILD_OUTPUT_DIR)/osx-universal-64-app/MeshAgent.app \
 				$(BUNDLE_ID) \
-				$$BUILD_TIME; \
+				$$BUILD_DATE \
+				$$BUILD_TIME_ONLY; \
 			echo "Bundle complete: $(BUILD_OUTPUT_DIR)/osx-universal-64-app/MeshAgent.app"; \
 		else \
 			echo "Debug build complete: $(BUILD_OUTPUT_DIR)/DEBUG/$(EXENAME)_osx-universal-64"; \
@@ -878,11 +881,23 @@ macos:
 	else \
 		if [ -z "$(BUILD_TIMESTAMP)" ]; then \
 			BUILD_TIME=$$(date +%y.%m.%d.%H.%M.%S); \
+			BUILD_DATE=$$(echo $$BUILD_TIME | cut -d. -f1-3); \
+			BUILD_TIME_ONLY=$$(echo $$BUILD_TIME | cut -d. -f4-6); \
 		else \
 			BUILD_TIME=$(BUILD_TIMESTAMP); \
+			if [ -z "$(BUILD_DATE)" ]; then \
+				BUILD_DATE=$$(echo $$BUILD_TIME | cut -d. -f1-3); \
+			else \
+				BUILD_DATE=$(BUILD_DATE); \
+			fi; \
+			if [ -z "$(BUILD_TIME_ONLY)" ]; then \
+				BUILD_TIME_ONLY=$$(echo $$BUILD_TIME | cut -d. -f4-6); \
+			else \
+				BUILD_TIME_ONLY=$(BUILD_TIME_ONLY); \
+			fi; \
 		fi; \
-		echo "Generating Info.plist with timestamp: $$BUILD_TIME and bundle ID: $(BUNDLE_ID)"; \
-		sed -e "s/BUILD_TIMESTAMP/$$BUILD_TIME/g" -e "s/BUNDLE_IDENTIFIER/$(BUNDLE_ID)/g" build/resources/Info/binary/binary_Info.plist > build/tools/macos_build/Info.plist/Info.plist; \
+		echo "Generating Info.plist with date: $$BUILD_DATE, time: $$BUILD_TIME_ONLY and bundle ID: $(BUNDLE_ID)"; \
+		sed -e "s/BUILD_TIMESTAMP_DATE/$$BUILD_DATE/g" -e "s/BUILD_TIMESTAMP_TIME/$$BUILD_TIME_ONLY/g" -e "s/BUNDLE_IDENTIFIER/$(BUNDLE_ID)/g" build/resources/Info/binary/binary_Info.plist > build/tools/macos_build/Info.plist/Info.plist; \
 		$(MAKE) $(MAKEFILE) EXENAME="$(BUILD_OUTPUT_DIR)/DEBUG/$(EXENAME)_$(ARCHNAME)" ADDITIONALSOURCES="$(MACOSKVMSOURCES) $(MACOSUTILSOURCES)" CFLAGS="$(MACOSARCH) -std=gnu99 -Wall -DJPEGMAXBUF=$(KVMMaxTile) -DMESH_AGENTID=$(ARCHID) -D_POSIX -D_NOILIBSTACKDEBUG -D_NOHECI -DMICROSTACK_PROXY -D__APPLE__ $(CWEBLOG) -fno-strict-aliasing $(INCDIRS) $(CFLAGS) $(CEXTRA)" LDFLAGS="$(MACOSARCH) -Wl,-w $(MACSSL) $(MACOSFLAGS) -lz -sectcreate __CGPreLoginApp __cgpreloginapp /dev/null -sectcreate __TEXT __info_plist build/tools/macos_build/Info.plist/Info.plist -framework IOKit -framework ApplicationServices -framework SystemConfiguration -framework CoreServices -framework CoreGraphics -framework CoreFoundation -framework Security -fconstant-cfstrings $(LDFLAGS) $(LDEXTRA)"; \
 		if [ "$(DEBUG)" != "1" ]; then \
 			cp $(BUILD_OUTPUT_DIR)/DEBUG/$(EXENAME)_$(ARCHNAME) $(BUILD_OUTPUT_DIR)/$(EXENAME)_$(ARCHNAME); \
@@ -893,7 +908,8 @@ macos:
 				$(BUILD_OUTPUT_DIR)/$(EXENAME)_$(ARCHNAME) \
 				$(BUILD_OUTPUT_DIR)/$(ARCHNAME)-app/MeshAgent.app \
 				$(BUNDLE_ID) \
-				$$BUILD_TIME; \
+				$$BUILD_DATE \
+				$$BUILD_TIME_ONLY; \
 			echo "Bundle complete: $(BUILD_OUTPUT_DIR)/$(ARCHNAME)-app/MeshAgent.app"; \
 		else \
 			echo "Debug build complete: $(BUILD_OUTPUT_DIR)/DEBUG/$(EXENAME)_$(ARCHNAME)"; \

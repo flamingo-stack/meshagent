@@ -7,23 +7,25 @@ set -e  # Exit on any error
 BINARY_PATH="$1"
 BUNDLE_NAME="${2:-MeshAgent.app}"
 BUNDLE_ID="${3:-meshagent}"
-BUILD_TIMESTAMP="${4:-$(date +%y.%m.%d.%H.%M.%S)}"
+BUILD_TIMESTAMP_DATE="${4:-$(date +%y.%m.%d)}"
+BUILD_TIMESTAMP_TIME="${5:-$(date +%H.%M.%S)}"
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 if [ -z "$BINARY_PATH" ]; then
-    echo "Usage: $0 <binary_path> [bundle_name] [bundle_id] [build_timestamp]"
+    echo "Usage: $0 <binary_path> [bundle_name] [bundle_id] [build_timestamp_date] [build_timestamp_time]"
     echo ""
     echo "Arguments:"
-    echo "  binary_path      Path to the compiled meshagent binary (required)"
-    echo "  bundle_name      Name of the .app bundle (default: MeshAgent.app)"
-    echo "  bundle_id        Bundle identifier (default: meshagent)"
-    echo "  build_timestamp  Version timestamp (default: current date/time)"
+    echo "  binary_path           Path to the compiled meshagent binary (required)"
+    echo "  bundle_name           Name of the .app bundle (default: MeshAgent.app)"
+    echo "  bundle_id             Bundle identifier (default: meshagent)"
+    echo "  build_timestamp_date  Version date (default: current date as yy.mm.dd)"
+    echo "  build_timestamp_time  Version time (default: current time as HH.MM.SS)"
     echo ""
     echo "Example:"
-    echo "  $0 build/output/meshagent_osx-arm-64 MeshAgent.app com.meshcentral.meshagent"
+    echo "  $0 build/output/meshagent_osx-arm-64 MeshAgent.app com.meshcentral.meshagent 25.11.19 14.30.45"
     exit 1
 fi
 
@@ -35,7 +37,8 @@ fi
 echo "Creating app bundle: $BUNDLE_NAME"
 echo "  Binary: $BINARY_PATH"
 echo "  Bundle ID: $BUNDLE_ID"
-echo "  Version: $BUILD_TIMESTAMP"
+echo "  Version Date: $BUILD_TIMESTAMP_DATE"
+echo "  Version Time: $BUILD_TIMESTAMP_TIME"
 echo "  Project root: $PROJECT_ROOT"
 
 # Detect if binary is universal
@@ -66,9 +69,10 @@ if [ ! -f "$TEMPLATE_PATH" ]; then
 fi
 
 sed -e "s/BUNDLE_IDENTIFIER/$BUNDLE_ID/g" \
-    -e "s/BUILD_TIMESTAMP/$BUILD_TIMESTAMP/g" \
+    -e "s/BUILD_TIMESTAMP_DATE/$BUILD_TIMESTAMP_DATE/g" \
+    -e "s/BUILD_TIMESTAMP_TIME/$BUILD_TIMESTAMP_TIME/g" \
     "$TEMPLATE_PATH" > "$BUNDLE_NAME/Contents/Info.plist"
-echo "  Generated Info.plist"
+echo "  Generated Info.plist (date: $BUILD_TIMESTAMP_DATE, time: $BUILD_TIMESTAMP_TIME)"
 
 # Copy icon
 ICON_PATH="$PROJECT_ROOT/build/resources/icon/meshagent.icns"

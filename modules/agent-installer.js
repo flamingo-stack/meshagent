@@ -107,6 +107,49 @@ try
 catch(x)
 { }
 
+// Helper function to detect if running from app bundle or standalone binary
+function detectSourceType() {
+    var execPath = process.execPath;
+
+    // Check if running from .app bundle
+    // Path format: /path/to/MeshAgent.app/Contents/MacOS/meshagent
+    if (execPath.indexOf('.app/Contents/MacOS/') !== -1) {
+        // Extract bundle path (everything up to and including .app)
+        var appIndex = execPath.indexOf('.app/');
+        var bundlePath = execPath.substring(0, appIndex + 4); // Include '.app'
+
+        return {
+            type: 'bundle',
+            bundlePath: bundlePath,
+            binaryPath: execPath
+        };
+    } else {
+        // Running from standalone binary
+        return {
+            type: 'standalone',
+            binaryPath: execPath
+        };
+    }
+}
+
+// Helper function to detect what type of installation exists at a path
+function detectInstallationType(installPath) {
+    var fs = require('fs');
+
+    // Check for bundle installation
+    if (fs.existsSync(installPath + 'MeshAgent.app')) {
+        return 'bundle';
+    }
+
+    // Check for standalone binary installation
+    if (fs.existsSync(installPath + 'meshagent')) {
+        return 'standalone';
+    }
+
+    // Nothing installed
+    return null;
+}
+
 // Helper function to sanitize service identifiers
 // Matches the sanitization logic in service-manager.js for consistent naming
 function sanitizeIdentifier(str) {
@@ -269,10 +312,14 @@ function findInstallation(installPath, serviceName, companyName) {
     // If explicit path provided
     if (installPath) {
         installPath = normalizeInstallPath(installPath);
+        // Check for bundle first, then standalone binary
+        if (require('fs').existsSync(installPath + 'MeshAgent.app/Contents/MacOS/meshagent')) {
+            return installPath;
+        }
         if (require('fs').existsSync(installPath + 'meshagent')) {
             return installPath;
         }
-        console.log('ERROR: No binary found at: ' + installPath);
+        console.log('ERROR: No installation found at: ' + installPath);
         return null;
     }
 
@@ -386,6 +433,7 @@ function getProgramPathFromPlist(plistPath) {
 // Helper to find and clean up all plists pointing to the same binary
 function cleanupOrphanedPlists(installPath) {
     var binaryPath = installPath + 'meshagent';
+    var bundleBinaryPath = installPath + 'MeshAgent.app/Contents/MacOS/meshagent';
     var cleaned = [];
 
     // Check LaunchDaemons
@@ -397,8 +445,8 @@ function cleanupOrphanedPlists(installPath) {
                 var plistPath = daemonDir + '/' + files[i];
                 var plistBinary = getProgramPathFromPlist(plistPath);
 
-                if (plistBinary === binaryPath) {
-                    // This plist points to our binary - unload and delete it
+                if (plistBinary === binaryPath || plistBinary === bundleBinaryPath) {
+                    // This plist points to our installation - unload and delete it
                     try {
                         var serviceName = files[i].replace('.plist', '');
                         var svc = require('service-manager').manager.getService(serviceName);
@@ -430,8 +478,8 @@ function cleanupOrphanedPlists(installPath) {
                 var plistPath = agentDir + '/' + files[i];
                 var plistBinary = getProgramPathFromPlist(plistPath);
 
-                if (plistBinary === binaryPath) {
-                    // This plist points to our binary - unload and delete it
+                if (plistBinary === binaryPath || plistBinary === bundleBinaryPath) {
+                    // This plist points to our installation - unload and delete it
                     try {
                         var serviceName = files[i].replace('.plist', '');
                         var launchAgent = require('service-manager').manager.getLaunchAgent(serviceName);
@@ -617,54 +665,117 @@ function deletePlists(serviceId) {
     }
 }
 
-// Helper to backup binary with timestamp
-function backupBinary(installPath) {
-    var binaryPath = installPath + 'meshagent';
+// Helper to backup existing installation (bundle or standalone binary) with timestamp
+function backupInstallation(installPath) {
+    var fs = require('fs');
     var timestamp = Date.now().toString();
-    var backupPath = installPath + 'meshagent.' + timestamp;
 
     try {
-        require('fs').copyFileSync(binaryPath, backupPath);
-        process.stdout.write('   Created backup: meshagent.' + timestamp + '\n');
-        return backupPath;
+        // Check what exists and back it up
+        if (fs.existsSync(installPath + 'MeshAgent.app')) {
+            // Backup bundle by renaming
+            var bundlePath = installPath + 'MeshAgent.app';
+            var backupPath = installPath + 'MeshAgent.app.' + timestamp;
+            fs.renameSync(bundlePath, backupPath);
+            process.stdout.write('   Created backup: MeshAgent.app.' + timestamp + '\n');
+            return backupPath;
+        } else if (fs.existsSync(installPath + 'meshagent')) {
+            // Backup standalone binary
+            var binaryPath = installPath + 'meshagent';
+            var backupPath = installPath + 'meshagent.' + timestamp;
+            fs.copyFileSync(binaryPath, backupPath);
+            fs.unlinkSync(binaryPath);
+            process.stdout.write('   Created backup: meshagent.' + timestamp + '\n');
+            return backupPath;
+        } else {
+            process.stdout.write('   No existing installation to backup\n');
+            return null;
+        }
     } catch (e) {
-        throw new Error('Could not backup binary: ' + e.message);
+        throw new Error('Could not backup installation: ' + e.message);
     }
 }
 
-// Helper to replace binary
-function replaceBinary(installPath) {
-    var targetPath = installPath + 'meshagent';
-    var sourcePath = process.execPath;  // Current running binary
+// Helper to recursively copy a directory
+function copyDirectoryRecursive(source, target) {
+    var fs = require('fs');
+    var path = require('path');
 
-    // Check if we're trying to copy the binary over itself (in-place upgrade)
-    if (sourcePath === targetPath) {
-        process.stdout.write('   Skipping binary copy (already running from install location)\n');
-        process.stdout.write('   NOTE: To upgrade with a new binary, run the new meshagent with -upgrade\n');
-        process.stdout.write('         Example: sudo /path/to/new/meshagent -upgrade --installPath="' + installPath + '"\n');
-        return;
+    // Create target directory
+    if (!fs.existsSync(target)) {
+        fs.mkdirSync(target, { recursive: true });
     }
 
-    try {
-        // DELETE old binary first to avoid file lock issues
-        if (require('fs').existsSync(targetPath)) {
-            try {
-                require('fs').unlinkSync(targetPath);
-                process.stdout.write('   Deleted old binary: ' + targetPath + '\n');
-            } catch (deleteError) {
-                throw new Error('Could not delete old binary (may be locked): ' + deleteError.message);
-            }
+    // Copy directory permissions
+    var stats = fs.statSync(source);
+    fs.chmodSync(target, stats.mode);
+
+    // Read directory contents
+    var files = fs.readdirSync(source);
+
+    for (var i = 0; i < files.length; i++) {
+        var file = files[i];
+        var sourcePath = path.join(source, file);
+        var targetPath = path.join(target, file);
+        var fileStats = fs.statSync(sourcePath);
+
+        if (fileStats.isDirectory()) {
+            // Recursively copy subdirectory
+            copyDirectoryRecursive(sourcePath, targetPath);
+        } else {
+            // Copy file
+            fs.copyFileSync(sourcePath, targetPath);
+            // Preserve permissions
+            fs.chmodSync(targetPath, fileStats.mode);
         }
+    }
+}
 
-        // Copy new binary to install location
-        require('fs').copyFileSync(sourcePath, targetPath);
+// Helper to replace installation (bundle or standalone binary)
+function replaceInstallation(sourceType, installPath) {
+    var fs = require('fs');
 
-        // Ensure executable permissions
-        require('fs').chmodSync(targetPath, 0o755);
+    try {
+        if (sourceType.type === 'bundle') {
+            // Copy entire bundle
+            var targetBundlePath = installPath + 'MeshAgent.app';
 
-        process.stdout.write('   Binary replaced: ' + targetPath + '\n');
+            // Source bundle should already be backed up by backupInstallation()
+            // Just copy the new bundle
+            process.stdout.write('   Copying application bundle...\n');
+            copyDirectoryRecursive(sourceType.bundlePath, targetBundlePath);
+            process.stdout.write('   Bundle installed: ' + targetBundlePath + '\n');
+
+            // Ensure binary is executable
+            var binaryPath = targetBundlePath + '/Contents/MacOS/meshagent';
+            if (fs.existsSync(binaryPath)) {
+                fs.chmodSync(binaryPath, 0o755);
+            }
+        } else {
+            // Copy standalone binary
+            var targetBinaryPath = installPath + 'meshagent';
+            var sourceBinaryPath = sourceType.binaryPath;
+
+            // Check if we're trying to copy the binary over itself (in-place upgrade)
+            if (sourceBinaryPath === targetBinaryPath) {
+                process.stdout.write('   Skipping binary copy (already running from install location)\n');
+                process.stdout.write('   NOTE: To upgrade with a new binary, run the new meshagent with -upgrade\n');
+                process.stdout.write('         Example: sudo /path/to/new/meshagent -upgrade --installPath="' + installPath + '"\n');
+                return;
+            }
+
+            // Old binary should already be backed up by backupInstallation()
+            // Copy new binary to install location
+            process.stdout.write('   Copying standalone binary...\n');
+            fs.copyFileSync(sourceBinaryPath, targetBinaryPath);
+
+            // Ensure executable permissions
+            fs.chmodSync(targetBinaryPath, 0o755);
+
+            process.stdout.write('   Binary installed: ' + targetBinaryPath + '\n');
+        }
     } catch (e) {
-        throw new Error('Could not replace binary: ' + e.message);
+        throw new Error('Could not replace installation: ' + e.message);
     }
 }
 
@@ -849,12 +960,20 @@ function forceKillProcesses(pids) {
 }
 
 // Helper to create LaunchDaemon
-function createLaunchDaemon(serviceName, companyName, installPath, serviceId) {
+function createLaunchDaemon(serviceName, companyName, installPath, serviceId, installType) {
     try {
+        // Determine binary path based on installation type
+        var servicePath;
+        if (installType === 'bundle') {
+            servicePath = installPath + 'MeshAgent.app/Contents/MacOS/meshagent';
+        } else {
+            servicePath = installPath + 'meshagent';
+        }
+
         var options = {
             name: serviceName,
             target: 'meshagent',
-            servicePath: installPath + 'meshagent',
+            servicePath: servicePath,
             startType: 'AUTO_START',
             installPath: installPath,
             parameters: ['--serviceId=' + serviceId],
@@ -869,12 +988,20 @@ function createLaunchDaemon(serviceName, companyName, installPath, serviceId) {
 }
 
 // Helper to create LaunchAgent
-function createLaunchAgent(serviceName, companyName, installPath, serviceId) {
+function createLaunchAgent(serviceName, companyName, installPath, serviceId, installType) {
     try {
+        // Determine binary path based on installation type
+        var servicePath;
+        if (installType === 'bundle') {
+            servicePath = installPath + 'MeshAgent.app/Contents/MacOS/meshagent';
+        } else {
+            servicePath = installPath + 'meshagent';
+        }
+
         require('service-manager').manager.installLaunchAgent({
             name: serviceName,
             companyName: companyName,
-            servicePath: installPath + 'meshagent',
+            servicePath: servicePath,
             startType: 'AUTO_START',
             sessionTypes: ['Aqua', 'LoginWindow'],
             parameters: ['-kvm1', '--serviceId=' + serviceId]
@@ -2006,6 +2133,16 @@ function upgradeAgent(params) {
 
     console.log('Starting MeshAgent upgrade...\n');
 
+    // Detect source type (bundle or standalone binary)
+    var sourceType = detectSourceType();
+    console.log('Source type: ' + sourceType.type);
+    if (sourceType.type === 'bundle') {
+        console.log('Source bundle: ' + sourceType.bundlePath);
+    } else {
+        console.log('Source binary: ' + sourceType.binaryPath);
+    }
+    console.log('');
+
     // Normalize parameters (handles --serviceName alias, etc.)
     checkParameters(parms);
 
@@ -2476,10 +2613,10 @@ function upgradeAgent(params) {
         console.log('');
     }
 
-    // Backup old binary
+    // Backup existing installation (bundle or standalone)
     process.stdout.write('Backing up current installation...\n');
     try {
-        backupBinary(installPath);
+        backupInstallation(installPath);
     } catch (e) {
         console.log('ERROR: ' + e.message);
         console.log('Upgrade aborted.');
@@ -2487,10 +2624,10 @@ function upgradeAgent(params) {
     }
     console.log('');
 
-    // Replace binary
-    process.stdout.write('Installing new binary...\n');
+    // Install new version (based on source type)
+    process.stdout.write('Installing new version...\n');
     try {
-        replaceBinary(installPath);
+        replaceInstallation(sourceType, installPath);
     } catch (e) {
         console.log('ERROR: ' + e.message);
         console.log('Upgrade aborted. You can restore from backup if needed.');
@@ -2498,12 +2635,17 @@ function upgradeAgent(params) {
     }
     console.log('');
 
+    // Determine what we just installed (bundle or standalone)
+    var newInstallType = (sourceType.type === 'bundle') ? 'bundle' : 'standalone';
+    console.log('Installation type: ' + newInstallType);
+    console.log('');
+
     // Recreate LaunchDaemon plist (using discovered/current service configuration)
     // Note: We use currentServiceName/currentCompanyName (not Final values) so that
     // plists are created with the existing configuration, even if user blanked .msh
     process.stdout.write('Recreating LaunchDaemon...\n');
     try {
-        createLaunchDaemon(currentServiceName, currentCompanyName, installPath, currentServiceId);
+        createLaunchDaemon(currentServiceName, currentCompanyName, installPath, currentServiceId, newInstallType);
     } catch (e) {
         console.log('ERROR: ' + e.message);
         console.log('You may need to manually reinstall the agent.');
@@ -2514,7 +2656,7 @@ function upgradeAgent(params) {
     // Recreate LaunchAgent plist (using discovered/current service configuration)
     process.stdout.write('Recreating LaunchAgent...\n');
     try {
-        createLaunchAgent(currentServiceName, currentCompanyName, installPath, currentServiceId);
+        createLaunchAgent(currentServiceName, currentCompanyName, installPath, currentServiceId, newInstallType);
     } catch (e) {
         console.log('ERROR: ' + e.message);
         console.log('LaunchDaemon should still work, but KVM functionality may be limited.');

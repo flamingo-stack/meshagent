@@ -3,10 +3,12 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>meshagent.code-utils</string>
+    <string>BUNDLE_IDENTIFIER</string>
     <key>CFBundleName</key>
     <string>meshagent</string>
     <key>CFBundleShortVersionString</key>
-    <string>25.11.13.18.30.10</string>
+    <string>BUILD_TIMESTAMP_DATE</string>
+    <key>CFBundleVersion</key>
+	<string>BUILD_TIMESTAMP_TIME</string>
 </dict>
 </plist>
