@@ -69,7 +69,7 @@ void adjust_working_directory_for_bundle(void);
  * @param mshPath Output buffer for msh path (PATH_MAX size)
  * @return 0 on success, -1 on error (plist not found or keys missing)
  */
-int read_bundle_config_from_plist(const char *serviceID, char *dbPath, char *mshPath);
+int read_bundle_config_from_plist(const char *serviceID, char *dbPath, char *mshPath, char *logPath);
 
 /**
  * Determine serviceID for current installation

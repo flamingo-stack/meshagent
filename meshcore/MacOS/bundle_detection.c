@@ -149,9 +149,9 @@ void adjust_working_directory_for_bundle(void)
     }
 }
 
-int read_bundle_config_from_plist(const char *serviceID, char *dbPath, char *mshPath)
+int read_bundle_config_from_plist(const char *serviceID, char *dbPath, char *mshPath, char *logPath)
 {
-    if (!serviceID || !dbPath || !mshPath)
+    if (!serviceID || !dbPath || !mshPath || !logPath)
     {
         fprintf(stderr, "MeshAgent: Invalid parameters to read_bundle_config_from_plist\n");
         return -1;
@@ -160,6 +160,7 @@ int read_bundle_config_from_plist(const char *serviceID, char *dbPath, char *msh
     // Initialize output buffers
     dbPath[0] = '\0';
     mshPath[0] = '\0';
+    logPath[0] = '\0';
 
     // Build plist path: /Library/Preferences/{serviceID}.plist
     char plistPath[PATH_MAX];
@@ -182,9 +183,11 @@ int read_bundle_config_from_plist(const char *serviceID, char *dbPath, char *msh
 
     CFStringRef dbKey = CFSTR("db");
     CFStringRef mshKey = CFSTR("msh");
+    CFStringRef logKey = CFSTR("logPath");
 
     CFPropertyListRef dbValue = CFPreferencesCopyAppValue(dbKey, serviceIDRef);
     CFPropertyListRef mshValue = CFPreferencesCopyAppValue(mshKey, serviceIDRef);
+    CFPropertyListRef logValue = CFPreferencesCopyAppValue(logKey, serviceIDRef);
 
     int result = 0;
 
@@ -218,9 +221,21 @@ int read_bundle_config_from_plist(const char *serviceID, char *dbPath, char *msh
         result = -1;
     }
 
+    // Extract log path (optional - don't fail if missing)
+    if (logValue && CFGetTypeID(logValue) == CFStringGetTypeID())
+    {
+        if (!CFStringGetCString((CFStringRef)logValue, logPath, PATH_MAX, kCFStringEncodingUTF8))
+        {
+            fprintf(stderr, "MeshAgent: Failed to convert 'logPath' value to string\n");
+            // Don't set result = -1 since logPath is optional
+        }
+    }
+    // Note: logPath is optional, so no error if missing
+
     // Cleanup
     if (dbValue) CFRelease(dbValue);
     if (mshValue) CFRelease(mshValue);
+    if (logValue) CFRelease(logValue);
     CFRelease(serviceIDRef);
 
     return result;

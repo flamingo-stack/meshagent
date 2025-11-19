@@ -180,6 +180,7 @@ typedef struct MeshAgentHostContainer
 #ifdef __APPLE__
 	char* configuredDbPath;   // Path from plist (NULL if not configured)
 	char* configuredMshPath;  // Path from plist (NULL if not configured)
+	char* configuredLogPath;  // Path from plist (NULL if not configured)
 #endif
 	ILibWebClient_StateObject controlChannel;
 	struct sockaddr_in6* proxyServer;

@@ -6365,21 +6365,43 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 	}
 
 #ifdef __APPLE__
+	// Check for installation/upgrade commands that don't require configuration validation
+	int skipConfigValidation = 0;
+	for (int i = 1; i < paramLen; i++)
+	{
+		if (strcmp(param[i], "-install") == 0 ||
+			strcmp(param[i], "-uninstall") == 0 ||
+			strcmp(param[i], "-upgrade") == 0 ||
+			strcmp(param[i], "-finstall") == 0 ||
+			strcmp(param[i], "-funinstall") == 0 ||
+			strcmp(param[i], "-fullinstall") == 0 ||
+			strcmp(param[i], "-fulluninstall") == 0)
+		{
+			skipConfigValidation = 1;
+			break;
+		}
+	}
+
 	// Initialize configured paths to NULL
 	agentHost->configuredDbPath = NULL;
 	agentHost->configuredMshPath = NULL;
+	agentHost->configuredLogPath = NULL;
 
-	// Read configuration from preferences plist
-	// This applies to both bundle and standalone binary modes
-	char serviceID[512];
+	// Skip configuration validation for installation/upgrade commands
+	if (!skipConfigValidation)
+	{
+		// Read configuration from preferences plist
+		// This applies to both bundle and standalone binary modes
+		char serviceID[512];
 	char dbPath[PATH_MAX];
 	char mshPath[PATH_MAX];
+	char logPath[PATH_MAX];
 	int isBundle = is_running_from_bundle();
 	int plistFound = 0;
 
 	if (get_service_id_from_launchdaemon(agentHost->exePath, serviceID) == 0)
 	{
-		if (read_bundle_config_from_plist(serviceID, dbPath, mshPath) == 0)
+		if (read_bundle_config_from_plist(serviceID, dbPath, mshPath, logPath) == 0)
 		{
 			// Validate that at least one path points to an existing file
 			int dbExists = (strlen(dbPath) > 0 && access(dbPath, F_OK) == 0);
@@ -6398,6 +6420,11 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 				{
 					agentHost->configuredMshPath = ILibString_Copy(mshPath, 0);
 					printf("MeshAgent: Using configured MSH path: %s\n", mshPath);
+				}
+				if (strlen(logPath) > 0)
+				{
+					agentHost->configuredLogPath = ILibString_Copy(logPath, 0);
+					printf("MeshAgent: Using configured log path: %s\n", logPath);
 				}
 			}
 			else
@@ -6478,32 +6505,33 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 		char* bundlePath = get_bundle_path();
 		if (bundlePath != NULL)
 		{
-			// Build fallback paths: bundle/../../../meshagent.db and bundle/../../../meshagent.msh
+			// Build fallback paths: bundle/../meshagent.db and bundle/../meshagent.msh
+			// (One level up from bundle root = directory containing the .app)
 			char fallbackDbPath[PATH_MAX];
 			char fallbackMshPath[PATH_MAX];
-			snprintf(fallbackDbPath, PATH_MAX, "%s/../../../meshagent.db", bundlePath);
-			snprintf(fallbackMshPath, PATH_MAX, "%s/../../../meshagent.msh", bundlePath);
+			snprintf(fallbackDbPath, PATH_MAX, "%s/../meshagent.db", bundlePath);
+			snprintf(fallbackMshPath, PATH_MAX, "%s/../meshagent.msh", bundlePath);
 
-			// Resolve to absolute paths
-			char resolvedDbPath[PATH_MAX];
-			char resolvedMshPath[PATH_MAX];
-			realpath(fallbackDbPath, resolvedDbPath);
-			realpath(fallbackMshPath, resolvedMshPath);
-
-			int dbExists = (access(resolvedDbPath, F_OK) == 0);
-			int mshExists = (access(resolvedMshPath, F_OK) == 0);
+			// Check if files exist before resolving paths
+			int dbExists = (access(fallbackDbPath, F_OK) == 0);
+			int mshExists = (access(fallbackMshPath, F_OK) == 0);
 
 			if (dbExists || mshExists)
 			{
-				// Use fallback paths
+				// Resolve to absolute paths for actual use
+				char resolvedDbPath[PATH_MAX];
+				char resolvedMshPath[PATH_MAX];
+
 				printf("MeshAgent: No plist found, using fallback files relative to bundle\n");
 				if (dbExists)
 				{
+					realpath(fallbackDbPath, resolvedDbPath);
 					agentHost->configuredDbPath = ILibString_Copy(resolvedDbPath, 0);
 					printf("MeshAgent: Using fallback DB path: %s\n", resolvedDbPath);
 				}
 				if (mshExists)
 				{
+					realpath(fallbackMshPath, resolvedMshPath);
 					agentHost->configuredMshPath = ILibString_Copy(resolvedMshPath, 0);
 					printf("MeshAgent: Using fallback MSH path: %s\n", resolvedMshPath);
 				}
@@ -6517,9 +6545,9 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 				fprintf(stderr, "MeshAgent ERROR: No valid configuration found\n");
 				fprintf(stderr, "================================================================================\n");
 				fprintf(stderr, "No configuration plist at: /Library/Preferences/%s.plist\n", serviceID);
-				fprintf(stderr, "No fallback configuration files:\n");
-				fprintf(stderr, "  - %s\n", resolvedDbPath);
-				fprintf(stderr, "  - %s\n", resolvedMshPath);
+				fprintf(stderr, "No fallback configuration files relative to bundle:\n");
+				fprintf(stderr, "  - ../meshagent.db\n");
+				fprintf(stderr, "  - ../meshagent.msh\n");
 				fprintf(stderr, "\n");
 				fprintf(stderr, "At least one file must exist with valid server connection information.\n");
 				fprintf(stderr, "Exiting to prevent creating empty database.\n");
@@ -6546,6 +6574,7 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 			exit(1);
 		}
 	}
+	} // end if (!skipConfigValidation)
 #endif
 
 	// Perform a self SHA384 Hash
@@ -6565,8 +6594,50 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 		}
 	}
 
-
+#ifdef __APPLE__
+	// Set log file path with priority: plist config > bundle fallback > binary default
+	if (agentHost->configuredLogPath != NULL)
+	{
+		// Priority 1: Use configured path from plist
+		ILibCriticalLogFilename = ILibString_Copy(agentHost->configuredLogPath, 0);
+		printf("MeshAgent: Using configured log path: %s\n", agentHost->configuredLogPath);
+	}
+	else if (is_running_from_bundle())
+	{
+		// Priority 2: Bundle fallback - next to bundle
+		char* bundlePath = get_bundle_path();
+		if (bundlePath != NULL)
+		{
+			char logPath[PATH_MAX];
+			snprintf(logPath, PATH_MAX, "%s/../meshagent.log", bundlePath);
+			char resolvedPath[PATH_MAX];
+			if (realpath(logPath, resolvedPath) != NULL)
+			{
+				ILibCriticalLogFilename = ILibString_Copy(resolvedPath, 0);
+				printf("MeshAgent: Using bundle fallback log path: %s\n", resolvedPath);
+			}
+			else
+			{
+				// If realpath fails, use the constructed path as-is
+				ILibCriticalLogFilename = ILibString_Copy(logPath, 0);
+				printf("MeshAgent: Using bundle fallback log path: %s\n", logPath);
+			}
+			free(bundlePath);
+		}
+		else
+		{
+			// Fallback to default if bundle path unavailable
+			ILibCriticalLogFilename = ILibString_Copy(MeshAgent_MakeAbsolutePath(agentHost->exePath, ".log"), 0);
+		}
+	}
+	else
+	{
+		// Priority 3: Binary default - next to executable
+		ILibCriticalLogFilename = ILibString_Copy(MeshAgent_MakeAbsolutePath(agentHost->exePath, ".log"), 0);
+	}
+#else
 	ILibCriticalLogFilename = ILibString_Copy(MeshAgent_MakeAbsolutePath(agentHost->exePath, ".log"), 0);
+#endif
 #ifndef MICROSTACK_NOTLS
 	util_openssl_init();
 #endif
