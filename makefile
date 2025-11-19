@@ -837,6 +837,9 @@ linux:
 # Info.plist embedding: The binary includes an embedded Info.plist with CFBundleIdentifier,
 # CFBundleName, and CFBundleShortVersionString (build timestamp). For universal builds,
 # the same timestamp is used for both architectures to ensure consistency.
+#
+# App Bundle: After building the binary, automatically creates a .app bundle in
+# $(BUILD_OUTPUT_DIR)/<arch>-app/MeshAgent.app for easy distribution and testing.
 macos:
 	@mkdir -p $(BUILD_OUTPUT_DIR)/DEBUG
 	@if [ "$(ARCHID)" = "10005" ]; then \
@@ -860,6 +863,13 @@ macos:
 				$(BUILD_OUTPUT_DIR)/$(EXENAME)_osx-arm-64 \
 				-output $(BUILD_OUTPUT_DIR)/$(EXENAME)_osx-universal-64; \
 			echo "Build complete: $(BUILD_OUTPUT_DIR)/$(EXENAME)_osx-universal-64"; \
+			echo "Creating application bundle..."; \
+			./build/tools/macos_build/create-app-bundle.sh \
+				$(BUILD_OUTPUT_DIR)/$(EXENAME)_osx-universal-64 \
+				$(BUILD_OUTPUT_DIR)/osx-universal-64-app/MeshAgent.app \
+				$(BUNDLE_ID) \
+				$$BUILD_TIME; \
+			echo "Bundle complete: $(BUILD_OUTPUT_DIR)/osx-universal-64-app/MeshAgent.app"; \
 		else \
 			echo "Debug build complete: $(BUILD_OUTPUT_DIR)/DEBUG/$(EXENAME)_osx-universal-64"; \
 		fi; \
@@ -876,66 +886,53 @@ macos:
 			cp $(BUILD_OUTPUT_DIR)/DEBUG/$(EXENAME)_$(ARCHNAME) $(BUILD_OUTPUT_DIR)/$(EXENAME)_$(ARCHNAME); \
 			strip $(BUILD_OUTPUT_DIR)/$(EXENAME)_$(ARCHNAME); \
 			echo "Build complete: $(BUILD_OUTPUT_DIR)/$(EXENAME)_$(ARCHNAME)"; \
+			echo "Creating application bundle..."; \
+			./build/tools/macos_build/create-app-bundle.sh \
+				$(BUILD_OUTPUT_DIR)/$(EXENAME)_$(ARCHNAME) \
+				$(BUILD_OUTPUT_DIR)/$(ARCHNAME)-app/MeshAgent.app \
+				$(BUNDLE_ID) \
+				$$BUILD_TIME; \
+			echo "Bundle complete: $(BUILD_OUTPUT_DIR)/$(ARCHNAME)-app/MeshAgent.app"; \
 		else \
 			echo "Debug build complete: $(BUILD_OUTPUT_DIR)/DEBUG/$(EXENAME)_$(ARCHNAME)"; \
 		fi; \
 	fi
 
-# Build macOS application bundle
-macos-bundle: macos
-	@echo "Creating application bundle..."
-	@BUILD_TIME=$$(date +%y.%m.%d.%H.%M.%S); \
-	./build/tools/macos_build/create-app-bundle.sh \
-		$(BUILD_OUTPUT_DIR)/$(EXENAME)_$(ARCHNAME) \
-		$(BUILD_OUTPUT_DIR)/MeshAgent.app \
-		$(BUNDLE_ID) \
-		$$BUILD_TIME
-	@echo "Bundle complete: $(BUILD_OUTPUT_DIR)/MeshAgent.app"
-
-# Install bundle to /Applications
-install-bundle: macos-bundle
-	@echo "Installing MeshAgent.app to /Applications..."
-	@if [ -d "/Applications/MeshAgent.app" ]; then \
-		echo "Removing existing installation..."; \
-		rm -rf "/Applications/MeshAgent.app"; \
-	fi
-	@cp -R $(BUILD_OUTPUT_DIR)/MeshAgent.app /Applications/
-	@echo "Installation complete: /Applications/MeshAgent.app"
-
-# Sign macOS application bundle
-sign-bundle:
+# Sign macOS application bundle (works with any .app in output directory)
+# Usage: make macos-sign-bundle BUNDLE_PATH=build/output/osx-arm-64-app/MeshAgent.app
+macos-sign-bundle:
 	@if [ -z "$(MACOS_SIGN_CERT)" ]; then \
 		echo "Error: MACOS_SIGN_CERT environment variable not set"; \
 		echo "Please set it to your Developer ID Application certificate"; \
 		echo "Example: export MACOS_SIGN_CERT=\"Developer ID Application: Name (TEAMID)\""; \
 		exit 1; \
 	fi
-	@if [ ! -d "$(BUILD_OUTPUT_DIR)/MeshAgent.app" ]; then \
-		echo "Error: Bundle not found. Please run 'make macos-bundle' first"; \
+	@if [ -z "$(BUNDLE_PATH)" ]; then \
+		echo "Error: BUNDLE_PATH not specified"; \
+		echo "Usage: make macos-sign-bundle BUNDLE_PATH=build/output/osx-arm-64-app/MeshAgent.app"; \
 		exit 1; \
 	fi
-	@echo "Signing bundle..."
-	@./build/tools/macos_build/sign-app-bundle.sh $(BUILD_OUTPUT_DIR)/MeshAgent.app
-	@echo "Bundle signed: $(BUILD_OUTPUT_DIR)/MeshAgent.app"
+	@if [ ! -d "$(BUNDLE_PATH)" ]; then \
+		echo "Error: Bundle not found: $(BUNDLE_PATH)"; \
+		exit 1; \
+	fi
+	@echo "Signing bundle: $(BUNDLE_PATH)"
+	@./build/tools/macos_build/sign-app-bundle.sh $(BUNDLE_PATH)
 
 # Notarize macOS application bundle (requires signed bundle)
-notarize-bundle:
-	@if [ ! -d "$(BUILD_OUTPUT_DIR)/MeshAgent.app" ]; then \
-		echo "Error: Bundle not found. Please run 'make macos-bundle' first"; \
+# Usage: make macos-notarize-bundle BUNDLE_PATH=build/output/osx-arm-64-app/MeshAgent.app
+macos-notarize-bundle:
+	@if [ -z "$(BUNDLE_PATH)" ]; then \
+		echo "Error: BUNDLE_PATH not specified"; \
+		echo "Usage: make macos-notarize-bundle BUNDLE_PATH=build/output/osx-arm-64-app/MeshAgent.app"; \
 		exit 1; \
 	fi
-	@echo "Notarizing bundle..."
-	@./build/tools/macos_build/notarize-app-bundle.sh $(BUILD_OUTPUT_DIR)/MeshAgent.app
-	@echo "Bundle notarized and stapled: $(BUILD_OUTPUT_DIR)/MeshAgent.app"
-
-# Build, sign, and notarize bundle (complete production workflow)
-macos-bundle-release: macos-bundle sign-bundle notarize-bundle
-	@echo ""
-	@echo "✓ Production bundle complete: $(BUILD_OUTPUT_DIR)/MeshAgent.app"
-	@echo "  - Signed with hardened runtime"
-	@echo "  - Notarized by Apple"
-	@echo "  - Stapled for offline verification"
-	@echo "  - Ready for distribution"
+	@if [ ! -d "$(BUNDLE_PATH)" ]; then \
+		echo "Error: Bundle not found: $(BUNDLE_PATH)"; \
+		exit 1; \
+	fi
+	@echo "Notarizing bundle: $(BUNDLE_PATH)"
+	@./build/tools/macos_build/notarize-app-bundle.sh $(BUNDLE_PATH)
 
 freebsd:
 	@mkdir -p $(BUILD_OUTPUT_DIR)/DEBUG
