@@ -734,6 +734,7 @@ function copyDirectoryRecursive(source, target) {
 // Helper to replace installation (bundle or standalone binary)
 function replaceInstallation(sourceType, installPath) {
     var fs = require('fs');
+    var child_process = require('child_process');
 
     try {
         if (sourceType.type === 'bundle') {
@@ -743,14 +744,24 @@ function replaceInstallation(sourceType, installPath) {
             // Source bundle should already be backed up by backupInstallation()
             // Just copy the new bundle
             process.stdout.write('   Copying application bundle...\n');
-            copyDirectoryRecursive(sourceType.bundlePath, targetBundlePath);
-            process.stdout.write('   Bundle installed: ' + targetBundlePath + '\n');
+
+            // Use ditto on macOS to properly copy app bundles with all attributes
+            // ditto preserves resource forks, extended attributes, ACLs, metadata, and code signatures
+            var dittoError = null;
+            var child = child_process.execFile('/usr/bin/ditto', ['ditto', sourceType.bundlePath, targetBundlePath]);
+            child.stdout.on('data', function(d) { process.stdout.write(d); });
+            child.stderr.on('data', function(d) { dittoError = d.toString(); process.stderr.write(d); });
+            child.waitExit();
+
+            // Check if bundle was actually copied by verifying the binary exists
+            var binaryPath = targetBundlePath + '/Contents/MacOS/meshagent';
+            if (!fs.existsSync(binaryPath)) {
+                throw new Error('Bundle copy failed. ' + (dittoError || 'Binary not found after copy'));
+            }
 
             // Ensure binary is executable
-            var binaryPath = targetBundlePath + '/Contents/MacOS/meshagent';
-            if (fs.existsSync(binaryPath)) {
-                fs.chmodSync(binaryPath, 0o755);
-            }
+            fs.chmodSync(binaryPath, 0o755);
+            process.stdout.write('   Bundle installed: ' + targetBundlePath + '\n');
         } else {
             // Copy standalone binary
             var targetBinaryPath = installPath + 'meshagent';
@@ -775,7 +786,15 @@ function replaceInstallation(sourceType, installPath) {
             process.stdout.write('   Binary installed: ' + targetBinaryPath + '\n');
         }
     } catch (e) {
-        throw new Error('Could not replace installation: ' + e.message);
+        var errorMsg = 'Could not replace installation: ';
+        if (e && e.message) {
+            errorMsg += e.message;
+        } else if (e && typeof e === 'string') {
+            errorMsg += e;
+        } else {
+            errorMsg += JSON.stringify(e) || 'Unknown error';
+        }
+        throw new Error(errorMsg);
     }
 }
 
@@ -983,7 +1002,15 @@ function createLaunchDaemon(serviceName, companyName, installPath, serviceId, in
         require('service-manager').manager.installService(options);
         process.stdout.write('   LaunchDaemon created\n');
     } catch (e) {
-        throw new Error('Could not create LaunchDaemon: ' + e.message);
+        var errorMsg = 'Could not create LaunchDaemon: ';
+        if (e && e.message) {
+            errorMsg += e.message;
+        } else if (e && typeof e === 'string') {
+            errorMsg += e;
+        } else {
+            errorMsg += JSON.stringify(e) || 'Unknown error';
+        }
+        throw new Error(errorMsg);
     }
 }
 
@@ -1008,7 +1035,15 @@ function createLaunchAgent(serviceName, companyName, installPath, serviceId, ins
         });
         process.stdout.write('   LaunchAgent created\n');
     } catch (e) {
-        throw new Error('Could not create LaunchAgent: ' + e.message);
+        var errorMsg = 'Could not create LaunchAgent: ';
+        if (e && e.message) {
+            errorMsg += e.message;
+        } else if (e && typeof e === 'string') {
+            errorMsg += e;
+        } else {
+            errorMsg += JSON.stringify(e) || 'Unknown error';
+        }
+        throw new Error(errorMsg);
     }
 }
 
