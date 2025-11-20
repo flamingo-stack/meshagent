@@ -107,8 +107,8 @@ try
 catch(x)
 { }
 
-// Import macOS platform helpers
-var macOSHelpers = require('./macOSHelpers');
+// Import macOS platform helpers (only on macOS)
+var macOSHelpers = process.platform === 'darwin' ? require('./macOSHelpers') : null;
 
 // Find any .app bundle in a directory that contains a meshagent binary
 // Returns the bundle name (e.g., "MeshAgent.app") or null if not found
