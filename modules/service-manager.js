@@ -73,6 +73,53 @@ function getBundleParentDirectory(execPath) {
     return parts.join('/') + '/';
 }
 
+// Sanitize identifier to follow reverse DNS naming conventions
+// Only allow alphanumeric, hyphens, and underscores (dots will be added between components)
+function sanitizeIdentifier(str) {
+    if (!str) return null;
+    // Replace spaces with hyphens, remove all non-alphanumeric except hyphens/underscores, convert to lowercase
+    return str.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase();
+}
+
+// Build composite service identifier from service name and company name
+// Handles all macOS service ID patterns consistently across the codebase
+function buildServiceId(serviceName, companyName, options) {
+    options = options || {};
+    var platform = options.platform || process.platform;
+    var explicitServiceId = options.explicitServiceId || null;
+
+    // If an explicit serviceId is provided, use it directly
+    if (explicitServiceId !== null) {
+        return explicitServiceId;
+    }
+
+    // Non-macOS platforms use simple sanitized identifier
+    if (platform !== 'darwin') {
+        return sanitizeIdentifier(serviceName);
+    }
+
+    // macOS composite identifier logic
+    var sanitizedServiceName = sanitizeIdentifier(serviceName);
+    var sanitizedCompanyName = sanitizeIdentifier(companyName);
+
+    if (sanitizedCompanyName) {
+        // Company name present
+        if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
+            // Custom service name + company: meshagent.ServiceName.CompanyName
+            return 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
+        } else {
+            // Default service name + company: meshagent.CompanyName
+            return 'meshagent.' + sanitizedCompanyName;
+        }
+    } else if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
+        // Only custom service name (no company): meshagent.ServiceName
+        return 'meshagent.' + sanitizedServiceName;
+    } else {
+        // Default service name only: meshagent
+        return 'meshagent';
+    }
+}
+
 function prepareFolders(folderPath)
 {
     var dlmtr = process.platform == 'win32' ? '\\' : '/';
@@ -2867,46 +2914,14 @@ function serviceManager()
             if (!this.isAdmin()) { throw ('Installing as Service, requires root'); }
 
             // Mac OS
-            // Sanitize companyName and service name to follow reverse DNS naming conventions
-            // Only allow alphanumeric, hyphens, and underscores (dots will be added between components)
-            function sanitizeIdentifier(str) {
-                if (!str) return null;
-                // Replace spaces with hyphens, remove all non-alphanumeric except hyphens/underscores, convert to lowercase
-                return str.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase();
-            }
-
-            var sanitizedCompanyName = sanitizeIdentifier(options.companyName);
+            // Validate service name before proceeding
             var sanitizedServiceName = sanitizeIdentifier(options.name);
-
             if (!sanitizedServiceName) {
                 throw ('Service name is required and must contain valid characters (alphanumeric, hyphens, underscores)');
             }
 
             // Build composite service identifier from companyName and service name
-            // Format: meshagent.{serviceName}.{companyName} when both provided
-            // Format: meshagent.{serviceName} when only custom service name
-            // Format: meshagent.{companyName} when default service name with company
-            // Format: meshagent when default service name only
-            var serviceId;
-            if (options.serviceId) {
-                // Explicit serviceId provided - use it directly
-                serviceId = options.serviceId;
-            } else if (sanitizedCompanyName) {
-                // Company name present
-                if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-                    // Custom service name + company: meshagent.ServiceName.CompanyName
-                    serviceId = 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-                } else {
-                    // Default service name + company: meshagent.CompanyName
-                    serviceId = 'meshagent.' + sanitizedCompanyName;
-                }
-            } else if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-                // Only custom service name (no company): meshagent.ServiceName
-                serviceId = 'meshagent.' + sanitizedServiceName;
-            } else {
-                // Default service name only: meshagent
-                serviceId = 'meshagent';
-            }
+            var serviceId = buildServiceId(options.name, options.companyName, { explicitServiceId: options.serviceId });
 
             var stdoutpath = (options.stdout ? ('<key>StandardOutPath</key>\n<string>' + options.stdout + '</string>') : ('<key>StandardOutPath</key>\n<string>/tmp/' + serviceId + '-daemon.log</string>'));
             var stderrpath = (options.stderr ? ('<key>StandardErrorPath</key>\n<string>' + options.stderr + '</string>') : ('<key>StandardErrorPath</key>\n<string>/tmp/' + serviceId + '-daemon.log</string>'));
@@ -2980,46 +2995,14 @@ function serviceManager()
                 throw ('Installing a Global Agent/Daemon, requires admin');
             }
 
-            // Sanitize companyName and service name to follow reverse DNS naming conventions
-            // Only allow alphanumeric, hyphens, and underscores (dots will be added between components)
-            function sanitizeIdentifier(str) {
-                if (!str) return null;
-                // Replace spaces with hyphens, remove all non-alphanumeric except hyphens/underscores, convert to lowercase
-                return str.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase();
-            }
-
-            var sanitizedCompanyName = sanitizeIdentifier(options.companyName);
+            // Validate service name before proceeding
             var sanitizedServiceName = sanitizeIdentifier(options.name);
-
             if (!sanitizedServiceName) {
                 throw ('Service name is required and must contain valid characters (alphanumeric, hyphens, underscores)');
             }
 
             // Build composite service identifier from companyName and service name
-            // Format: meshagent.{serviceName}.{companyName} when both provided
-            // Format: meshagent.{serviceName} when only custom service name
-            // Format: meshagent.{companyName} when default service name with company
-            // Format: meshagent when default service name only
-            var serviceId;
-            if (options.serviceId) {
-                // Explicit serviceId provided - use it directly
-                serviceId = options.serviceId;
-            } else if (sanitizedCompanyName) {
-                // Company name present
-                if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-                    // Custom service name + company: meshagent.ServiceName.CompanyName
-                    serviceId = 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-                } else {
-                    // Default service name + company: meshagent.CompanyName
-                    serviceId = 'meshagent.' + sanitizedCompanyName;
-                }
-            } else if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-                // Only custom service name (no company): meshagent.ServiceName
-                serviceId = 'meshagent.' + sanitizedServiceName;
-            } else {
-                // Default service name only: meshagent
-                serviceId = 'meshagent';
-            }
+            var serviceId = buildServiceId(options.name, options.companyName, { explicitServiceId: options.serviceId });
 
             // Use provided workingDirectory if set (for bundle installations), otherwise derive from servicePath
             if (!options.workingDirectory) {

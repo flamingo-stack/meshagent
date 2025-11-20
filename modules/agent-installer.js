@@ -201,6 +201,51 @@ function sanitizeIdentifier(str) {
     return str.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase();
 }
 
+// Helper function to build composite service identifier
+// Centralizes the serviceId construction logic used throughout the codebase
+// Format examples:
+//   - meshagent.ServiceName.CompanyName (custom service name + company)
+//   - meshagent.CompanyName (default service name + company)
+//   - meshagent.ServiceName (custom service name only)
+//   - meshagent (default service name only)
+//   - ServiceName (non-macOS platforms)
+function buildServiceId(serviceName, companyName, options) {
+    options = options || {};
+    var platform = options.platform || process.platform;
+    var explicitServiceId = options.explicitServiceId || null;
+
+    // If explicit serviceId provided, use it directly
+    if (explicitServiceId !== null) {
+        return explicitServiceId;
+    }
+
+    // Non-macOS platforms use simple sanitized service name
+    if (platform !== 'darwin') {
+        return sanitizeIdentifier(serviceName);
+    }
+
+    // macOS uses composite format with meshagent prefix
+    var sanitizedServiceName = sanitizeIdentifier(serviceName);
+    var sanitizedCompanyName = sanitizeIdentifier(companyName);
+
+    if (sanitizedCompanyName) {
+        // Company name present
+        if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
+            // Custom service name + company: meshagent.ServiceName.CompanyName
+            return 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
+        } else {
+            // Default service name + company: meshagent.CompanyName
+            return 'meshagent.' + sanitizedCompanyName;
+        }
+    } else if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
+        // Only custom service name (no company): meshagent.ServiceName
+        return 'meshagent.' + sanitizedServiceName;
+    } else {
+        // Default service name only: meshagent
+        return 'meshagent';
+    }
+}
+
 // This function performs some checks on the parameter structure, to make sure the minimum set of requried elements are present
 function checkParameters(parms)
 {
@@ -370,21 +415,7 @@ function findInstallation(installPath, serviceName, companyName) {
     // Try to find service by name
     if (serviceName || companyName) {
         try {
-            var sanitizedServiceName = sanitizeIdentifier(serviceName || 'meshagent');
-            var sanitizedCompanyName = sanitizeIdentifier(companyName);
-            var serviceId;
-
-            if (sanitizedCompanyName) {
-                if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-                    serviceId = 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-                } else {
-                    serviceId = 'meshagent.' + sanitizedCompanyName;
-                }
-            } else if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-                serviceId = 'meshagent.' + sanitizedServiceName;
-            } else {
-                serviceId = 'meshagent';
-            }
+            var serviceId = buildServiceId(serviceName || 'meshagent', companyName);
 
             var svc = require('service-manager').manager.getService(serviceId);
             var path = svc.appWorkingDirectory();
@@ -1362,26 +1393,7 @@ function installService(params)
         // macOS only: Calculate serviceId from serviceName + companyName
         // Use same logic as fullInstallEx to ensure consistency
         var serviceName = options.name;
-        var sanitizedServiceName = sanitizeIdentifier(serviceName);
-        var sanitizedCompanyName = sanitizeIdentifier(options.companyName);
-        var calculatedServiceId;
-
-        if (sanitizedCompanyName) {
-            // Company name present
-            if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-                // Custom service name + company: meshagent.ServiceName.CompanyName
-                calculatedServiceId = 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-            } else {
-                // Default service name + company: meshagent.CompanyName
-                calculatedServiceId = 'meshagent.' + sanitizedCompanyName;
-            }
-        } else if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-            // Only custom service name (no company): meshagent.ServiceName
-            calculatedServiceId = 'meshagent.' + sanitizedServiceName;
-        } else {
-            // Default service name only: meshagent
-            calculatedServiceId = 'meshagent';
-        }
+        var calculatedServiceId = buildServiceId(serviceName, options.companyName);
 
         // Always add to parameters (even if default 'meshagent')
         if (calculatedServiceId) {
@@ -1420,15 +1432,7 @@ function installService(params)
         process.exit();
     }
     // Build composite service identifier to match what was created during installation
-    // Format: meshagent.{serviceName}.{companyName} when companyName provided (macOS only)
-    var sanitizedServiceName = sanitizeIdentifier(options.name);
-    var sanitizedCompanyName = sanitizeIdentifier(options.companyName);
-    var serviceId;
-    if (process.platform == 'darwin' && sanitizedCompanyName) {
-        serviceId = 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-    } else {
-        serviceId = sanitizedServiceName;
-    }
+    var serviceId = buildServiceId(options.name, options.companyName);
     var svc = require('service-manager').manager.getService(serviceId);
 
     // macOS needs a LaunchAgent to help with some usages that need to run from within the user session, 
@@ -1592,25 +1596,7 @@ function uninstallService2(params, msh)
     }
 
     // Build composite service identifier to match installation naming convention
-    // Format: meshagent.{serviceName}.{companyName} when companyName provided (macOS only)
-    var sanitizedServiceName = sanitizeIdentifier(serviceName);
-    var sanitizedCompanyName = sanitizeIdentifier(companyName);
-    var serviceId;
-    if (process.platform == 'darwin') {
-        if (sanitizedCompanyName) {
-            if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-                serviceId = 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-            } else {
-                serviceId = 'meshagent.' + sanitizedCompanyName;
-            }
-        } else if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-            serviceId = 'meshagent.' + sanitizedServiceName;
-        } else {
-            serviceId = 'meshagent';
-        }
-    } else {
-        serviceId = sanitizedServiceName;
-    }
+    var serviceId = buildServiceId(serviceName, companyName);
 
     // Remove the .msh file if present
     try { require('fs').unlinkSync(msh); } catch (mshe) { }
@@ -1702,12 +1688,7 @@ function uninstallService2(params, msh)
 
     // Check for secondary agent
     // Build diagnostic service ID following the same composite naming pattern (macOS only)
-    var diagnosticServiceId;
-    if (process.platform == 'darwin' && sanitizedCompanyName) {
-        diagnosticServiceId = 'meshagent.' + sanitizedServiceName + 'Diagnostic.' + sanitizedCompanyName;
-    } else {
-        diagnosticServiceId = sanitizedServiceName + 'Diagnostic';
-    }
+    var diagnosticServiceId = buildServiceId(serviceName + 'Diagnostic', companyName);
     try
     {
         process.stdout.write('   -> Checking for secondary agent...');
@@ -1763,24 +1744,7 @@ function uninstallService(params)
     var companyName = params.getParameter('companyName', null);
 
     // Build composite service identifier to match installation naming convention (macOS only)
-    var sanitizedServiceName = sanitizeIdentifier(serviceName);
-    var sanitizedCompanyName = sanitizeIdentifier(companyName);
-    var serviceId;
-    if (process.platform == 'darwin') {
-        if (sanitizedCompanyName) {
-            if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-                serviceId = 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-            } else {
-                serviceId = 'meshagent.' + sanitizedCompanyName;
-            }
-        } else if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-            serviceId = 'meshagent.' + sanitizedServiceName;
-        } else {
-            serviceId = 'meshagent';
-        }
-    } else {
-        serviceId = sanitizedServiceName;
-    }
+    var serviceId = buildServiceId(serviceName, companyName);
 
     var svc = require('service-manager').manager.getService(serviceId);
 
@@ -1885,24 +1849,7 @@ function fullUninstall(jsonString)
     var companyName = parms.getParameter('companyName', null);
 
     // Build composite service identifier to match installation naming convention (macOS only)
-    var sanitizedServiceName = sanitizeIdentifier(name);
-    var sanitizedCompanyName = sanitizeIdentifier(companyName);
-    var serviceId;
-    if (process.platform == 'darwin') {
-        if (sanitizedCompanyName) {
-            if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-                serviceId = 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-            } else {
-                serviceId = 'meshagent.' + sanitizedCompanyName;
-            }
-        } else if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-            serviceId = 'meshagent.' + sanitizedServiceName;
-        } else {
-            serviceId = 'meshagent';
-        }
-    } else {
-        serviceId = sanitizedServiceName;
-    }
+    var serviceId = buildServiceId(name, companyName);
 
     // Check for a previous installation of the service
     try
@@ -2020,34 +1967,7 @@ function fullInstallEx(parms, gOptions)
     var explicitServiceId = parms.getParameter('serviceId', null);
 
     // Build composite service identifier to match installation naming convention
-    var serviceId;
-    if (explicitServiceId !== null) {
-        // User provided explicit serviceId - use it directly
-        serviceId = explicitServiceId;
-    } else if (process.platform == 'darwin') {
-        // Calculate serviceId from serviceName + companyName
-        var sanitizedServiceName = sanitizeIdentifier(name);
-        var sanitizedCompanyName = sanitizeIdentifier(companyName);
-        if (sanitizedCompanyName) {
-            // Company name present
-            if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-                // Custom service name + company: meshagent.ServiceName.CompanyName
-                serviceId = 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-            } else {
-                // Default service name + company: meshagent.CompanyName
-                serviceId = 'meshagent.' + sanitizedCompanyName;
-            }
-        } else if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-            // Only custom service name (no company): meshagent.ServiceName
-            serviceId = 'meshagent.' + sanitizedServiceName;
-        } else {
-            // Default service name only: meshagent
-            serviceId = 'meshagent';
-        }
-    } else {
-        // Non-macOS platforms - use sanitized service name
-        serviceId = sanitizeIdentifier(name);
-    }
+    var serviceId = buildServiceId(name, companyName, { explicitServiceId: explicitServiceId });
 
     // No-op console.log() if verbose is not specified, otherwise set the verbosity level to level 1
     if (parseInt(parms.getParameter('verbose', 0)) == 0)
@@ -2969,14 +2889,7 @@ function sys_update(isservice, b64)
         var companyName = parm != null ? parm.getParameter('companyName', null) : null;
 
         // Build composite service identifier to match installation naming convention (macOS only)
-        var sanitizedServiceName = sanitizeIdentifier(servicename);
-        var sanitizedCompanyName = sanitizeIdentifier(companyName);
-        var serviceId;
-        if (process.platform == 'darwin' && sanitizedCompanyName) {
-            serviceId = 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-        } else {
-            serviceId = sanitizedServiceName;
-        }
+        var serviceId = buildServiceId(servicename, companyName);
 
         try
         {
