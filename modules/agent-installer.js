@@ -681,7 +681,7 @@ function deletePlists(serviceId) {
     var deleted = false;
 
     // LaunchDaemon plist
-    var daemonPlist = '/Library/LaunchDaemons/' + serviceId + '.plist';
+    var daemonPlist = macOSHelpers.getPlistPath(serviceId, 'daemon');
     try {
         if (require('fs').existsSync(daemonPlist)) {
             require('fs').unlinkSync(daemonPlist);
@@ -693,7 +693,7 @@ function deletePlists(serviceId) {
     }
 
     // LaunchAgent plist
-    var agentPlist = '/Library/LaunchAgents/' + serviceId + '-agent.plist';
+    var agentPlist = macOSHelpers.getPlistPath(serviceId, 'agent');
     try {
         if (require('fs').existsSync(agentPlist)) {
             require('fs').unlinkSync(agentPlist);
@@ -2396,31 +2396,7 @@ function upgradeAgent(params) {
     }
 
     // Build CURRENT service identifier (for stopping old services)
-    var currentServiceId;
-    if (newServiceId !== null) {
-        // User provided explicit serviceId - use it directly
-        currentServiceId = newServiceId;
-    } else {
-        // Calculate from serviceName + companyName
-        var currentSanitizedServiceName = macOSHelpers.sanitizeIdentifier(currentServiceName);
-        var currentSanitizedCompanyName = macOSHelpers.sanitizeIdentifier(currentCompanyName);
-        if (currentSanitizedCompanyName) {
-            // Company name present
-            if (currentSanitizedServiceName && currentSanitizedServiceName !== 'meshagent') {
-                // Custom service name + company: meshagent.ServiceName.CompanyName
-                currentServiceId = 'meshagent.' + currentSanitizedServiceName + '.' + currentSanitizedCompanyName;
-            } else {
-                // Default service name + company: meshagent.CompanyName
-                currentServiceId = 'meshagent.' + currentSanitizedCompanyName;
-            }
-        } else if (currentSanitizedServiceName && currentSanitizedServiceName !== 'meshagent') {
-            // Only custom service name (no company): meshagent.ServiceName
-            currentServiceId = 'meshagent.' + currentSanitizedServiceName;
-        } else {
-            // Default service name only: meshagent
-            currentServiceId = 'meshagent';
-        }
-    }
+    var currentServiceId = macOSHelpers.buildServiceId(currentServiceName, currentCompanyName, { explicitServiceId: newServiceId });
 
     console.log('Current Service ID: ' + currentServiceId);
     console.log('');

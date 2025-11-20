@@ -2257,11 +2257,11 @@ function serviceManager()
         // Sanitize companyName and service name for macOS to follow reverse DNS naming conventions
         // Only allow alphanumeric, hyphens, and underscores
         if (process.platform == 'darwin' && options.companyName) {
-            options.companyName = options.companyName.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9_-]/g, '');
+            options.companyName = macOSHelpers.sanitizeIdentifier(options.companyName);
         }
         if (process.platform == 'darwin' && options.name) {
             var originalName = options.name;
-            options.name = options.name.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9_-]/g, '');
+            options.name = macOSHelpers.sanitizeIdentifier(options.name);
             if (!options.name) {
                 throw ('Service name "' + originalName + '" contains no valid characters. Use alphanumeric, hyphens, or underscores only.');
             }
