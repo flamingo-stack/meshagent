@@ -2081,7 +2081,14 @@ function fullInstallEx(parms, gOptions)
             process.stdout.write('...Searching for any existing meshagent installation...');
             try
             {
-                loc = findInstallation(null, null, null);
+                // Check if explicit installPath was provided (takes priority over self-upgrade detection)
+                var explicitInstallPath = null;
+                var installPathIndex = parms.getParameterIndex('installPath');
+                if (installPathIndex >= 0) {
+                    explicitInstallPath = parms.getParameterValue(installPathIndex);
+                }
+
+                loc = findInstallation(explicitInstallPath, null, null);
                 if (loc)
                 {
                     process.stdout.write(' [FOUND: ' + loc + ']\n');
