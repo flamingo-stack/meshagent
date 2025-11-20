@@ -2894,9 +2894,10 @@ function serviceManager()
 
             plist += '  </dict>\n';
             plist += '</plist>';
-            if (!require('fs').existsSync('/Library/LaunchDaemons/' + serviceId + '.plist'))
+            var plistPath = macOSHelpers.getPlistPath(serviceId, 'daemon');
+            if (!require('fs').existsSync(plistPath))
             {
-                require('fs').writeFileSync('/Library/LaunchDaemons/' + serviceId + '.plist', plist);
+                require('fs').writeFileSync(plistPath, plist);
             }
             else
             {
