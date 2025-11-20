@@ -107,7 +107,7 @@ try
 catch(x)
 { }
 
-// Import macOS platform helpers (cross-platform module with internal platform detection)
+// Import macOS platform helpers
 var macOSHelpers = require('./macOSHelpers');
 
 // Find any .app bundle in a directory that contains a meshagent binary
@@ -134,7 +134,7 @@ function findBundleInDirectory(installPath) {
     return null;
 }
 
-// Helper function to detect if running from app bundle or standalone binary (macOS only)
+// Helper function to detect if running from app bundle or standalone binary
 function detectSourceType() {
     var execPath = process.execPath;
 
@@ -676,7 +676,7 @@ function deleteInstallationFiles(installPath, deleteData) {
     return deletedFiles;
 }
 
-// Helper to delete plist files (macOS only)
+// Helper to delete plist files
 function deletePlists(serviceId) {
     var deleted = false;
 
