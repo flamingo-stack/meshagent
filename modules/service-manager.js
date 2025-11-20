@@ -15,6 +15,7 @@ limitations under the License.
 */
 var promise = require('promise');
 var systemd_escape = null;
+var macOSHelpers = require('./macOSHelpers');
 
 function failureActionToInteger(action)
 {
@@ -53,71 +54,6 @@ function extractFileName(filePath)
 function extractFileSource(filePath)
 {
     return (typeof (filePath) == 'string' ? filePath : filePath.source);
-}
-
-// Shared helper functions for bundle detection (matches agent-installer.js)
-// Check if a given path is from an app bundle
-function isRunningFromBundle(execPath) {
-    if (!execPath) execPath = process.execPath;
-    return process.platform === 'darwin' && execPath.indexOf('.app/Contents/MacOS/') !== -1;
-}
-
-// Extract the parent directory of a bundle (e.g., /opt/meshagent/ from /opt/meshagent/MeshAgent.app/Contents/MacOS/meshagent)
-// Returns null if not a bundle path
-function getBundleParentDirectory(execPath) {
-    if (!execPath) execPath = process.execPath;
-    if (!isRunningFromBundle(execPath)) return null;
-
-    var parts = execPath.split('.app/Contents/MacOS/')[0].split('/');
-    parts.pop();  // Remove bundle name
-    return parts.join('/') + '/';
-}
-
-// Sanitize identifier to follow reverse DNS naming conventions
-// Only allow alphanumeric, hyphens, and underscores (dots will be added between components)
-function sanitizeIdentifier(str) {
-    if (!str) return null;
-    // Replace spaces with hyphens, remove all non-alphanumeric except hyphens/underscores, convert to lowercase
-    return str.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase();
-}
-
-// Build composite service identifier from service name and company name
-// Handles all macOS service ID patterns consistently across the codebase
-function buildServiceId(serviceName, companyName, options) {
-    options = options || {};
-    var platform = options.platform || process.platform;
-    var explicitServiceId = options.explicitServiceId || null;
-
-    // If an explicit serviceId is provided, use it directly
-    if (explicitServiceId !== null) {
-        return explicitServiceId;
-    }
-
-    // Non-macOS platforms use simple sanitized identifier
-    if (platform !== 'darwin') {
-        return sanitizeIdentifier(serviceName);
-    }
-
-    // macOS composite identifier logic
-    var sanitizedServiceName = sanitizeIdentifier(serviceName);
-    var sanitizedCompanyName = sanitizeIdentifier(companyName);
-
-    if (sanitizedCompanyName) {
-        // Company name present
-        if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-            // Custom service name + company: meshagent.ServiceName.CompanyName
-            return 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-        } else {
-            // Default service name + company: meshagent.CompanyName
-            return 'meshagent.' + sanitizedCompanyName;
-        }
-    } else if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-        // Only custom service name (no company): meshagent.ServiceName
-        return 'meshagent.' + sanitizedServiceName;
-    } else {
-        // Default service name only: meshagent
-        return 'meshagent';
-    }
 }
 
 function prepareFolders(folderPath)
@@ -2915,13 +2851,13 @@ function serviceManager()
 
             // Mac OS
             // Validate service name before proceeding
-            var sanitizedServiceName = sanitizeIdentifier(options.name);
+            var sanitizedServiceName = macOSHelpers.sanitizeIdentifier(options.name);
             if (!sanitizedServiceName) {
                 throw ('Service name is required and must contain valid characters (alphanumeric, hyphens, underscores)');
             }
 
             // Build composite service identifier from companyName and service name
-            var serviceId = buildServiceId(options.name, options.companyName, { explicitServiceId: options.serviceId });
+            var serviceId = macOSHelpers.buildServiceId(options.name, options.companyName, { explicitServiceId: options.serviceId });
 
             var stdoutpath = (options.stdout ? ('<key>StandardOutPath</key>\n<string>' + options.stdout + '</string>') : ('<key>StandardOutPath</key>\n<string>/tmp/' + serviceId + '-daemon.log</string>'));
             var stderrpath = (options.stderr ? ('<key>StandardErrorPath</key>\n<string>' + options.stderr + '</string>') : ('<key>StandardErrorPath</key>\n<string>/tmp/' + serviceId + '-daemon.log</string>'));
@@ -2996,13 +2932,13 @@ function serviceManager()
             }
 
             // Validate service name before proceeding
-            var sanitizedServiceName = sanitizeIdentifier(options.name);
+            var sanitizedServiceName = macOSHelpers.sanitizeIdentifier(options.name);
             if (!sanitizedServiceName) {
                 throw ('Service name is required and must contain valid characters (alphanumeric, hyphens, underscores)');
             }
 
             // Build composite service identifier from companyName and service name
-            var serviceId = buildServiceId(options.name, options.companyName, { explicitServiceId: options.serviceId });
+            var serviceId = macOSHelpers.buildServiceId(options.name, options.companyName, { explicitServiceId: options.serviceId });
 
             // Use provided workingDirectory if set (for bundle installations), otherwise derive from servicePath
             if (!options.workingDirectory) {
@@ -3260,10 +3196,10 @@ function serviceManager()
                 if (!options || !options.skipDeleteBinary)
                 {
                     // Check if this is a bundle installation using shared helper
-                    if (isRunningFromBundle(servicePath))
+                    if (macOSHelpers.isRunningFromBundle(servicePath))
                     {
                         // Bundle installation - remove entire .app
-                        var bundlePath = servicePath.split('.app/Contents/MacOS/')[0] + '.app';
+                        var bundlePath = macOSHelpers.getBundlePathFromBinaryPath(servicePath);
                         require('child_process').execSync('rm -rf "' + bundlePath + '"');
                     }
                     else

@@ -107,25 +107,8 @@ try
 catch(x)
 { }
 
-// Shared helper functions for bundle detection
-// These functions eliminate code duplication across the module
-
-// Check if a given path is from an app bundle
-function isRunningFromBundle(execPath) {
-    if (!execPath) execPath = process.execPath;
-    return process.platform === 'darwin' && execPath.indexOf('.app/Contents/MacOS/') !== -1;
-}
-
-// Extract the parent directory of a bundle (e.g., /opt/meshagent/ from /opt/meshagent/MeshAgent.app/Contents/MacOS/meshagent)
-// Returns null if not a bundle path
-function getBundleParentDirectory(execPath) {
-    if (!execPath) execPath = process.execPath;
-    if (!isRunningFromBundle(execPath)) return null;
-
-    var parts = execPath.split('.app/Contents/MacOS/')[0].split('/');
-    parts.pop();  // Remove bundle name
-    return parts.join('/') + '/';
-}
+// Import macOS platform helpers
+var macOSHelpers = require('./macOSHelpers');
 
 // Find any .app bundle in a directory that contains a meshagent binary
 // Returns the bundle name (e.g., "MeshAgent.app") or null if not found
@@ -156,10 +139,9 @@ function detectSourceType() {
     var execPath = process.execPath;
 
     // Check if running from .app bundle using shared helper
-    if (isRunningFromBundle(execPath)) {
+    if (macOSHelpers.macOSHelpers.isRunningFromBundle(execPath)) {
         // Extract bundle path (everything up to and including .app)
-        var appIndex = execPath.indexOf('.app/');
-        var bundlePath = execPath.substring(0, appIndex + 4); // Include '.app'
+        var bundlePath = macOSHelpers.getBundlePathFromBinaryPath(execPath);
 
         return {
             type: 'bundle',
@@ -191,59 +173,6 @@ function detectInstallationType(installPath) {
 
     // Nothing installed
     return null;
-}
-
-// Helper function to sanitize service identifiers
-// Matches the sanitization logic in service-manager.js for consistent naming
-function sanitizeIdentifier(str) {
-    if (!str) return null;
-    // Replace spaces with hyphens, remove all non-alphanumeric except hyphens/underscores, convert to lowercase
-    return str.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase();
-}
-
-// Helper function to build composite service identifier
-// Centralizes the serviceId construction logic used throughout the codebase
-// Format examples:
-//   - meshagent.ServiceName.CompanyName (custom service name + company)
-//   - meshagent.CompanyName (default service name + company)
-//   - meshagent.ServiceName (custom service name only)
-//   - meshagent (default service name only)
-//   - ServiceName (non-macOS platforms)
-function buildServiceId(serviceName, companyName, options) {
-    options = options || {};
-    var platform = options.platform || process.platform;
-    var explicitServiceId = options.explicitServiceId || null;
-
-    // If explicit serviceId provided, use it directly
-    if (explicitServiceId !== null) {
-        return explicitServiceId;
-    }
-
-    // Non-macOS platforms use simple sanitized service name
-    if (platform !== 'darwin') {
-        return sanitizeIdentifier(serviceName);
-    }
-
-    // macOS uses composite format with meshagent prefix
-    var sanitizedServiceName = sanitizeIdentifier(serviceName);
-    var sanitizedCompanyName = sanitizeIdentifier(companyName);
-
-    if (sanitizedCompanyName) {
-        // Company name present
-        if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-            // Custom service name + company: meshagent.ServiceName.CompanyName
-            return 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-        } else {
-            // Default service name + company: meshagent.CompanyName
-            return 'meshagent.' + sanitizedCompanyName;
-        }
-    } else if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-        // Only custom service name (no company): meshagent.ServiceName
-        return 'meshagent.' + sanitizedServiceName;
-    } else {
-        // Default service name only: meshagent
-        return 'meshagent';
-    }
 }
 
 // This function performs some checks on the parameter structure, to make sure the minimum set of requried elements are present
@@ -415,7 +344,7 @@ function findInstallation(installPath, serviceName, companyName) {
     // Try to find service by name
     if (serviceName || companyName) {
         try {
-            var serviceId = buildServiceId(serviceName || 'meshagent', companyName);
+            var serviceId = macOSHelpers.buildServiceId(serviceName || 'meshagent', companyName);
 
             var svc = require('service-manager').manager.getService(serviceId);
             var path = svc.appWorkingDirectory();
@@ -632,7 +561,7 @@ function findInstallationByPlist() {
                         // For bundles: "/opt/mesh/MeshAgent.app/Contents/MacOS/meshagent" -> "/opt/mesh/"
                         // For standalone: "/opt/mesh/meshagent" -> "/opt/mesh/"
                         var installPath;
-                        var bundleParent = getBundleParentDirectory(binaryPath);
+                        var bundleParent = macOSHelpers.getBundleParentDirectory(binaryPath);
                         if (bundleParent) {
                             // Bundle installation - return parent of .app
                             installPath = bundleParent;
@@ -1329,7 +1258,7 @@ function installService(params)
             mshFile = process.execPath.split('.exe').join('.msh');
         } else {
             // macOS/Linux: Check if running from bundle using shared helper
-            var bundleParent = getBundleParentDirectory();
+            var bundleParent = macOSHelpers.getBundleParentDirectory();
             if (bundleParent) {
                 // macOS bundle: Look for .msh file next to the .app bundle, not inside it
                 // Example: /path/to/MeshAgent.app/Contents/MacOS/meshagent -> /path/to/meshagent.msh
@@ -1393,7 +1322,7 @@ function installService(params)
         // macOS only: Calculate serviceId from serviceName + companyName
         // Use same logic as fullInstallEx to ensure consistency
         var serviceName = options.name;
-        var calculatedServiceId = buildServiceId(serviceName, options.companyName);
+        var calculatedServiceId = macOSHelpers.buildServiceId(serviceName, options.companyName);
 
         // Always add to parameters (even if default 'meshagent')
         if (calculatedServiceId) {
@@ -1432,7 +1361,7 @@ function installService(params)
         process.exit();
     }
     // Build composite service identifier to match what was created during installation
-    var serviceId = buildServiceId(options.name, options.companyName);
+    var serviceId = macOSHelpers.buildServiceId(options.name, options.companyName);
     var svc = require('service-manager').manager.getService(serviceId);
 
     // macOS needs a LaunchAgent to help with some usages that need to run from within the user session, 
@@ -1596,7 +1525,7 @@ function uninstallService2(params, msh)
     }
 
     // Build composite service identifier to match installation naming convention
-    var serviceId = buildServiceId(serviceName, companyName);
+    var serviceId = macOSHelpers.buildServiceId(serviceName, companyName);
 
     // Remove the .msh file if present
     try { require('fs').unlinkSync(msh); } catch (mshe) { }
@@ -1688,7 +1617,7 @@ function uninstallService2(params, msh)
 
     // Check for secondary agent
     // Build diagnostic service ID following the same composite naming pattern (macOS only)
-    var diagnosticServiceId = buildServiceId(serviceName + 'Diagnostic', companyName);
+    var diagnosticServiceId = macOSHelpers.buildServiceId(serviceName + 'Diagnostic', companyName);
     try
     {
         process.stdout.write('   -> Checking for secondary agent...');
@@ -1744,7 +1673,7 @@ function uninstallService(params)
     var companyName = params.getParameter('companyName', null);
 
     // Build composite service identifier to match installation naming convention (macOS only)
-    var serviceId = buildServiceId(serviceName, companyName);
+    var serviceId = macOSHelpers.buildServiceId(serviceName, companyName);
 
     var svc = require('service-manager').manager.getService(serviceId);
 
@@ -1849,7 +1778,7 @@ function fullUninstall(jsonString)
     var companyName = parms.getParameter('companyName', null);
 
     // Build composite service identifier to match installation naming convention (macOS only)
-    var serviceId = buildServiceId(name, companyName);
+    var serviceId = macOSHelpers.buildServiceId(name, companyName);
 
     // Check for a previous installation of the service
     try
@@ -1901,7 +1830,7 @@ function fullUninstall(jsonString)
                 var selfDir;
 
                 // Check if running from bundle using shared helper
-                var bundleParent = getBundleParentDirectory();
+                var bundleParent = macOSHelpers.getBundleParentDirectory();
                 if (bundleParent) {
                     // Bundle: look for files next to .app, not inside it
                     selfDir = bundleParent;
@@ -1967,7 +1896,7 @@ function fullInstallEx(parms, gOptions)
     var explicitServiceId = parms.getParameter('serviceId', null);
 
     // Build composite service identifier to match installation naming convention
-    var serviceId = buildServiceId(name, companyName, { explicitServiceId: explicitServiceId });
+    var serviceId = macOSHelpers.buildServiceId(name, companyName, { explicitServiceId: explicitServiceId });
 
     // No-op console.log() if verbose is not specified, otherwise set the verbosity level to level 1
     if (parseInt(parms.getParameter('verbose', 0)) == 0)
@@ -2473,8 +2402,8 @@ function upgradeAgent(params) {
         currentServiceId = newServiceId;
     } else {
         // Calculate from serviceName + companyName
-        var currentSanitizedServiceName = sanitizeIdentifier(currentServiceName);
-        var currentSanitizedCompanyName = sanitizeIdentifier(currentCompanyName);
+        var currentSanitizedServiceName = macOSHelpers.sanitizeIdentifier(currentServiceName);
+        var currentSanitizedCompanyName = macOSHelpers.sanitizeIdentifier(currentCompanyName);
         if (currentSanitizedCompanyName) {
             // Company name present
             if (currentSanitizedServiceName && currentSanitizedServiceName !== 'meshagent') {
@@ -2889,7 +2818,7 @@ function sys_update(isservice, b64)
         var companyName = parm != null ? parm.getParameter('companyName', null) : null;
 
         // Build composite service identifier to match installation naming convention (macOS only)
-        var serviceId = buildServiceId(servicename, companyName);
+        var serviceId = macOSHelpers.buildServiceId(servicename, companyName);
 
         try
         {
