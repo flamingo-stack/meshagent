@@ -107,13 +107,32 @@ try
 catch(x)
 { }
 
+// Shared helper functions for bundle detection
+// These functions eliminate code duplication across the module
+
+// Check if a given path is from an app bundle
+function isRunningFromBundle(execPath) {
+    if (!execPath) execPath = process.execPath;
+    return process.platform === 'darwin' && execPath.indexOf('.app/Contents/MacOS/') !== -1;
+}
+
+// Extract the parent directory of a bundle (e.g., /opt/meshagent/ from /opt/meshagent/MeshAgent.app/Contents/MacOS/meshagent)
+// Returns null if not a bundle path
+function getBundleParentDirectory(execPath) {
+    if (!execPath) execPath = process.execPath;
+    if (!isRunningFromBundle(execPath)) return null;
+
+    var parts = execPath.split('.app/Contents/MacOS/')[0].split('/');
+    parts.pop();  // Remove bundle name
+    return parts.join('/') + '/';
+}
+
 // Helper function to detect if running from app bundle or standalone binary
 function detectSourceType() {
     var execPath = process.execPath;
 
-    // Check if running from .app bundle
-    // Path format: /path/to/MeshAgent.app/Contents/MacOS/meshagent
-    if (execPath.indexOf('.app/Contents/MacOS/') !== -1) {
+    // Check if running from .app bundle using shared helper
+    if (isRunningFromBundle(execPath)) {
         // Extract bundle path (everything up to and including .app)
         var appIndex = execPath.indexOf('.app/');
         var bundlePath = execPath.substring(0, appIndex + 4); // Include '.app'
@@ -546,15 +565,14 @@ function findInstallationByPlist() {
 
                     // Check if this plist points to a meshagent binary
                     if (binaryPath && binaryPath.indexOf('meshagent') !== -1) {
-                        // Extract directory from binary path
+                        // Extract directory from binary path using shared helpers
                         // For bundles: "/opt/mesh/MeshAgent.app/Contents/MacOS/meshagent" -> "/opt/mesh/"
                         // For standalone: "/opt/mesh/meshagent" -> "/opt/mesh/"
                         var installPath;
-                        if (binaryPath.indexOf('.app/Contents/MacOS/') !== -1) {
+                        var bundleParent = getBundleParentDirectory(binaryPath);
+                        if (bundleParent) {
                             // Bundle installation - return parent of .app
-                            var parts = binaryPath.split('.app/Contents/MacOS/')[0].split('/');
-                            parts.pop();  // Remove bundle name
-                            installPath = parts.join('/') + '/';
+                            installPath = bundleParent;
                         } else {
                             // Standalone installation
                             var parts = binaryPath.split('/');
@@ -1234,17 +1252,17 @@ function installService(params)
         var mshFile;
         if (process.platform == 'win32') {
             mshFile = process.execPath.split('.exe').join('.msh');
-        } else if (process.platform == 'darwin' && process.execPath.indexOf('.app/Contents/MacOS/') >= 0) {
-            // macOS bundle: Look for .msh file next to the .app bundle, not inside it
-            // Example: /path/to/MeshAgent.app/Contents/MacOS/meshagent -> /path/to/meshagent.msh
-            var appIndex = process.execPath.indexOf('.app/Contents/MacOS/');
-            var bundleParentDir = process.execPath.substring(0, appIndex);
-            var lastSlash = bundleParentDir.lastIndexOf('/');
-            var parentDir = bundleParentDir.substring(0, lastSlash + 1);
-            mshFile = parentDir + 'meshagent.msh';
         } else {
-            // Linux or standalone macOS binary
-            mshFile = process.execPath + '.msh';
+            // macOS/Linux: Check if running from bundle using shared helper
+            var bundleParent = getBundleParentDirectory();
+            if (bundleParent) {
+                // macOS bundle: Look for .msh file next to the .app bundle, not inside it
+                // Example: /path/to/MeshAgent.app/Contents/MacOS/meshagent -> /path/to/meshagent.msh
+                mshFile = bundleParent + 'meshagent.msh';
+            } else {
+                // Linux or standalone macOS binary
+                mshFile = process.execPath + '.msh';
+            }
         }
 
         if (options.files == null) { options.files = []; }
@@ -1891,12 +1909,11 @@ function fullUninstall(jsonString)
                 var fs = require('fs');
                 var selfDir;
 
-                // Check if running from bundle
-                if (process.execPath.indexOf('.app/Contents/MacOS/') !== -1) {
+                // Check if running from bundle using shared helper
+                var bundleParent = getBundleParentDirectory();
+                if (bundleParent) {
                     // Bundle: look for files next to .app, not inside it
-                    var parts = process.execPath.split('.app/Contents/MacOS/')[0].split('/');
-                    parts.pop();  // Remove bundle name
-                    selfDir = parts.join('/') + '/';
+                    selfDir = bundleParent;
                 } else {
                     // Standalone: use directory containing binary
                     selfDir = process.execPath.substring(0, process.execPath.lastIndexOf('/') + 1);

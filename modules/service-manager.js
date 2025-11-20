@@ -55,6 +55,24 @@ function extractFileSource(filePath)
     return (typeof (filePath) == 'string' ? filePath : filePath.source);
 }
 
+// Shared helper functions for bundle detection (matches agent-installer.js)
+// Check if a given path is from an app bundle
+function isRunningFromBundle(execPath) {
+    if (!execPath) execPath = process.execPath;
+    return process.platform === 'darwin' && execPath.indexOf('.app/Contents/MacOS/') !== -1;
+}
+
+// Extract the parent directory of a bundle (e.g., /opt/meshagent/ from /opt/meshagent/MeshAgent.app/Contents/MacOS/meshagent)
+// Returns null if not a bundle path
+function getBundleParentDirectory(execPath) {
+    if (!execPath) execPath = process.execPath;
+    if (!isRunningFromBundle(execPath)) return null;
+
+    var parts = execPath.split('.app/Contents/MacOS/')[0].split('/');
+    parts.pop();  // Remove bundle name
+    return parts.join('/') + '/';
+}
+
 function prepareFolders(folderPath)
 {
     var dlmtr = process.platform == 'win32' ? '\\' : '/';
@@ -3258,8 +3276,8 @@ function serviceManager()
                 require('fs').unlinkSync(service.plist);
                 if (!options || !options.skipDeleteBinary)
                 {
-                    // Check if this is a bundle installation
-                    if (servicePath.indexOf('.app/Contents/MacOS/') !== -1)
+                    // Check if this is a bundle installation using shared helper
+                    if (isRunningFromBundle(servicePath))
                     {
                         // Bundle installation - remove entire .app
                         var bundlePath = servicePath.split('.app/Contents/MacOS/')[0] + '.app';
