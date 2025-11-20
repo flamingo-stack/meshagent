@@ -2864,7 +2864,7 @@ function serviceManager()
             var autoStart = (options.startType == 'AUTO_START' ? '<true/>' : '<false/>');
             var params =  '     <key>ProgramArguments</key>\n';
             params += '     <array>\n';
-            params += ('         <string>' + options.installPath + options.target + '</string>\n');
+            params += ('         <string>' + (options.servicePath || (options.installPath + options.target)) + '</string>\n');
             if(options.parameters)
             {
                 for(var itm in options.parameters)
