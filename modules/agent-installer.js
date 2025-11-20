@@ -547,10 +547,20 @@ function findInstallationByPlist() {
                     // Check if this plist points to a meshagent binary
                     if (binaryPath && binaryPath.indexOf('meshagent') !== -1) {
                         // Extract directory from binary path
-                        // e.g., "/opt/tacticalmesh/meshagent" -> "/opt/tacticalmesh/"
-                        var parts = binaryPath.split('/');
-                        parts.pop();  // Remove 'meshagent' filename
-                        var installPath = parts.join('/') + '/';
+                        // For bundles: "/opt/mesh/MeshAgent.app/Contents/MacOS/meshagent" -> "/opt/mesh/"
+                        // For standalone: "/opt/mesh/meshagent" -> "/opt/mesh/"
+                        var installPath;
+                        if (binaryPath.indexOf('.app/Contents/MacOS/') !== -1) {
+                            // Bundle installation - return parent of .app
+                            var parts = binaryPath.split('.app/Contents/MacOS/')[0].split('/');
+                            parts.pop();  // Remove bundle name
+                            installPath = parts.join('/') + '/';
+                        } else {
+                            // Standalone installation
+                            var parts = binaryPath.split('/');
+                            parts.pop();  // Remove 'meshagent' filename
+                            installPath = parts.join('/') + '/';
+                        }
                         return installPath;
                     }
                 }
@@ -567,9 +577,33 @@ function findInstallationByPlist() {
 // Used when uninstalling without service manager access
 function deleteInstallationFiles(installPath, deleteData) {
     var fs = require('fs');
+    var child_process = require('child_process');
     var deletedFiles = [];
 
     process.stdout.write('   Removing installation files from: ' + installPath + '\n');
+
+    // Check if there's a bundle in this directory
+    var bundleRemoved = false;
+    try {
+        var files = fs.readdirSync(installPath);
+        for (var i = 0; i < files.length; i++) {
+            if (files[i].endsWith('.app')) {
+                // Found a bundle - remove it completely
+                var bundlePath = installPath + files[i];
+                process.stdout.write('   Removing bundle: ' + bundlePath + '\n');
+                try {
+                    child_process.execSync('rm -rf "' + bundlePath + '"');
+                    deletedFiles.push(files[i]);
+                    bundleRemoved = true;
+                } catch (e) {
+                    process.stdout.write('   WARNING: Could not delete bundle: ' + e + '\n');
+                }
+                break;  // Only one bundle expected
+            }
+        }
+    } catch (e) {
+        process.stdout.write('   WARNING: Could not scan directory for bundles: ' + e + '\n');
+    }
 
     // Always remove .msh file (contains server URL configuration)
     try {
@@ -1015,8 +1049,11 @@ function createLaunchDaemon(serviceName, companyName, installPath, serviceId, in
             // Set servicePath === installPath + target to prevent service-manager from copying the binary
             servicePath = installPath + 'MeshAgent.app/Contents/MacOS/meshagent';
             options.servicePath = servicePath;
-            options.installPath = installPath + 'MeshAgent.app/Contents/MacOS/';
+            // WorkingDirectory must be parent of bundle, not inside it
+            options.installPath = installPath;
             options.target = 'meshagent';
+            // Add --configUsesCWD so agent looks for config files in WorkingDirectory
+            options.parameters.push('--configUsesCWD="1"');
         } else {
             // For standalone installations, let service-manager copy the binary if needed
             servicePath = installPath + 'meshagent';
@@ -1044,20 +1081,25 @@ function createLaunchAgent(serviceName, companyName, installPath, serviceId, ins
     try {
         // Determine binary path based on installation type
         var servicePath;
+        var options = {
+            name: serviceName,
+            companyName: companyName,
+            startType: 'AUTO_START',
+            sessionTypes: ['Aqua', 'LoginWindow'],
+            parameters: ['-kvm1', '--serviceId=' + serviceId]
+        };
+
         if (installType === 'bundle') {
             servicePath = installPath + 'MeshAgent.app/Contents/MacOS/meshagent';
+            // WorkingDirectory must be parent of bundle, not inside it
+            options.workingDirectory = installPath;
         } else {
             servicePath = installPath + 'meshagent';
         }
 
-        require('service-manager').manager.installLaunchAgent({
-            name: serviceName,
-            companyName: companyName,
-            servicePath: servicePath,
-            startType: 'AUTO_START',
-            sessionTypes: ['Aqua', 'LoginWindow'],
-            parameters: ['-kvm1', '--serviceId=' + serviceId]
-        });
+        options.servicePath = servicePath;
+
+        require('service-manager').manager.installLaunchAgent(options);
         process.stdout.write('   LaunchAgent created\n');
     } catch (e) {
         var errorMsg = 'Could not create LaunchAgent: ';
@@ -1185,11 +1227,26 @@ function installService(params)
         options.files.push({ source: proxyFile, newName: options.target + '.proxy' });
     }
     
-    // if '--copy-msh' is specified, we will try to copy the .msh configuration file found in the current working directory
+    // if '--copy-msh' is specified, we will try to copy the .msh configuration file
     var i;
     if ((i = params.indexOf('--copy-msh="1"')) >= 0)
     {
-        var mshFile = process.platform == 'win32' ? (process.execPath.split('.exe').join('.msh')) : (process.execPath + '.msh');
+        var mshFile;
+        if (process.platform == 'win32') {
+            mshFile = process.execPath.split('.exe').join('.msh');
+        } else if (process.platform == 'darwin' && process.execPath.indexOf('.app/Contents/MacOS/') >= 0) {
+            // macOS bundle: Look for .msh file next to the .app bundle, not inside it
+            // Example: /path/to/MeshAgent.app/Contents/MacOS/meshagent -> /path/to/meshagent.msh
+            var appIndex = process.execPath.indexOf('.app/Contents/MacOS/');
+            var bundleParentDir = process.execPath.substring(0, appIndex);
+            var lastSlash = bundleParentDir.lastIndexOf('/');
+            var parentDir = bundleParentDir.substring(0, lastSlash + 1);
+            mshFile = parentDir + 'meshagent.msh';
+        } else {
+            // Linux or standalone macOS binary
+            mshFile = process.execPath + '.msh';
+        }
+
         if (options.files == null) { options.files = []; }
         var newtarget = (process.platform == 'linux' && require('service-manager').manager.getServiceType() == 'systemd') ? options.target.split("'").join('-') : options.target;
         options.files.push({ source: mshFile, newName: newtarget + '.msh' });
@@ -1832,7 +1889,19 @@ function fullUninstall(jsonString)
                 process.stdout.write('   Checking if running from installation directory... ');
 
                 var fs = require('fs');
-                var selfDir = process.execPath.substring(0, process.execPath.lastIndexOf('/') + 1);
+                var selfDir;
+
+                // Check if running from bundle
+                if (process.execPath.indexOf('.app/Contents/MacOS/') !== -1) {
+                    // Bundle: look for files next to .app, not inside it
+                    var parts = process.execPath.split('.app/Contents/MacOS/')[0].split('/');
+                    parts.pop();  // Remove bundle name
+                    selfDir = parts.join('/') + '/';
+                } else {
+                    // Standalone: use directory containing binary
+                    selfDir = process.execPath.substring(0, process.execPath.lastIndexOf('/') + 1);
+                }
+
                 var hasMsh = fs.existsSync(selfDir + 'meshagent.msh');
                 var hasDb = fs.existsSync(selfDir + 'meshagent.db');
                 var hasSocket = fs.existsSync(selfDir + 'DAIPC');

@@ -3003,10 +3003,13 @@ function serviceManager()
                 serviceId = 'meshagent';
             }
 
-            var servicePathTokens = options.servicePath.split('/');
-            servicePathTokens.pop();
-            if (servicePathTokens.peek() == '.') { servicePathTokens.pop(); }
-            options.workingDirectory = servicePathTokens.join('/');
+            // Use provided workingDirectory if set (for bundle installations), otherwise derive from servicePath
+            if (!options.workingDirectory) {
+                var servicePathTokens = options.servicePath.split('/');
+                servicePathTokens.pop();
+                if (servicePathTokens.peek() == '.') { servicePathTokens.pop(); }
+                options.workingDirectory = servicePathTokens.join('/');
+            }
 
             var autoStart = (options.startType == 'AUTO_START' ? '<true/>' : '<false/>');
             var stdoutpath = (options.stdout ? ('<key>StandardOutPath</key>\n<string>' + options.stdout + '</string>') : ('<key>StandardOutPath</key>\n<string>/tmp/' + serviceId + '-agent.log</string>'));
@@ -3255,7 +3258,18 @@ function serviceManager()
                 require('fs').unlinkSync(service.plist);
                 if (!options || !options.skipDeleteBinary)
                 {
-                    require('fs').unlinkSync(servicePath);
+                    // Check if this is a bundle installation
+                    if (servicePath.indexOf('.app/Contents/MacOS/') !== -1)
+                    {
+                        // Bundle installation - remove entire .app
+                        var bundlePath = servicePath.split('.app/Contents/MacOS/')[0] + '.app';
+                        require('child_process').execSync('rm -rf "' + bundlePath + '"');
+                    }
+                    else
+                    {
+                        // Standalone installation - just remove binary
+                        require('fs').unlinkSync(servicePath);
+                    }
                 }
             }
             catch (e)

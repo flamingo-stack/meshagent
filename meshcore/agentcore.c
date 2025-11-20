@@ -6358,6 +6358,8 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 	}
 
 	ILibCriticalLogFilename = ILibString_Copy(MeshAgent_MakeAbsolutePath(agentHost->exePath, ".log"), 0);
+#endif // __APPLE__
+
 #ifndef MICROSTACK_NOTLS
 	util_openssl_init();
 #endif
