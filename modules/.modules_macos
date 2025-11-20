@@ -19,6 +19,7 @@ identifiers.js
 interactive.js
 kvm-helper.js
 mac-powerutil.js
+macOSHelpers.js
 meshcmd.js
 message-box.js
 monitor-border.js
