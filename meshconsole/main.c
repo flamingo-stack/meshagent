@@ -364,7 +364,11 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 
 #ifdef __APPLE__
 	// Adjust working directory if running from application bundle
-	adjust_working_directory_for_bundle();
+	if (adjust_working_directory_for_bundle() != 0)
+	{
+		fprintf(stderr, "MeshAgent: Failed to set working directory for bundle. Exiting.\n");
+		return -1;
+	}
 #endif
 
 	ILibDuktape_ScriptContainer_CheckEmbedded(&integratedJavaScript, &integratedJavaScriptLen);

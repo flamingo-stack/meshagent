@@ -101,42 +101,42 @@ char* get_bundle_path(void)
     return result;
 }
 
-void adjust_working_directory_for_bundle(void)
+int adjust_working_directory_for_bundle(void)
 {
     // CRITICAL: Call this early in main() before any file operations
+    // Returns 0 on success, -1 on error
     if (is_running_from_bundle())
     {
         char* bundleRoot = get_bundle_path();
-        if (bundleRoot)
+        if (!bundleRoot)
         {
-            // For bundle installations, change to the parent directory (install path)
-            // This allows .msh and .db files to be found in the same location as standalone
-            char* lastSlash = strrchr(bundleRoot, '/');
-            if (lastSlash && lastSlash != bundleRoot)
-            {
-                *lastSlash = '\0';  // Truncate to get parent directory
-                if (chdir(bundleRoot) == 0)
-                {
-                    // Restore the slash for the print statement
-                    *lastSlash = '/';
-                    printf("MeshAgent: Running from bundle: %s\n", bundleRoot);
-                }
-                else
-                {
-                    *lastSlash = '/';  // Restore on error too
-                    fprintf(stderr, "MeshAgent: Warning: Could not change to install directory: %s\n", bundleRoot);
-                }
-            }
-            else
-            {
-                fprintf(stderr, "MeshAgent: Warning: Invalid bundle path: %s\n", bundleRoot);
-            }
+            fprintf(stderr, "MeshAgent: FATAL: Could not get bundle path\n");
+            return -1;
+        }
+
+        // For bundle installations, change to the parent directory (install path)
+        // This allows .msh and .db files to be found in the same location as standalone
+        char* lastSlash = strrchr(bundleRoot, '/');
+        if (!lastSlash || lastSlash == bundleRoot)
+        {
+            fprintf(stderr, "MeshAgent: FATAL: Invalid bundle path: %s\n", bundleRoot);
             free(bundleRoot);
+            return -1;
         }
-        else
+
+        *lastSlash = '\0';  // Truncate to get parent directory
+        if (chdir(bundleRoot) != 0)
         {
-            fprintf(stderr, "MeshAgent: Warning: Could not get bundle path\n");
+            *lastSlash = '/';  // Restore for error message
+            fprintf(stderr, "MeshAgent: FATAL: Could not change to install directory: %s\n", bundleRoot);
+            free(bundleRoot);
+            return -1;
         }
+
+        // Success - restore slash for print statement
+        *lastSlash = '/';
+        printf("MeshAgent: Running from bundle: %s\n", bundleRoot);
+        free(bundleRoot);
     }
     else
     {
@@ -147,6 +147,8 @@ void adjust_working_directory_for_bundle(void)
             printf("MeshAgent: Running as standalone binary from: %s\n", cwd);
         }
     }
+
+    return 0;
 }
 
 #endif /* __APPLE__ */

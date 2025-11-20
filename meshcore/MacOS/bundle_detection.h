@@ -45,17 +45,22 @@ char* get_bundle_path(void);
  * Adjust working directory based on bundle status
  *
  * If running from a bundle:
- *   - Changes working directory to the bundle root (.app directory)
+ *   - Changes working directory to the bundle's parent directory (install path)
  *   - Prints "MeshAgent: Running from bundle: <path>"
+ *   - Returns -1 if unable to determine bundle path or change directory
  *
  * If running as standalone binary:
  *   - Leaves working directory unchanged
  *   - Prints "MeshAgent: Running as standalone binary from: <cwd>"
  *
  * This should be called early in main() before any file I/O operations that
- * depend on relative paths.
+ * depend on relative paths. The caller should check the return value and exit
+ * if non-zero, as continuing with the wrong working directory will cause file
+ * operations to fail.
+ *
+ * @return 0 on success, -1 on error (only possible when running from bundle)
  */
-void adjust_working_directory_for_bundle(void);
+int adjust_working_directory_for_bundle(void);
 
 #endif /* __APPLE__ */
 
