@@ -127,6 +127,30 @@ function getBundleParentDirectory(execPath) {
     return parts.join('/') + '/';
 }
 
+// Find any .app bundle in a directory that contains a meshagent binary
+// Returns the bundle name (e.g., "MeshAgent.app") or null if not found
+// This allows support for custom bundle names instead of hard-coding "MeshAgent.app"
+function findBundleInDirectory(installPath) {
+    var fs = require('fs');
+
+    try {
+        var files = fs.readdirSync(installPath);
+        for (var i = 0; i < files.length; i++) {
+            if (files[i].endsWith('.app')) {
+                // Check if this bundle contains a meshagent binary
+                var binaryPath = installPath + files[i] + '/Contents/MacOS/meshagent';
+                if (fs.existsSync(binaryPath)) {
+                    return files[i];
+                }
+            }
+        }
+    } catch (e) {
+        // Directory doesn't exist or not readable
+    }
+
+    return null;
+}
+
 // Helper function to detect if running from app bundle or standalone binary
 function detectSourceType() {
     var execPath = process.execPath;
@@ -155,8 +179,8 @@ function detectSourceType() {
 function detectInstallationType(installPath) {
     var fs = require('fs');
 
-    // Check for bundle installation
-    if (fs.existsSync(installPath + 'MeshAgent.app')) {
+    // Check for bundle installation using dynamic discovery
+    if (findBundleInDirectory(installPath)) {
         return 'bundle';
     }
 
@@ -331,8 +355,9 @@ function findInstallation(installPath, serviceName, companyName) {
     // If explicit path provided
     if (installPath) {
         installPath = normalizeInstallPath(installPath);
-        // Check for bundle first, then standalone binary
-        if (require('fs').existsSync(installPath + 'MeshAgent.app/Contents/MacOS/meshagent')) {
+        // Check for bundle first using dynamic discovery, then standalone binary
+        var bundleName = findBundleInDirectory(installPath);
+        if (bundleName) {
             return installPath;
         }
         if (require('fs').existsSync(installPath + 'meshagent')) {
@@ -452,7 +477,14 @@ function getProgramPathFromPlist(plistPath) {
 // Helper to find and clean up all plists pointing to the same binary
 function cleanupOrphanedPlists(installPath) {
     var binaryPath = installPath + 'meshagent';
-    var bundleBinaryPath = installPath + 'MeshAgent.app/Contents/MacOS/meshagent';
+    var bundleBinaryPath = null;
+
+    // Dynamically discover bundle name instead of hard-coding
+    var bundleName = findBundleInDirectory(installPath);
+    if (bundleName) {
+        bundleBinaryPath = installPath + bundleName + '/Contents/MacOS/meshagent';
+    }
+
     var cleaned = [];
 
     // Check LaunchDaemons
@@ -724,13 +756,14 @@ function backupInstallation(installPath) {
     var backedUp = false;
 
     try {
-        // Check for bundle and back it up
-        if (fs.existsSync(installPath + 'MeshAgent.app')) {
+        // Check for bundle and back it up using dynamic discovery
+        var bundleName = findBundleInDirectory(installPath);
+        if (bundleName) {
             // Backup bundle by renaming
-            var bundlePath = installPath + 'MeshAgent.app';
-            var backupPath = installPath + 'MeshAgent.app.' + timestamp;
+            var bundlePath = installPath + bundleName;
+            var backupPath = installPath + bundleName + '.' + timestamp;
             fs.renameSync(bundlePath, backupPath);
-            process.stdout.write('   Created backup: MeshAgent.app.' + timestamp + '\n');
+            process.stdout.write('   Created backup: ' + bundleName + '.' + timestamp + '\n');
             backedUp = true;
         }
 
@@ -804,8 +837,10 @@ function replaceInstallation(sourceType, installPath) {
 
     try {
         if (sourceType.type === 'bundle') {
-            // Copy entire bundle
-            var targetBundlePath = installPath + 'MeshAgent.app';
+            // Copy entire bundle - get bundle name from source
+            var sourceBundlePath = sourceType.bundlePath;
+            var bundleName = sourceBundlePath.substring(sourceBundlePath.lastIndexOf('/') + 1);
+            var targetBundlePath = installPath + bundleName;
 
             // Source bundle should already be backed up by backupInstallation()
             // Just copy the new bundle
@@ -1064,8 +1099,12 @@ function createLaunchDaemon(serviceName, companyName, installPath, serviceId, in
 
         if (installType === 'bundle') {
             // For bundle installations, reference the binary inside the bundle
-            // Set servicePath === installPath + target to prevent service-manager from copying the binary
-            servicePath = installPath + 'MeshAgent.app/Contents/MacOS/meshagent';
+            // Dynamically discover bundle name instead of hard-coding
+            var bundleName = findBundleInDirectory(installPath);
+            if (!bundleName) {
+                throw new Error('Bundle installation type specified but no bundle found at: ' + installPath);
+            }
+            servicePath = installPath + bundleName + '/Contents/MacOS/meshagent';
             options.servicePath = servicePath;
             // WorkingDirectory must be parent of bundle, not inside it
             options.installPath = installPath;
@@ -1108,7 +1147,12 @@ function createLaunchAgent(serviceName, companyName, installPath, serviceId, ins
         };
 
         if (installType === 'bundle') {
-            servicePath = installPath + 'MeshAgent.app/Contents/MacOS/meshagent';
+            // Dynamically discover bundle name instead of hard-coding
+            var bundleName = findBundleInDirectory(installPath);
+            if (!bundleName) {
+                throw new Error('Bundle installation type specified but no bundle found at: ' + installPath);
+            }
+            servicePath = installPath + bundleName + '/Contents/MacOS/meshagent';
             // WorkingDirectory must be parent of bundle, not inside it
             options.workingDirectory = installPath;
         } else {
