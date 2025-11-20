@@ -15,8 +15,8 @@ limitations under the License.
 */
 var promise = require('promise');
 var systemd_escape = null;
-// Import macOS platform helpers (only on macOS to avoid module not found errors on other platforms)
-var macOSHelpers = (process.platform === 'darwin') ? require('./macOSHelpers') : null;
+// Import macOS platform helpers (cross-platform module with internal platform detection)
+var macOSHelpers = require('./macOSHelpers');
 
 function failureActionToInteger(action)
 {

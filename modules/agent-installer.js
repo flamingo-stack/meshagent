@@ -107,8 +107,8 @@ try
 catch(x)
 { }
 
-// Import macOS platform helpers (only on macOS to avoid module not found errors on other platforms)
-var macOSHelpers = (process.platform === 'darwin') ? require('./macOSHelpers') : null;
+// Import macOS platform helpers (cross-platform module with internal platform detection)
+var macOSHelpers = require('./macOSHelpers');
 
 // Find any .app bundle in a directory that contains a meshagent binary
 // Returns the bundle name (e.g., "MeshAgent.app") or null if not found
@@ -139,7 +139,7 @@ function detectSourceType() {
     var execPath = process.execPath;
 
     // Check if running from .app bundle using shared helper
-    if (macOSHelpers && macOSHelpers.isRunningFromBundle(execPath)) {
+    if (macOSHelpers.isRunningFromBundle(execPath)) {
         // Extract bundle path (everything up to and including .app)
         var bundlePath = macOSHelpers.getBundlePathFromBinaryPath(execPath);
 
@@ -341,8 +341,8 @@ function findInstallation(installPath, serviceName, companyName) {
         return null;
     }
 
-    // Try to find service by name (macOS only)
-    if ((serviceName || companyName) && macOSHelpers) {
+    // Try to find service by name
+    if (serviceName || companyName) {
         try {
             var serviceId = macOSHelpers.buildServiceId(serviceName || 'meshagent', companyName);
 
@@ -678,8 +678,6 @@ function deleteInstallationFiles(installPath, deleteData) {
 
 // Helper to delete plist files (macOS only)
 function deletePlists(serviceId) {
-    if (!macOSHelpers) return false;
-
     var deleted = false;
 
     // LaunchDaemon plist
