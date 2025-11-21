@@ -110,6 +110,27 @@ catch(x)
 // Import macOS platform helpers (only on macOS)
 var macOSHelpers = process.platform === 'darwin' ? require('./macOSHelpers') : null;
 
+// Case-insensitive file lookup
+// Returns the actual filename if found, or null if not found
+function findFileCaseInsensitive(directory, targetFilename) {
+    var fs = require('fs');
+
+    try {
+        var files = fs.readdirSync(directory);
+        var targetLower = targetFilename.toLowerCase();
+
+        for (var i = 0; i < files.length; i++) {
+            if (files[i].toLowerCase() === targetLower) {
+                return directory + '/' + files[i];
+            }
+        }
+    } catch (e) {
+        // Directory doesn't exist or not readable
+    }
+
+    return null;
+}
+
 // Find any .app bundle in a directory that contains a meshagent binary
 // Returns the bundle name (e.g., "MeshAgent.app") or null if not found
 // This allows support for custom bundle names instead of hard-coding "MeshAgent.app"
@@ -1374,36 +1395,43 @@ function installServiceUnified(params) {
     if (copyMsh === '1' && isFreshInstall) {
         var sourceMshFile;
         if (sourceType.type === 'bundle') {
-            // For bundle, check for .msh file matching bundle name first
+            // For bundle, check for .msh file matching bundle name first (case-insensitive)
             var bundlePath = sourceType.bundlePath;
             var bundleDir = bundlePath.substring(0, bundlePath.lastIndexOf('/'));
             var bundleName = bundlePath.substring(bundlePath.lastIndexOf('/') + 1);
 
             // Strip .app extension and add .msh (e.g., MeshAgent_osx-universal-64.app -> MeshAgent_osx-universal-64.msh)
             var bundleBaseName = bundleName.replace(/\.app$/, '');
-            sourceMshFile = bundleDir + '/' + bundleBaseName + '.msh';
-            if (!fs.existsSync(sourceMshFile)) {
-                // Fallback to generic meshagent.msh
-                sourceMshFile = bundleDir + '/meshagent.msh';
+            sourceMshFile = findFileCaseInsensitive(bundleDir, bundleBaseName + '.msh');
+            if (!sourceMshFile) {
+                // Fallback to generic meshagent.msh (case-insensitive)
+                sourceMshFile = findFileCaseInsensitive(bundleDir, 'meshagent.msh');
             }
         } else {
-            // For standalone binary, check for .msh file matching binary name first
+            // For standalone binary, check for .msh file matching binary name first (case-insensitive)
             var binaryPath = sourceType.binaryPath;
             var binaryDir = binaryPath.substring(0, binaryPath.lastIndexOf('/'));
             var binaryName = binaryPath.substring(binaryPath.lastIndexOf('/') + 1);
 
             // Try binary-specific name first (e.g., meshagent_osx-universal-64.msh)
-            sourceMshFile = binaryDir + '/' + binaryName + '.msh';
-            if (!fs.existsSync(sourceMshFile)) {
-                // Fallback to generic meshagent.msh
-                sourceMshFile = binaryDir + '/meshagent.msh';
+            sourceMshFile = findFileCaseInsensitive(binaryDir, binaryName + '.msh');
+            if (!sourceMshFile) {
+                // Fallback to generic meshagent.msh (case-insensitive)
+                sourceMshFile = findFileCaseInsensitive(binaryDir, 'meshagent.msh');
             }
         }
 
-        if (!fs.existsSync(sourceMshFile)) {
+        if (!sourceMshFile) {
             logger.error('--copy-msh="1" specified but .msh file not found');
-            logger.error('Expected location: ' + sourceMshFile);
-            logger.error('Please place the meshagent.msh file next to the binary and try again.');
+            if (sourceType.type === 'bundle') {
+                var bundleName = sourceType.bundlePath.substring(sourceType.bundlePath.lastIndexOf('/') + 1);
+                var bundleBaseName = bundleName.replace(/\.app$/, '');
+                logger.error('Expected: ' + bundleBaseName + '.msh or meshagent.msh (case-insensitive)');
+            } else {
+                var binaryName = sourceType.binaryPath.substring(sourceType.binaryPath.lastIndexOf('/') + 1);
+                logger.error('Expected: ' + binaryName + '.msh or meshagent.msh (case-insensitive)');
+            }
+            logger.error('Please place the .msh file next to the binary/bundle and try again.');
             process.exit(1);
         }
     }
