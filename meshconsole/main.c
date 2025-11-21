@@ -537,7 +537,7 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 #endif
 		return(0);
 	}
-	if (argc > 1 && (strcasecmp(argv[1], "-version") == 0 || strcasecmp(argv[1], "--version") == 0))
+	if (argc > 1 && strcasecmp(argv[1], "-version") == 0)
 	{
 #ifdef __APPLE__
 		char *version = get_embedded_version();
@@ -551,7 +551,7 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 			printf("Version information not available\n");
 		}
 #else
-		printf("--version flag is only supported on macOS builds\n");
+		printf("-version flag is only supported on macOS builds\n");
 #endif
 #ifdef WIN32
 		wmain_free(argv);
