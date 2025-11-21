@@ -361,7 +361,7 @@ function findInstallation(installPath, serviceName, companyName) {
         if (require('fs').existsSync(installPath + 'meshagent')) {
             return installPath;
         }
-        console.log('ERROR: No installation found at: ' + installPath);
+        // Not found - return null (caller will log appropriately based on context)
         return null;
     }
 
@@ -375,7 +375,7 @@ function findInstallation(installPath, serviceName, companyName) {
             svc.close();
             return path;
         } catch (e) {
-            console.log('ERROR: Service not found: ' + (serviceName || 'meshagent'));
+            // Service not found - return null (caller will log appropriately)
             return null;
         }
     }
@@ -386,7 +386,7 @@ function findInstallation(installPath, serviceName, companyName) {
     var selfMshPath = selfDir + 'meshagent.msh';
 
     if (require('fs').existsSync(selfMshPath)) {
-        console.log('Detected self-upgrade scenario (found .msh alongside running binary)');
+        // Self-upgrade detected - return path (caller will log)
         return selfDir;
     }
 
@@ -396,8 +396,7 @@ function findInstallation(installPath, serviceName, companyName) {
         return defaultPath;
     }
 
-    console.log('ERROR: No installation found at default location: ' + defaultPath);
-    console.log('Please specify --installPath, --serviceName, or --companyName');
+    // Not found anywhere - return null (caller will log appropriately)
     return null;
 }
 
