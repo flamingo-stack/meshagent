@@ -1592,6 +1592,26 @@ function installServiceUnified(params) {
 
     logger.info('Safety verification complete - ready for binary replacement');
 
+    // DETECT SELF-UPGRADE SCENARIO (running installed binary with -upgrade)
+    // In this case, we can't replace ourselves, so skip backup and binary copy
+    var isSelfUpgrade = false;
+    if (sourceType.type === 'standalone') {
+        var targetBinaryPath = installPath + 'meshagent';
+        isSelfUpgrade = (sourceType.binaryPath === targetBinaryPath);
+    } else {
+        // For bundles, check if source bundle is at the install location
+        var bundleName = sourceType.bundlePath.substring(sourceType.bundlePath.lastIndexOf('/') + 1);
+        var targetBundlePath = installPath + bundleName;
+        isSelfUpgrade = (sourceType.bundlePath === targetBundlePath);
+    }
+
+    if (isSelfUpgrade && isUpgrade) {
+        logger.error('Cannot upgrade: You are running the installed binary/bundle');
+        logger.error('To upgrade, run the NEW binary with -upgrade from a different location');
+        logger.error('Example: sudo /path/to/new/meshagent -upgrade --installPath="' + installPath + '"');
+        process.exit(1);
+    }
+
     // BACKUP (Unless --omit-backup specified)
     if (!omitBackup && existingInstallPath) {
         logger.info('Backing up current installation');
