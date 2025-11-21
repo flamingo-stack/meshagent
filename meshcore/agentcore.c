@@ -75,6 +75,8 @@ int gRemoteMouseRenderDefault = 0;
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
+#include <libproc.h>
+#include "MacOS/bundle_detection.h"
 #endif
 
 
@@ -2300,8 +2302,6 @@ char* MeshAgent_MakeAbsolutePathEx(char *basePath, char *localPath, int escapeBa
 #endif
 		sprintf_s(ILibScratchPad2 + i, sizeof(ILibScratchPad2) - i, "%s", localPath);
 	}
-
-	//printf("MeshAgent_MakeAbsolutePathEx[%s,%s] = %s\n", basePath, localPath, ILibScratchPad2);
 
 	if (escapeBackSlash != 0)
 	{
@@ -4979,7 +4979,8 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 
 	// We are a Mesh Agent
 	if (agentHost->masterDb == NULL) {
-		agentHost->masterDb = ILibSimpleDataStore_Create(MeshAgent_MakeAbsolutePath(agentHost->exePath, ".db"));
+		char* dbPath = MeshAgent_MakeAbsolutePath(agentHost->exePath, ".db");
+		agentHost->masterDb = ILibSimpleDataStore_Create(dbPath);
 	}
 
 	int ixr = 0;
@@ -5046,9 +5047,12 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 			{
 				if ((importSettings(agentHost, "mesh_linumshx") == 0) && (importSettings(agentHost, "mesh_limshx") == 0)) // Do this because the old agent would generate this bad file name on linux.
 				{
+#ifndef __APPLE__
 					// Let's check to see if an .msh was embedded into our binary
+					// Note: Disabled for macOS due to code signing issues with bundles
 					checkForEmbeddedMSH(agentHost);
 					importSettings(agentHost, MeshAgent_MakeAbsolutePath(agentHost->exePath, ".msh"));
+#endif
 				}
 			}
 		}
@@ -6304,7 +6308,7 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 		WideCharToMultiByte(CP_UTF8, 0, (LPCWCH)tmpExePath, -1, (LPSTR)exePath, (int)ILibMemory_Size(exePath), NULL, NULL);
 #elif defined(__APPLE__)
 		if (_NSGetExecutablePath(exePath, &len) != 0) ILIBCRITICALEXIT(247);
-	
+
 		agentHost->exePath = exePath;
 #elif defined(NACL)
 #else
@@ -6357,7 +6361,23 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 		}
 	}
 
-	ILibCriticalLogFilename = ILibString_Copy(MeshAgent_MakeAbsolutePath(agentHost->exePath, ".log"), 0);
+	// Automatically enable configPathUsesCWD when running from a bundle
+	// This ensures .db and .log files are created at the bundle parent, not inside the bundle
+	if (agentHost->configPathUsesCWD == 0 && is_running_from_bundle())
+	{
+		agentHost->configPathUsesCWD = 1;
+	}
+
+	// Check if launched from Finder (via Info.plist LSEnvironment variable)
+	if (getenv("LAUNCHED_FROM_FINDER") != NULL && !skipConfigValidation)
+	{
+		fprintf(stderr, "\nMeshAgent must be installed as a system service.\n");
+		fprintf(stderr, "Please run: sudo %s -install\n\n", agentHost->exePath);
+		return 0;
+	}
+
+	char* logPath = MeshAgent_MakeAbsolutePath(agentHost->exePath, ".log");
+	ILibCriticalLogFilename = ILibString_Copy(logPath, 0);
 #endif // __APPLE__
 
 #ifndef MICROSTACK_NOTLS
