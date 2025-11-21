@@ -914,21 +914,33 @@ function replaceInstallation(sourceType, installPath) {
 
             // Check if we're trying to copy the binary over itself (in-place upgrade)
             if (sourceBinaryPath === targetBinaryPath) {
-                process.stdout.write('   Skipping binary copy (already running from install location)\n');
-                process.stdout.write('   NOTE: To upgrade with a new binary, run the new meshagent with -upgrade\n');
-                process.stdout.write('         Example: sudo /path/to/new/meshagent -upgrade --installPath="' + installPath + '"\n');
+                logger.info('Skipping binary copy (already running from install location)');
+                logger.info('NOTE: To upgrade with a new binary, run the new meshagent with -upgrade');
+                logger.info('      Example: sudo /path/to/new/meshagent -upgrade --installPath="' + installPath + '"');
                 return;
             }
 
             // Old binary should already be backed up by backupInstallation()
             // Copy new binary to install location
-            process.stdout.write('   Copying standalone binary...\n');
-            fs.copyFileSync(sourceBinaryPath, targetBinaryPath);
+            logger.info('Copying standalone binary');
+
+            // Use ditto on macOS to properly copy binary with all attributes
+            // ditto also automatically creates parent directories if they don't exist
+            var dittoError = null;
+            var child = child_process.execFile('/usr/bin/ditto', ['ditto', sourceBinaryPath, targetBinaryPath]);
+            child.stdout.on('data', function(d) { process.stdout.write(d); });
+            child.stderr.on('data', function(d) { dittoError = d.toString(); process.stderr.write(d); });
+            child.waitExit();
+
+            // Check if binary was actually copied
+            if (!fs.existsSync(targetBinaryPath)) {
+                throw new Error('Binary copy failed. ' + (dittoError || 'Binary not found after copy'));
+            }
 
             // Ensure executable permissions
             fs.chmodSync(targetBinaryPath, 0o755);
 
-            process.stdout.write('   Binary installed: ' + targetBinaryPath + '\n');
+            logger.info('Binary installed: ' + targetBinaryPath);
         }
     } catch (e) {
         var errorMsg = 'Could not replace installation: ';
