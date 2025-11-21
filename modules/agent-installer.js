@@ -637,9 +637,10 @@ function removeDirectoryRecursive(dirPath) {
 function deleteInstallationFiles(installPath, deleteData) {
     var fs = require('fs');
     var child_process = require('child_process');
+    var logger = require('./logger');
     var deletedFiles = [];
 
-    process.stdout.write('   Removing installation files from: ' + installPath + '\n');
+    logger.info('Removing installation files from: ' + installPath);
 
     // Check if there's a bundle in this directory
     var bundleRemoved = false;
@@ -649,19 +650,19 @@ function deleteInstallationFiles(installPath, deleteData) {
             if (files[i].endsWith('.app')) {
                 // Found a bundle - remove it completely
                 var bundlePath = installPath + files[i];
-                process.stdout.write('   Removing bundle: ' + bundlePath + '\n');
+                logger.info('Removing bundle: ' + bundlePath);
                 try {
                     child_process.execSync('rm -rf "' + bundlePath + '"');
                     deletedFiles.push(files[i]);
                     bundleRemoved = true;
                 } catch (e) {
-                    process.stdout.write('   WARNING: Could not delete bundle: ' + e + '\n');
+                    logger.warn('Could not delete bundle: ' + e);
                 }
                 break;  // Only one bundle expected
             }
         }
     } catch (e) {
-        process.stdout.write('   WARNING: Could not scan directory for bundles: ' + e + '\n');
+        logger.warn('Could not scan directory for bundles: ' + e);
     }
 
     // Always remove .msh file (contains server URL configuration)
@@ -672,7 +673,7 @@ function deleteInstallationFiles(installPath, deleteData) {
             deletedFiles.push('meshagent.msh');
         }
     } catch (e) {
-        process.stdout.write('   WARNING: Could not delete .msh file: ' + e + '\n');
+        logger.warn('Could not delete .msh file: ' + e);
     }
 
     // If fulluninstall (deleteData=true), remove all data files
@@ -685,7 +686,7 @@ function deleteInstallationFiles(installPath, deleteData) {
                 deletedFiles.push('DAIPC');
             }
         } catch (e) {
-            process.stdout.write('   WARNING: Could not delete DAIPC socket: ' + e + '\n');
+            logger.warn('Could not delete DAIPC socket: ' + e);
         }
 
         // Remove all meshagent.* files, meshagent binary, and MeshAgent* bundles
@@ -708,25 +709,25 @@ function deleteInstallationFiles(installPath, deleteData) {
                             deletedFiles.push(files[i] + '/');
                         }
                     } catch (fileErr) {
-                        process.stdout.write('   WARNING: Could not delete ' + files[i] + ': ' + fileErr + '\n');
+                        logger.warn('Could not delete ' + files[i] + ': ' + fileErr);
                     }
                 }
             }
         } catch (e) {
-            process.stdout.write('   WARNING: Could not scan directory: ' + e + '\n');
+            logger.warn('Could not scan directory: ' + e);
         }
 
         // Try to remove the installation directory itself
         try {
             fs.rmdirSync(installPath);
-            process.stdout.write('   Removed installation directory: ' + installPath + '\n');
+            logger.info('Removed installation directory: ' + installPath);
         } catch (e) {
             // Directory might not be empty (other files present) - that's okay
         }
     }
 
     if (deletedFiles.length > 0) {
-        process.stdout.write('   Deleted ' + deletedFiles.length + ' file(s)\n');
+        logger.info('Deleted ' + deletedFiles.length + ' file(s)');
     }
 
     return deletedFiles;
