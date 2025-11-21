@@ -851,6 +851,7 @@ function replaceInstallation(sourceType, installPath) {
 
     var fs = require('fs');
     var child_process = require('child_process');
+    var logger = require('./logger');
 
     try {
         if (sourceType.type === 'bundle') {
@@ -864,7 +865,7 @@ function replaceInstallation(sourceType, installPath) {
 
             // Source bundle should already be backed up by backupInstallation()
             // Just copy the new bundle
-            process.stdout.write('   Copying application bundle...\n');
+            logger.info('Copying application bundle');
 
             // Use ditto on macOS to properly copy app bundles with all attributes
             // ditto preserves resource forks, extended attributes, ACLs, metadata, and code signatures
@@ -883,7 +884,7 @@ function replaceInstallation(sourceType, installPath) {
 
             // Ensure binary is executable
             fs.chmodSync(binaryPath, 0o755);
-            process.stdout.write('   Bundle installed: ' + targetBundlePath + '\n');
+            logger.info('Bundle installed: ' + targetBundlePath);
         } else {
             // Copy standalone binary
             var targetBinaryPath = installPath + 'meshagent';
@@ -1102,6 +1103,8 @@ function forceKillProcesses(pids) {
 
 // Helper to create LaunchDaemon
 function createLaunchDaemon(serviceName, companyName, installPath, serviceId, installType, disableUpdate) {
+    var logger = require('./logger');
+
     try {
         // Determine binary path based on installation type
         var servicePath;
@@ -1142,7 +1145,7 @@ function createLaunchDaemon(serviceName, companyName, installPath, serviceId, in
         }
 
         require('service-manager').manager.installService(options);
-        process.stdout.write('   LaunchDaemon created\n');
+        logger.info('LaunchDaemon created');
     } catch (e) {
         var errorMsg = 'Could not create LaunchDaemon: ';
         if (e && e.message) {
@@ -1158,6 +1161,8 @@ function createLaunchDaemon(serviceName, companyName, installPath, serviceId, in
 
 // Helper to create LaunchAgent
 function createLaunchAgent(serviceName, companyName, installPath, serviceId, installType) {
+    var logger = require('./logger');
+
     try {
         // Determine binary path based on installation type
         var servicePath;
@@ -1187,7 +1192,7 @@ function createLaunchAgent(serviceName, companyName, installPath, serviceId, ins
         options.servicePath = servicePath;
 
         require('service-manager').manager.installLaunchAgent(options);
-        process.stdout.write('   LaunchAgent created\n');
+        logger.info('LaunchAgent created');
     } catch (e) {
         var errorMsg = 'Could not create LaunchAgent: ';
         if (e && e.message) {
@@ -1203,15 +1208,17 @@ function createLaunchAgent(serviceName, companyName, installPath, serviceId, ins
 
 // Helper to bootstrap/start services
 function bootstrapServices(serviceId) {
+    var logger = require('./logger');
+
     // Load LaunchDaemon
     try {
         var svc = require('service-manager').manager.getService(serviceId);
         svc.load();
         svc.start();
-        process.stdout.write('   LaunchDaemon started\n');
+        logger.info('LaunchDaemon started');
         svc.close();
     } catch (e) {
-        process.stdout.write('   WARNING: Could not start LaunchDaemon: ' + e + '\n');
+        logger.warn('Could not start LaunchDaemon: ' + e);
     }
 
     // Bootstrap LaunchAgent
@@ -1222,12 +1229,12 @@ function bootstrapServices(serviceId) {
             // LaunchAgent name has '-agent' suffix
             var launchAgent = require('service-manager').manager.getLaunchAgent(serviceId + '-agent');
             launchAgent.load(uid);
-            process.stdout.write('   LaunchAgent started\n');
+            logger.info('LaunchAgent started');
         } else {
-            process.stdout.write('   LaunchAgent will start at next user login\n');
+            logger.info('LaunchAgent will start at next user login');
         }
     } catch (e) {
-        process.stdout.write('   WARNING: Could not start LaunchAgent: ' + e + '\n');
+        logger.warn('Could not start LaunchAgent: ' + e);
     }
 }
 
@@ -1253,6 +1260,11 @@ function installServiceUnified(params) {
 
     // Detect source type (bundle or standalone binary)
     var sourceType = detectSourceType();
+
+    // Log source information
+    if (sourceType.type === 'bundle') {
+        logger.info('Running from bundle: ' + sourceType.bundlePath);
+    }
 
     // Normalize parameters (handles --serviceName alias, etc.)
     checkParameters(parms);
@@ -1284,72 +1296,76 @@ function installServiceUnified(params) {
     var currentServiceName = 'meshagent';
     var currentCompanyName = null;
     var currentServiceId = null;
-
-    // Try to find existing installation
     var existingInstallPath = null;
-    try {
-        existingInstallPath = findInstallation(installPath, null, null);
-    } catch (e) {
-    }
 
-    // Determine operation mode based on existing installation and flags
+    // Detect operation type
+    var isLocalService = (parms.indexOf('--_localService="1"') >= 0 || parms.indexOf('--_localService=\\"1\\"') >= 0);
 
-    if (existingInstallPath && copyMsh !== '1') {
-        // Existing installation + no --copy-msh="1" → UPGRADE mode
-        isUpgrade = true;
-        installPath = existingInstallPath;
-        logger.info('Existing installation detected at: ' + installPath);
-        logger.info('Mode: UPGRADE (preserve configuration)');
-    } else if (existingInstallPath && copyMsh === '1') {
-        // Existing installation + --copy-msh="1" → FRESH INSTALL mode
-        isFreshInstall = true;
-        installPath = existingInstallPath;
-        logger.info('Existing installation detected at: ' + installPath);
-        logger.info('Mode: FRESH INSTALL (--copy-msh="1" will overwrite configuration)');
-    } else if (!existingInstallPath && installPath) {
-        // No existing installation + explicit installPath → FRESH INSTALL
-        isFreshInstall = true;
-        logger.error('No installation found at: ' + installPath);
-        logger.info('Mode: FRESH INSTALL (no existing installation)');
-        logger.info('Target installation path: ' + installPath);
-    } else {
-        // No existing installation + no installPath
-        // Handle based on command type
-        var isLocalService = (parms.indexOf('--_localService="1"') >= 0 || parms.indexOf('--_localService=\\"1\\"') >= 0);
-
-        if (upgradeMode) {
-            // -upgrade requires existing installation
-            logger.error('No installation found at default location: /usr/local/mesh_services/meshagent/');
-            logger.error('Please specify --installPath, --serviceName, or --companyName');
-            process.exit(1);
-        } else if (isLocalService) {
-            // -install: Check for .msh file in current directory
-            var sourceMshFile;
-            if (sourceType.type === 'bundle') {
-                var bundleDir = sourceType.bundlePath.substring(0, sourceType.bundlePath.lastIndexOf('/'));
-                sourceMshFile = bundleDir + '/meshagent.msh';
-                installPath = bundleDir + '/';
-            } else {
-                var binaryDir = sourceType.binaryPath.substring(0, sourceType.binaryPath.lastIndexOf('/'));
-                sourceMshFile = binaryDir + '/meshagent.msh';
-                installPath = binaryDir + '/';
-            }
-
-            if (fs.existsSync(sourceMshFile)) {
-                // .msh file exists → install in place
-                isFreshInstall = true;
-                logger.info('Mode: FRESH INSTALL (in-place, .msh file found)');
-            } else {
-                logger.error('.msh file not found at: ' + sourceMshFile);
-                logger.error('For -install without --installPath, place meshagent.msh next to the binary');
-                process.exit(1);
-            }
+    // OPTIMIZATION: For -install without explicit params, check for in-place .msh file FIRST
+    // This prevents spurious errors and avoids wrong-location upgrades
+    if (isLocalService && !installPath && !newServiceName && !newCompanyName) {
+        // Check for .msh file in current directory for in-place install
+        var sourceMshFile;
+        if (sourceType.type === 'bundle') {
+            var bundleDir = sourceType.bundlePath.substring(0, sourceType.bundlePath.lastIndexOf('/'));
+            sourceMshFile = bundleDir + '/meshagent.msh';
+            installPath = bundleDir + '/';
         } else {
-            // -fullinstall: Default to standard location
+            var binaryDir = sourceType.binaryPath.substring(0, sourceType.binaryPath.lastIndexOf('/'));
+            sourceMshFile = binaryDir + '/meshagent.msh';
+            installPath = binaryDir + '/';
+        }
+
+        if (fs.existsSync(sourceMshFile)) {
+            // In-place install - skip findInstallation() entirely
             isFreshInstall = true;
-            installPath = '/usr/local/mesh_services/meshagent/';
-            logger.info('Mode: FRESH INSTALL (default location)');
+            logger.info('Mode: FRESH INSTALL (in-place, .msh file found)');
+        } else {
+            // No .msh file - fallback to findInstallation()
+            logger.error('.msh file not found at: ' + sourceMshFile);
+            logger.error('For -install without --installPath, place meshagent.msh next to the binary');
+            process.exit(1);
+        }
+    } else {
+        // Not an in-place install scenario - try to find existing installation
+        try {
+            existingInstallPath = findInstallation(installPath, newServiceName, newCompanyName);
+        } catch (e) {
+        }
+
+        // Determine operation mode based on existing installation and flags
+        if (existingInstallPath && copyMsh !== '1') {
+            // Existing installation + no --copy-msh="1" → UPGRADE mode
+            isUpgrade = true;
+            installPath = existingInstallPath;
+            logger.info('Existing installation detected at: ' + installPath);
+            logger.info('Mode: UPGRADE (preserve configuration)');
+        } else if (existingInstallPath && copyMsh === '1') {
+            // Existing installation + --copy-msh="1" → FRESH INSTALL mode
+            isFreshInstall = true;
+            installPath = existingInstallPath;
+            logger.info('Existing installation detected at: ' + installPath);
+            logger.info('Mode: FRESH INSTALL (--copy-msh="1" will overwrite configuration)');
+        } else if (!existingInstallPath && installPath) {
+            // No existing installation + explicit installPath → FRESH INSTALL
+            isFreshInstall = true;
+            logger.error('No installation found at: ' + installPath);
+            logger.info('Mode: FRESH INSTALL (no existing installation)');
             logger.info('Target installation path: ' + installPath);
+        } else {
+            // No existing installation + no installPath
+            if (upgradeMode) {
+                // -upgrade requires existing installation
+                logger.error('No installation found at default location: /usr/local/mesh_services/meshagent/');
+                logger.error('Please specify --installPath, --serviceName, or --companyName');
+                process.exit(1);
+            } else {
+                // -fullinstall: Default to standard location
+                isFreshInstall = true;
+                installPath = '/usr/local/mesh_services/meshagent/';
+                logger.info('Mode: FRESH INSTALL (default location)');
+                logger.info('Target installation path: ' + installPath);
+            }
         }
     }
 

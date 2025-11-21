@@ -125,6 +125,7 @@ int adjust_working_directory_for_bundle(void)
         }
 
         *lastSlash = '\0';  // Truncate to get parent directory
+
         if (chdir(bundleRoot) != 0)
         {
             *lastSlash = '/';  // Restore for error message
@@ -133,9 +134,9 @@ int adjust_working_directory_for_bundle(void)
             return -1;
         }
 
-        // Success - restore slash for print statement
+        // Restore slash
         *lastSlash = '/';
-        printf("MeshAgent: Running from bundle: %s\n", bundleRoot);
+        // Note: Bundle detection message is now logged from JavaScript using logger.info()
         free(bundleRoot);
     }
     else
