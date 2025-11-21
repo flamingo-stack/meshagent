@@ -337,37 +337,44 @@ These commands manage agent configuration and updates.
 
 ### `-export`
 
-**Description**: Export agent configuration
+**Description**: Export all embedded JavaScript modules to the filesystem
 
 **Usage**:
 ```bash
-sudo meshagent -export
+meshagent -export
 ```
 
-**Privileges**: Requires root/sudo
+**Privileges**: None required
 
-**Output**: Exports configuration in JSON format
+**Output**: Creates a `modules_expanded` directory containing all embedded modules
 
 **Notes**:
-- Can be used to backup configuration
-- Output can be imported with `-import`
+- Extracts all JavaScript modules embedded in the agent binary
+- Useful for inspecting module code or debugging
+- Does NOT export agent configuration (use `-info` to view configuration)
 
 ---
 
 ### `-import`
 
-**Description**: Import agent configuration
+**Description**: Import JavaScript modules from filesystem and regenerate polyfills
 
 **Usage**:
 ```bash
-sudo meshagent -import < config.json
+meshagent -import --expandedPath="./modules_macos" --filePath="./microscript/ILibDuktape_Polyfills.c"
 ```
 
-**Privileges**: Requires root/sudo
+**Privileges**: None required
+
+**Parameters**:
+- `--expandedPath` - Directory containing expanded module files
+- `--filePath` - Path to polyfills C file to regenerate
 
 **Notes**:
-- Reads JSON configuration from stdin
-- Updates agent configuration
+- Inverse operation of `-export`
+- Used during build process to regenerate polyfills
+- Reads modules from filesystem and packs them back into C code
+- Does NOT import agent configuration
 
 ---
 
