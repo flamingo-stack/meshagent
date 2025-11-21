@@ -1374,9 +1374,18 @@ function installServiceUnified(params) {
     if (copyMsh === '1' && isFreshInstall) {
         var sourceMshFile;
         if (sourceType.type === 'bundle') {
-            // For bundle, check next to the bundle
-            var bundleDir = sourceType.bundlePath.substring(0, sourceType.bundlePath.lastIndexOf('/'));
-            sourceMshFile = bundleDir + '/meshagent.msh';
+            // For bundle, check for .msh file matching bundle name first
+            var bundlePath = sourceType.bundlePath;
+            var bundleDir = bundlePath.substring(0, bundlePath.lastIndexOf('/'));
+            var bundleName = bundlePath.substring(bundlePath.lastIndexOf('/') + 1);
+
+            // Strip .app extension and add .msh (e.g., MeshAgent_osx-universal-64.app -> MeshAgent_osx-universal-64.msh)
+            var bundleBaseName = bundleName.replace(/\.app$/, '');
+            sourceMshFile = bundleDir + '/' + bundleBaseName + '.msh';
+            if (!fs.existsSync(sourceMshFile)) {
+                // Fallback to generic meshagent.msh
+                sourceMshFile = bundleDir + '/meshagent.msh';
+            }
         } else {
             // For standalone binary, check for .msh file matching binary name first
             var binaryPath = sourceType.binaryPath;
