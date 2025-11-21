@@ -1375,7 +1375,7 @@ function installServiceUnified(params) {
         } else if (!existingInstallPath && installPath) {
             // No existing installation + explicit installPath → FRESH INSTALL
             isFreshInstall = true;
-            logger.error('No installation found at: ' + installPath);
+            logger.info('No existing installation found at: ' + installPath);
             logger.info('Mode: FRESH INSTALL (no existing installation)');
             logger.info('Target installation path: ' + installPath);
         } else {
