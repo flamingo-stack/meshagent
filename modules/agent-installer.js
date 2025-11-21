@@ -1334,6 +1334,7 @@ function installServiceUnified(params) {
     var currentCompanyName = null;
     var currentServiceId = null;
     var existingInstallPath = null;
+    var sourceMshFile = null;  // Path to .msh file (found during early validation)
 
     // Detect operation type
     var isLocalService = (parms.indexOf('--_localService="1"') >= 0 || parms.indexOf('--_localService=\\"1\\"') >= 0);
@@ -1342,7 +1343,6 @@ function installServiceUnified(params) {
     // This prevents spurious errors and avoids wrong-location upgrades
     if (isLocalService && !installPath && !newServiceName && !newCompanyName) {
         // Check for .msh file in current directory for in-place install
-        var sourceMshFile;
         if (sourceType.type === 'bundle') {
             var bundleDir = sourceType.bundlePath.substring(0, sourceType.bundlePath.lastIndexOf('/'));
             sourceMshFile = bundleDir + '/meshagent.msh';
@@ -1408,7 +1408,6 @@ function installServiceUnified(params) {
 
     // EARLY VALIDATION: Check for .msh file if --copy-msh="1" is specified
     if (copyMsh === '1' && isFreshInstall) {
-        var sourceMshFile;
         if (sourceType.type === 'bundle') {
             // For bundle, check for .msh file matching bundle name first (case-insensitive)
             var bundlePath = sourceType.bundlePath;
@@ -1620,18 +1619,13 @@ function installServiceUnified(params) {
 
     // HANDLE .msh FILE
     if (isFreshInstall && copyMsh === '1') {
-        // Copy .msh file from source location
+        // Copy .msh file from source location (already found and validated during early validation)
         logger.info('Copying .msh configuration file');
-        var sourceMshFile;
-        var bundleParent = macOSHelpers.getBundleParentDirectory();
-        if (bundleParent) {
-            sourceMshFile = bundleParent + 'meshagent.msh';
-        } else {
-            sourceMshFile = process.execPath + '.msh';
-        }
 
-        if (!fs.existsSync(sourceMshFile)) {
-            logger.error('Cannot find .msh file at: ' + sourceMshFile);
+        // sourceMshFile was already found using case-insensitive lookup in early validation
+        if (!sourceMshFile || !fs.existsSync(sourceMshFile)) {
+            logger.error('Cannot find .msh file (should have been found during early validation)');
+            logger.error('This is an internal error - please report it');
             process.exit(1);
         }
 
