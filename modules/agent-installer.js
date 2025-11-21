@@ -790,7 +790,7 @@ function deletePlists(serviceId) {
 function backupInstallation(installPath) {
     var fs = require('fs');
     var timestamp = Date.now().toString();
-    var backedUp = false;
+    var backupName = null;
 
     try {
         // Check for bundle and back it up using dynamic discovery
@@ -800,8 +800,7 @@ function backupInstallation(installPath) {
             var bundlePath = installPath + bundleName;
             var backupPath = installPath + bundleName + '.' + timestamp;
             fs.renameSync(bundlePath, backupPath);
-            process.stdout.write('   Created backup: ' + bundleName + '.' + timestamp + '\n');
-            backedUp = true;
+            backupName = bundleName + '.' + timestamp;
         }
 
         // Check for standalone binary and back it up (handles edge case where both exist)
@@ -810,15 +809,10 @@ function backupInstallation(installPath) {
             var backupPath = installPath + 'meshagent.' + timestamp;
             fs.copyFileSync(binaryPath, backupPath);
             fs.unlinkSync(binaryPath);
-            process.stdout.write('   Created backup: meshagent.' + timestamp + '\n');
-            backedUp = true;
+            backupName = 'meshagent.' + timestamp;
         }
 
-        if (!backedUp) {
-            process.stdout.write('   No existing installation to backup\n');
-        }
-
-        return null;
+        return backupName;
     } catch (e) {
         var errorMsg = 'Could not backup installation: ';
         if (e && e.message) {
@@ -1613,7 +1607,11 @@ function installServiceUnified(params) {
         logger.info('Backing up current installation');
         try {
             var backupName = backupInstallation(installPath);
-            logger.info('Created backup: ' + backupName);
+            if (backupName) {
+                logger.info('Created backup: ' + backupName);
+            } else {
+                logger.warn('No files found to backup (installation may be incomplete)');
+            }
         } catch (e) {
             logger.error('Backup failed: ' + e);
             process.exit(1);
