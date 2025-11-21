@@ -1378,9 +1378,17 @@ function installServiceUnified(params) {
             var bundleDir = sourceType.bundlePath.substring(0, sourceType.bundlePath.lastIndexOf('/'));
             sourceMshFile = bundleDir + '/meshagent.msh';
         } else {
-            // For standalone binary, check next to the binary
-            var binaryDir = sourceType.binaryPath.substring(0, sourceType.binaryPath.lastIndexOf('/'));
-            sourceMshFile = binaryDir + '/meshagent.msh';
+            // For standalone binary, check for .msh file matching binary name first
+            var binaryPath = sourceType.binaryPath;
+            var binaryDir = binaryPath.substring(0, binaryPath.lastIndexOf('/'));
+            var binaryName = binaryPath.substring(binaryPath.lastIndexOf('/') + 1);
+
+            // Try binary-specific name first (e.g., meshagent_osx-universal-64.msh)
+            sourceMshFile = binaryDir + '/' + binaryName + '.msh';
+            if (!fs.existsSync(sourceMshFile)) {
+                // Fallback to generic meshagent.msh
+                sourceMshFile = binaryDir + '/meshagent.msh';
+            }
         }
 
         if (!fs.existsSync(sourceMshFile)) {
