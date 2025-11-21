@@ -380,19 +380,23 @@ meshagent -import --expandedPath="./modules_macos" --filePath="./microscript/ILi
 
 ### `-update`
 
-**Description**: Check for and apply agent updates
+**Description**: Trigger agent self-update (not functional on macOS)
 
 **Usage**:
 ```bash
-sudo meshagent -update
+meshagent -update
 ```
 
-**Privileges**: Requires root/sudo
+**Privileges**: Platform dependent
 
 **Behavior**:
-- Checks for available updates from configured server
-- Downloads and applies updates if available
-- Restarts agent after update
+- **macOS**: This command does not function when called directly
+- **Windows/Linux**: Checks for and applies agent updates from server
+
+**Notes**:
+- On macOS, agent updates are handled automatically by the server
+- Manual update triggering via command line is not supported on macOS
+- Use `-install` or `-upgrade` to manually update the agent binary
 
 ---
 
