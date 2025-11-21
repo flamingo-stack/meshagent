@@ -1286,6 +1286,10 @@ function installServiceUnified(params) {
     // Log source information
     if (sourceType.type === 'bundle') {
         logger.info('Running from bundle: ' + sourceType.bundlePath);
+    } else {
+        // For standalone, show the directory (not full binary path for cleaner output)
+        var binaryDir = sourceType.binaryPath.substring(0, sourceType.binaryPath.lastIndexOf('/'));
+        logger.info('Running as standalone binary from: ' + binaryDir);
     }
 
     // Normalize parameters (handles --serviceName alias, etc.)

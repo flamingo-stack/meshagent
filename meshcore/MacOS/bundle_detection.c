@@ -142,11 +142,7 @@ int adjust_working_directory_for_bundle(void)
     else
     {
         // Standalone mode - working directory already correct
-        char cwd[PATH_MAX];
-        if (getcwd(cwd, sizeof(cwd)))
-        {
-            printf("MeshAgent: Running as standalone binary from: %s\n", cwd);
-        }
+        // Note: Standalone detection message is now logged from JavaScript using logger.info()
     }
 
     return 0;

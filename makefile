@@ -843,6 +843,21 @@ linux:
 # App Bundle: After building the binary, automatically creates a .app bundle in
 # $(BUILD_OUTPUT_DIR)/<arch>-app/MeshAgent.app for easy distribution and testing.
 macos:
+	@echo "Syncing modules to platform-specific directories..."
+	@for module in modules/*.js; do \
+		filename=$$(basename $$module); \
+		echo "  Syncing $$filename..."; \
+		if [ -f "modules_macos/$$filename" ]; then \
+			sudo cp -f "$$module" "modules_macos/$$filename" || cp -f "$$module" "modules_macos/$$filename"; \
+		fi; \
+		if [ -f "modules_linux-bsd/$$filename" ]; then \
+			sudo cp -f "$$module" "modules_linux-bsd/$$filename" || cp -f "$$module" "modules_linux-bsd/$$filename"; \
+		fi; \
+		if [ -f "modules_windows/$$filename" ]; then \
+			sudo cp -f "$$module" "modules_windows/$$filename" || cp -f "$$module" "modules_windows/$$filename"; \
+		fi; \
+	done
+	@echo "Module sync complete."
 	@mkdir -p $(BUILD_OUTPUT_DIR)/DEBUG
 	@if [ "$(ARCHID)" = "10005" ]; then \
 		BUILD_TIME=$$(date +%y.%m.%d.%H.%M.%S); \
