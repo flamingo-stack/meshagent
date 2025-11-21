@@ -436,46 +436,55 @@ sudo meshagent -kvm1
 
 ### `-faddr`
 
-**Description**: Test function address resolution
+**Description**: Internal debugging tool (non-functional without parameters)
 
 **Usage**:
 ```bash
-meshagent -faddr
+meshagent -faddr <address>
 ```
 
 **Privileges**: None required
 
-**Notes**: Development/debugging tool
+**Notes**:
+- Requires specific address parameter
+- Internal debugging tool for core developers
+- Not intended for end-user use
 
 ---
 
 ### `-fdelta`
 
-**Description**: Test function delta calculations
+**Description**: Internal debugging tool (non-functional without parameters)
 
 **Usage**:
 ```bash
-meshagent -fdelta
+meshagent -fdelta <delta>
 ```
 
 **Privileges**: None required
 
-**Notes**: Development/debugging tool
+**Notes**:
+- Requires specific delta parameter
+- Internal debugging tool for core developers
+- Not intended for end-user use
 
 ---
 
 ### `connect`
 
-**Description**: Connect agent to server (development mode)
+**Description**: Development mode connection (non-functional on macOS)
 
 **Usage**:
 ```bash
-sudo meshagent connect
+meshagent connect
 ```
 
-**Privileges**: Requires root/sudo
+**Privileges**: Platform dependent
 
-**Notes**: Used for manual connection testing
+**Notes**:
+- Does not function as expected on macOS
+- Primarily for Windows/Linux development testing
+- Not intended for production use
 
 ---
 
