@@ -2321,6 +2321,31 @@ function uninstallServiceUnified(params) {
                         logger.info('Removed binary');
                     }
                 }
+
+                // Clean up backup files (meshagent.TIMESTAMP or BundleName.app.TIMESTAMP)
+                try {
+                    var files = fs.readdirSync(installPath);
+                    var backupCount = 0;
+                    for (var i = 0; i < files.length; i++) {
+                        var file = files[i];
+                        // Match backup pattern: meshagent.DIGITS or *.app.DIGITS
+                        if ((file.match(/^meshagent\.\d+$/) || file.match(/\.app\.\d+$/))) {
+                            var backupPath = installPath + file;
+                            var stats = fs.statSync(backupPath);
+                            if (stats.isDirectory()) {
+                                removeDirectoryRecursive(backupPath);
+                            } else {
+                                fs.unlinkSync(backupPath);
+                            }
+                            backupCount++;
+                        }
+                    }
+                    if (backupCount > 0) {
+                        logger.info('Removed ' + backupCount + ' backup file(s)');
+                    }
+                } catch (e) {
+                    logger.warn('Failed to clean up backup files: ' + (e.message || e.toString()));
+                }
             } catch (e) {
                 var errorMsg = e.message || e.toString() || 'Unknown error';
                 logger.error('Failed to remove binary/bundle: ' + errorMsg);
