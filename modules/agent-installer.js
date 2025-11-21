@@ -911,11 +911,9 @@ function replaceInstallation(sourceType, installPath) {
             var targetBinaryPath = installPath + 'meshagent';
             var sourceBinaryPath = sourceType.binaryPath;
 
-            // Check if we're trying to copy the binary over itself (in-place upgrade)
+            // Check if we're trying to copy the binary over itself (self-upgrade)
             if (sourceBinaryPath === targetBinaryPath) {
-                logger.info('Skipping binary copy (already running from install location)');
-                logger.info('NOTE: To upgrade with a new binary, run the new meshagent with -upgrade');
-                logger.info('      Example: sudo /path/to/new/meshagent -upgrade --installPath="' + installPath + '"');
+                logger.info('Skipping binary copy (self-upgrade: binary already in place)');
                 return;
             }
 
@@ -1593,7 +1591,7 @@ function installServiceUnified(params) {
     logger.info('Safety verification complete - ready for binary replacement');
 
     // DETECT SELF-UPGRADE SCENARIO (running installed binary with -upgrade)
-    // In this case, we can't replace ourselves, so skip backup and binary copy
+    // In this case, skip backup and binary copy, but continue with service updates
     var isSelfUpgrade = false;
     if (sourceType.type === 'standalone') {
         var targetBinaryPath = installPath + 'meshagent';
@@ -1605,15 +1603,13 @@ function installServiceUnified(params) {
         isSelfUpgrade = (sourceType.bundlePath === targetBundlePath);
     }
 
-    if (isSelfUpgrade && isUpgrade) {
-        logger.error('Cannot upgrade: You are running the installed binary/bundle');
-        logger.error('To upgrade, run the NEW binary with -upgrade from a different location');
-        logger.error('Example: sudo /path/to/new/meshagent -upgrade --installPath="' + installPath + '"');
-        process.exit(1);
+    if (isSelfUpgrade) {
+        logger.info('Self-upgrade detected (running from install location)');
+        logger.info('Skipping backup and binary copy, will update service configuration');
     }
 
-    // BACKUP (Unless --omit-backup specified)
-    if (!omitBackup && existingInstallPath) {
+    // BACKUP (Unless --omit-backup specified or self-upgrade)
+    if (!omitBackup && existingInstallPath && !isSelfUpgrade) {
         logger.info('Backing up current installation');
         try {
             var backupName = backupInstallation(installPath);
