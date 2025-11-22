@@ -371,6 +371,15 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 		fprintf(stderr, "MeshAgent: Failed to set working directory for bundle. Exiting.\n");
 		return -1;
 	}
+
+	// Check if launched from Finder (via Info.plist LSEnvironment variable)
+	// This check MUST happen early, before any command processing that might trigger TCC permission prompts
+	if (getenv("LAUNCHED_FROM_FINDER") != NULL)
+	{
+		fprintf(stderr, "\nMeshAgent must be installed as a system service.\n");
+		fprintf(stderr, "Please run: sudo %s -install\n\n", argv[0]);
+		return 0;
+	}
 #endif
 
 	ILibDuktape_ScriptContainer_CheckEmbedded(&integratedJavaScript, &integratedJavaScriptLen);
