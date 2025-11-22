@@ -4812,8 +4812,12 @@ MeshAgentHostContainer* MeshAgent_Create(MeshCommand_AuthInfo_CapabilitiesMask c
 {
 
 #if defined(_LINKVM) && defined(__APPLE__)
-    //Before anything, check for permissions (macos requirement)
-    kvm_check_permission();
+    // DISABLED: TCC permission prompting now handled by -tccCheck child process with custom UI
+    // The old approach (kvm_check_permission) showed jarring system prompts at startup.
+    // New approach: Daemon spawns -tccCheck which shows a nice custom window with all three
+    // permissions (Accessibility, FDA, Screen Recording) explained in one place, with direct
+    // "Open Settings" buttons. Users can also dismiss it permanently.
+    // kvm_check_permission();
 #endif
 
 
