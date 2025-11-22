@@ -38,6 +38,8 @@ limitations under the License.
 #include <limits.h>
 #include <libgen.h>
 #include <string.h>
+#import <ApplicationServices/ApplicationServices.h>
+#import <CoreGraphics/CoreGraphics.h>
 #endif
 
 #ifdef __APPLE__
@@ -665,6 +667,7 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 		}
 
 		// Check all three permissions (fresh check in this new process!)
+		// Permission requests will only happen when user clicks the appropriate buttons
 		printf("[TCC-CHILD] Calling check_accessibility_permission()...\n");
 		TCC_PermissionStatus accessibility = check_accessibility_permission();
 		printf("[TCC-CHILD] Accessibility result: %d\n", accessibility);

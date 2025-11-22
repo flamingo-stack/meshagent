@@ -76,6 +76,7 @@ int gRemoteMouseRenderDefault = 0;
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #include <libproc.h>
+#include <SystemConfiguration/SystemConfiguration.h>
 #include "MacOS/bundle_detection.h"
 #include "MacOS/mac_tcc_detection.h"
 #include "MacOS/TCC_UI/mac_permissions_window.h"
@@ -1583,7 +1584,7 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 
 		if (should_spawn)
 		{
-			int tcc_pipe_fd = show_tcc_permissions_window_async(agent->exePath);
+			int tcc_pipe_fd = show_tcc_permissions_window_async(agent->exePath, agent->pipeManager, console_uid);
 			if (tcc_pipe_fd >= 0) {
 				ILIBMESSAGE2("[TCC-REMOTE] Spawned -tccCheck, pipe fd for reading result:", tcc_pipe_fd);
 				// Create async monitor to read result from pipe
@@ -5249,7 +5250,31 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 
 		if (should_spawn)
 		{
-			int tcc_pipe_fd = show_tcc_permissions_window_async(agentHost->exePath);
+			// Get console UID using native macOS API (works before JavaScript initialized)
+			int console_uid = 0;
+			SCDynamicStoreRef store = SCDynamicStoreCreate(NULL, CFSTR("MeshAgentTCC"), NULL, NULL);
+			if (store != NULL)
+			{
+				uid_t uid = 0;
+				CFStringRef userName = SCDynamicStoreCopyConsoleUser(store, &uid, NULL);
+				if (userName != NULL)
+				{
+					console_uid = (int)uid;
+					CFRelease(userName);
+					ILIBMESSAGE2("[TCC-STARTUP] Got console UID from SCDynamicStore:", console_uid);
+				}
+				else
+				{
+					ILIBMESSAGE("[TCC-STARTUP] No console user logged in, console_uid = 0");
+				}
+				CFRelease(store);
+			}
+			else
+			{
+				ILIBMESSAGE("[TCC-STARTUP] ERROR: Could not create SCDynamicStore");
+			}
+
+			int tcc_pipe_fd = show_tcc_permissions_window_async(agentHost->exePath, agentHost->pipeManager, console_uid);
 			if (tcc_pipe_fd >= 0) {
 				ILIBMESSAGE2("[TCC-STARTUP] Spawned -tccCheck, pipe fd for reading result:", tcc_pipe_fd);
 				// Create async monitor to read result from pipe
