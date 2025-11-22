@@ -378,8 +378,10 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 	// This check MUST happen early, before any command processing that might trigger TCC permission prompts
 	if (getenv("LAUNCHED_FROM_FINDER") != NULL)
 	{
-		fprintf(stderr, "\nMeshAgent must be installed as a system service.\n");
-		fprintf(stderr, "Please run: sudo %s -install\n\n", argv[0]);
+		// User double-clicked the app - show TCC permissions UI
+		fprintf(stderr, "MeshAgent launched from Finder - showing TCC permissions window\n");
+		int result = show_tcc_permissions_window();
+		fprintf(stderr, "TCC permissions window closed (do not remind again: %d)\n", result);
 		return 0;
 	}
 #endif
