@@ -1,7 +1,10 @@
 #import <Cocoa/Cocoa.h>
+#import <ApplicationServices/ApplicationServices.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import "mac_permissions_window.h"
 #import "../mac_tcc_detection.h"
 #include "../../../microstack/ILibSimpleDataStore.h"
+#include "../../../microstack/ILibProcessPipe.h"
 #include <unistd.h>
 #include <sys/types.h>
 #include <stdio.h>
@@ -84,6 +87,7 @@ static void remove_lock_file(void) {
 
 - (void)dealloc {
     [self stopPeriodicUpdates];
+    [super dealloc];
 }
 
 - (void)replaceButtonWithSuccessIcon:(NSButton*)button {
@@ -159,61 +163,235 @@ static void remove_lock_file(void) {
 }
 
 - (void)updatePermissionStatus {
-    // Check all permissions for the calling process
-    TCC_PermissionStatus accessibility = check_accessibility_permission();
-    TCC_PermissionStatus fda = check_fda_permission();
-    TCC_PermissionStatus screen_recording = check_screen_recording_permission();
+    // Use unsafe_unretained instead of weak for MRC compatibility
+    __unsafe_unretained TCCButtonHandler *unsafeSelf = self;
 
-    // Update UI for each permission
-    for (NSView *subview in [self.contentView subviews]) {
-        if ([subview isKindOfClass:[NSButton class]]) {
-            NSButton *button = (NSButton*)subview;
-            NSInteger tag = [button tag];
-
-            TCC_PermissionStatus status = TCC_PERMISSION_NOT_DETERMINED;
-            if (tag == BUTTON_TAG_ACCESSIBILITY) {
-                status = accessibility;
-            } else if (tag == BUTTON_TAG_FDA) {
-                status = fda;
-            } else if (tag == BUTTON_TAG_SCREEN_RECORDING) {
-                status = screen_recording;
-            } else {
-                continue; // Not a permission button
+    // Check permissions on background thread to avoid blocking UI
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        @autoreleasepool {
+            // Check if window is still valid (unsafe but necessary without ARC __weak)
+            if (!unsafeSelf || !unsafeSelf.contentView) {
+                NSLog(@"[TCC-UI] Window deallocated during permission check, aborting");
+                return;
             }
 
-            // Update button display based on status
-            if (status == TCC_PERMISSION_GRANTED_USER || status == TCC_PERMISSION_GRANTED_MDM) {
-                [self replaceButtonWithSuccessIcon:button];
-            } else {
-                [self showButton:button];
+            // Check all permissions for the calling process
+            TCC_PermissionStatus accessibility = check_accessibility_permission();
+            TCC_PermissionStatus fda = check_fda_permission();
+            TCC_PermissionStatus screen_recording = check_screen_recording_permission();
+
+            // Update UI on main thread
+            dispatch_async(dispatch_get_main_queue(), ^{
+                // Check again if window is still valid
+                if (!unsafeSelf || !unsafeSelf.contentView) {
+                    NSLog(@"[TCC-UI] Window deallocated before UI update, aborting");
+                    return;
+                }
+
+                // Snapshot subviews to avoid issues if view hierarchy changes during iteration
+                NSArray *subviews = [unsafeSelf.contentView subviews];
+                for (NSView *subview in subviews) {
+                if ([subview isKindOfClass:[NSButton class]]) {
+                    NSButton *button = (NSButton*)subview;
+                    NSInteger tag = [button tag];
+
+                    TCC_PermissionStatus status = TCC_PERMISSION_NOT_DETERMINED;
+                    if (tag == BUTTON_TAG_ACCESSIBILITY) {
+                        status = accessibility;
+                    } else if (tag == BUTTON_TAG_FDA) {
+                        status = fda;
+                    } else if (tag == BUTTON_TAG_SCREEN_RECORDING) {
+                        status = screen_recording;
+                    } else {
+                        continue; // Not a permission button
+                    }
+
+                    // Update button display based on status
+                    if (status == TCC_PERMISSION_GRANTED_USER || status == TCC_PERMISSION_GRANTED_MDM) {
+                        [unsafeSelf replaceButtonWithSuccessIcon:button];
+                    } else {
+                        [unsafeSelf showButton:button];
+                    }
+                }
             }
+            });
         }
-    }
+    });
 }
 
 - (void)startPeriodicUpdates {
     // Check immediately
     [self updatePermissionStatus];
 
-    // Create timer that works in modal windows
-    self.updateTimer = [NSTimer timerWithTimeInterval:1.0
-                                                target:self
-                                              selector:@selector(updatePermissionStatus)
-                                              userInfo:nil
-                                               repeats:YES];
+    // Use NSDistributedNotificationCenter to get real-time updates for Accessibility
+    // This is how Splashtop and other apps do it - no polling needed!
+    [[NSDistributedNotificationCenter defaultCenter]
+        addObserver:self
+        selector:@selector(accessibilityPermissionChanged:)
+        name:@"com.apple.accessibility.api"
+        object:nil
+        suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
 
-    // Add timer to run loop with NSRunLoopCommonModes so it fires in modal windows
+    NSLog(@"[TCC-UI] Registered for accessibility permission change notifications");
+
+    // For Screen Recording and FDA, we need light polling since there's no notification
+    // Use 3-second interval since we have real-time updates for Accessibility via notification
+    __unsafe_unretained TCCButtonHandler *unsafeSelf = self;
+    self.updateTimer = [NSTimer timerWithTimeInterval:3.0
+                                               repeats:YES
+                                                 block:^(NSTimer *timer) {
+        if (unsafeSelf) {
+            // Only check Screen Recording and FDA (Accessibility updated via notification)
+            [unsafeSelf checkScreenRecordingAndFDA];
+        } else {
+            NSLog(@"[TCC-UI] Window deallocated, invalidating timer");
+            [timer invalidate];
+        }
+    }];
+
     [[NSRunLoop currentRunLoop] addTimer:self.updateTimer forMode:NSRunLoopCommonModes];
 }
 
+// Called when Accessibility permission changes (real-time notification)
+- (void)accessibilityPermissionChanged:(NSNotification *)notification {
+    NSLog(@"[TCC-UI] Accessibility permission changed notification received");
+
+    // Use unsafe_unretained instead of weak for MRC compatibility
+    __unsafe_unretained TCCButtonHandler *unsafeSelf = self;
+
+    // Small delay to let the change settle, then check on background thread
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        @autoreleasepool {
+            // Check if window is still valid
+            if (!unsafeSelf || !unsafeSelf.contentView) {
+                NSLog(@"[TCC-UI] Window deallocated during accessibility check, aborting");
+                return;
+            }
+
+            TCC_PermissionStatus accessibility = check_accessibility_permission();
+
+            // Update UI on main thread
+            dispatch_async(dispatch_get_main_queue(), ^{
+                // Check again if window is still valid before UI update
+                if (!unsafeSelf || !unsafeSelf.contentView) {
+                    NSLog(@"[TCC-UI] Window deallocated before accessibility UI update, aborting");
+                    return;
+                }
+
+                // Snapshot subviews to avoid issues if view hierarchy changes during iteration
+                NSArray *subviews = [unsafeSelf.contentView subviews];
+                for (NSView *subview in subviews) {
+                    if ([subview isKindOfClass:[NSButton class]]) {
+                        NSButton *button = (NSButton*)subview;
+                        if ([button tag] == BUTTON_TAG_ACCESSIBILITY) {
+                            if (accessibility == TCC_PERMISSION_GRANTED_USER || accessibility == TCC_PERMISSION_GRANTED_MDM) {
+                                [unsafeSelf replaceButtonWithSuccessIcon:button];
+                            } else {
+                                [unsafeSelf showButton:button];
+                            }
+                            break;
+                        }
+                    }
+                }
+            });
+        }
+    });
+}
+
+// Check only Screen Recording and FDA (called by timer)
+- (void)checkScreenRecordingAndFDA {
+    // Use unsafe_unretained instead of weak for MRC compatibility
+    __unsafe_unretained TCCButtonHandler *unsafeSelf = self;
+
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        @autoreleasepool {
+            // Check if window is still valid before doing expensive work
+            if (!unsafeSelf || !unsafeSelf.contentView) {
+                NSLog(@"[TCC-UI] Window deallocated during permission check, aborting");
+                return;
+            }
+
+            TCC_PermissionStatus fda = check_fda_permission();
+            TCC_PermissionStatus screen_recording = check_screen_recording_permission();
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                // Check again if window is still valid before UI update
+                if (!unsafeSelf || !unsafeSelf.contentView) {
+                    NSLog(@"[TCC-UI] Window deallocated before UI update, aborting");
+                    return;
+                }
+
+                // Snapshot subviews to avoid issues if view hierarchy changes during iteration
+                NSArray *subviews = [unsafeSelf.contentView subviews];
+                for (NSView *subview in subviews) {
+                if ([subview isKindOfClass:[NSButton class]]) {
+                    NSButton *button = (NSButton*)subview;
+                    NSInteger tag = [button tag];
+
+                    TCC_PermissionStatus status = TCC_PERMISSION_NOT_DETERMINED;
+                    if (tag == BUTTON_TAG_FDA) {
+                        status = fda;
+                    } else if (tag == BUTTON_TAG_SCREEN_RECORDING) {
+                        status = screen_recording;
+                    } else {
+                        continue;
+                    }
+
+                    if (status == TCC_PERMISSION_GRANTED_USER || status == TCC_PERMISSION_GRANTED_MDM) {
+                        [unsafeSelf replaceButtonWithSuccessIcon:button];
+                    } else {
+                        [unsafeSelf showButton:button];
+                    }
+                }
+            }
+            });
+        }
+    });
+}
+
 - (void)stopPeriodicUpdates {
+    NSLog(@"[TCC-UI] stopPeriodicUpdates called");
+
+    // Remove notification observer
+    [[NSDistributedNotificationCenter defaultCenter] removeObserver:self];
+    NSLog(@"[TCC-UI] Removed notification observers");
+
     if (self.updateTimer) {
         [self.updateTimer invalidate];
         self.updateTimer = nil;
+        NSLog(@"[TCC-UI] Timer invalidated and cleared");
     }
 }
 
 - (void)openAccessibilitySettings:(id)sender {
+    NSLog(@"[TCC-UI] openAccessibilitySettings clicked");
+
+    // Trigger the system permission prompt to add MeshAgent to the Accessibility list
+    if (__builtin_available(macOS 10.9, *)) {
+        NSLog(@"[TCC-UI] Calling AXIsProcessTrustedWithOptions on background thread");
+        // Call on background thread to avoid blocking UI (API blocks until user responds)
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            @autoreleasepool {
+                const void *keys[] = { kAXTrustedCheckOptionPrompt };
+                const void *values[] = { kCFBooleanTrue };
+                CFDictionaryRef options = CFDictionaryCreate(
+                    kCFAllocatorDefault,
+                    keys,
+                    values,
+                    1,
+                    &kCFCopyStringDictionaryKeyCallBacks,
+                    &kCFTypeDictionaryValueCallBacks);
+
+                // This will show the system dialog: "MeshAgent.app would like to control this computer using accessibility features"
+                Boolean result = AXIsProcessTrustedWithOptions(options);
+                NSLog(@"[TCC-UI] AXIsProcessTrustedWithOptions returned: %d", result);
+                CFRelease(options);
+            }
+        });
+    }
+
+    // Also open System Settings so user can see MeshAgent was added to the list
+    NSLog(@"[TCC-UI] Opening System Settings for Accessibility");
     NSURL* url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"];
     [[NSWorkspace sharedWorkspace] openURL:url];
 }
@@ -224,6 +402,30 @@ static void remove_lock_file(void) {
 }
 
 - (void)openScreenRecordingSettings:(id)sender {
+    NSLog(@"[TCC-UI] openScreenRecordingSettings clicked");
+
+    // Trigger the system permission prompt to add MeshAgent to the Screen Recording list
+    if (__builtin_available(macOS 10.15, *)) {
+        // Check current permission status
+        Boolean hasPermission = CGPreflightScreenCaptureAccess();
+        NSLog(@"[TCC-UI] CGPreflightScreenCaptureAccess returned: %d", hasPermission);
+
+        if (!hasPermission) {
+            // Call on background thread to avoid blocking UI (API blocks until user responds)
+            NSLog(@"[TCC-UI] Calling CGRequestScreenCaptureAccess on background thread");
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                @autoreleasepool {
+                    Boolean result = CGRequestScreenCaptureAccess();
+                    NSLog(@"[TCC-UI] CGRequestScreenCaptureAccess returned: %d", result);
+                }
+            });
+        } else {
+            NSLog(@"[TCC-UI] Screen recording already granted, not requesting");
+        }
+    }
+
+    // Also open System Settings so user can see MeshAgent was added to the list
+    NSLog(@"[TCC-UI] Opening System Settings for Screen Recording");
     NSURL* url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"];
     [[NSWorkspace sharedWorkspace] openURL:url];
 }
@@ -428,7 +630,9 @@ int show_tcc_permissions_window(void) {
         [finishButton setAction:@selector(close)];
         [contentView addSubview:finishButton];
 
-        // Start periodic permission checks
+        // Start real-time monitoring using notifications + light polling
+        // Accessibility uses NSDistributedNotificationCenter (instant updates like Splashtop!)
+        // Screen Recording uses 5-second polling (no notification available)
         [buttonHandler startPeriodicUpdates];
 
         // Show window and run modal
@@ -447,10 +651,10 @@ int show_tcc_permissions_window(void) {
     }
 }
 
-// Async wrapper implementation using fork + execv + pipe IPC
+// Async wrapper implementation using ILibProcessPipe for spawning as user
 // This spawns a child process with "-tccCheck" flag to show the UI
 // Returns file descriptor for reading result from child, or -1 on error
-int show_tcc_permissions_window_async(const char* exe_path) {
+int show_tcc_permissions_window_async(const char* exe_path, void* pipeManager, int uid) {
     // Check if TCC UI is already running
     if (is_tcc_ui_running()) {
         printf("[TCC-SPAWN] TCC UI already running - not spawning\n");
@@ -464,48 +668,68 @@ int show_tcc_permissions_window_async(const char* exe_path) {
         return -1;
     }
 
-    // Set both ends to non-blocking
-    fcntl(pipefd[0], F_SETFL, O_NONBLOCK); // Read end
-    fcntl(pipefd[1], F_SETFL, O_NONBLOCK); // Write end
+    // Set read end to non-blocking
+    fcntl(pipefd[0], F_SETFL, O_NONBLOCK);
 
     printf("[TCC-SPAWN] Created pipe: read_fd=%d, write_fd=%d\n", pipefd[0], pipefd[1]);
 
-    pid_t pid = fork();
+    // Convert write-end fd to string for passing via argv
+    char fd_str[16];
+    snprintf(fd_str, sizeof(fd_str), "%d", pipefd[1]);
 
-    if (pid == 0) {
-        // Child process - re-exec self with -tccCheck flag
-        // Close read end (child only writes)
-        close(pipefd[0]);
+    // Build argv for child process
+    char* const argv[] = {
+        "meshagent",     // argv[0] (program name)
+        "-tccCheck",     // argv[1] (flag)
+        fd_str,          // argv[2] (pipe write-end fd)
+        NULL             // argv terminator
+    };
 
-        // Convert write-end fd to string for passing via argv
-        char fd_str[16];
-        snprintf(fd_str, sizeof(fd_str), "%d", pipefd[1]);
+    printf("[TCC-SPAWN] ========================================\n");
+    printf("[TCC-SPAWN] About to spawn -tccCheck:\n");
+    printf("[TCC-SPAWN]   exe_path:    %s\n", exe_path);
+    printf("[TCC-SPAWN]   pipeManager: %p\n", pipeManager);
+    printf("[TCC-SPAWN]   UID:         %d\n", uid);
+    printf("[TCC-SPAWN]   argv[0]:     %s\n", argv[0]);
+    printf("[TCC-SPAWN]   argv[1]:     %s\n", argv[1]);
+    printf("[TCC-SPAWN]   argv[2]:     %s\n", argv[2]);
+    printf("[TCC-SPAWN] ========================================\n");
 
-        printf("[TCC-SPAWN] Child process spawning with pipe write_fd=%s\n", fd_str);
-
-        // The child's main thread will be free for Cocoa/NSWindow
-        execv(exe_path, (char*[]){
-            "meshagent",     // argv[0] (program name)
-            "-tccCheck",     // argv[1] (flag)
-            fd_str,          // argv[2] (pipe write-end fd)
-            NULL             // argv terminator
-        });
-
-        // If execv fails, exit
-        printf("[TCC-SPAWN] ERROR: execv failed: %s\n", strerror(errno));
-        _exit(1);
-    } else if (pid < 0) {
-        // Fork failed
-        printf("[TCC-SPAWN] ERROR: fork failed: %s\n", strerror(errno));
+    if (pipeManager == NULL) {
+        printf("[TCC-SPAWN] ERROR: pipeManager is NULL!\n");
         close(pipefd[0]);
         close(pipefd[1]);
         return -1;
     }
 
+    // Spawn child process as specified user (same approach as old -kvm0)
+    // Note: Uses DEFAULT spawn type - ILibProcessPipe internally calls setuid() when uid != 0
+    ILibProcessPipe_Process childProcess = ILibProcessPipe_Manager_SpawnProcessEx3(
+        pipeManager,
+        (char*)exe_path,
+        argv,
+        ILibProcessPipe_SpawnTypes_DEFAULT,  // Same as original -kvm0 code
+        (void*)(intptr_t)uid,                // User ID to run as
+        0                                    // No extra memory
+    );
+
+    if (childProcess == NULL) {
+        printf("[TCC-SPAWN] ERROR: ILibProcessPipe_Manager_SpawnProcessEx3 returned NULL - spawn failed!\n");
+        printf("[TCC-SPAWN] Check if executable exists and has correct permissions\n");
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -1;
+    }
+
+    printf("[TCC-SPAWN] SUCCESS: Spawn function returned non-NULL process handle\n");
+
+    pid_t child_pid = ILibProcessPipe_Process_GetPID(childProcess);
+    printf("[TCC-SPAWN] Spawned -tccCheck child process, PID=%d, UID=%d\n", child_pid, uid);
+
     // Parent process: close write end (parent only reads)
     close(pipefd[1]);
 
-    printf("[TCC-SPAWN] Parent continuing with read_fd=%d for child pid=%d\n", pipefd[0], pid);
+    printf("[TCC-SPAWN] Parent continuing with read_fd=%d for child pid=%d\n", pipefd[0], child_pid);
 
     // Return read-end file descriptor for parent to monitor
     return pipefd[0];
