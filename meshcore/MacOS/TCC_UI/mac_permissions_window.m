@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <string.h>
+#include <errno.h>
 
 // Lock file to prevent multiple TCC UI processes
 #define TCC_LOCK_FILE "/tmp/meshagent_tcccheck.lock"
@@ -446,28 +447,66 @@ int show_tcc_permissions_window(void) {
     }
 }
 
-// Async wrapper implementation using fork + execv
+// Async wrapper implementation using fork + execv + pipe IPC
 // This spawns a child process with "-tccCheck" flag to show the UI
-void show_tcc_permissions_window_async(const char* exe_path, const char* db_path) {
+// Returns file descriptor for reading result from child, or -1 on error
+int show_tcc_permissions_window_async(const char* exe_path) {
     // Check if TCC UI is already running
     if (is_tcc_ui_running()) {
-        return; // Don't spawn another instance
+        printf("[TCC-SPAWN] TCC UI already running - not spawning\n");
+        return -1; // Don't spawn another instance
     }
+
+    // Create pipe for IPC (child writes result, parent reads)
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        printf("[TCC-SPAWN] ERROR: Failed to create pipe: %s\n", strerror(errno));
+        return -1;
+    }
+
+    // Set both ends to non-blocking
+    fcntl(pipefd[0], F_SETFL, O_NONBLOCK); // Read end
+    fcntl(pipefd[1], F_SETFL, O_NONBLOCK); // Write end
+
+    printf("[TCC-SPAWN] Created pipe: read_fd=%d, write_fd=%d\n", pipefd[0], pipefd[1]);
 
     pid_t pid = fork();
 
     if (pid == 0) {
         // Child process - re-exec self with -tccCheck flag
+        // Close read end (child only writes)
+        close(pipefd[0]);
+
+        // Convert write-end fd to string for passing via argv
+        char fd_str[16];
+        snprintf(fd_str, sizeof(fd_str), "%d", pipefd[1]);
+
+        printf("[TCC-SPAWN] Child process spawning with pipe write_fd=%s\n", fd_str);
+
         // The child's main thread will be free for Cocoa/NSWindow
         execv(exe_path, (char*[]){
             "meshagent",     // argv[0] (program name)
             "-tccCheck",     // argv[1] (flag)
-            (char*)db_path,  // argv[2] (database path)
+            fd_str,          // argv[2] (pipe write-end fd)
             NULL             // argv terminator
         });
 
         // If execv fails, exit
+        printf("[TCC-SPAWN] ERROR: execv failed: %s\n", strerror(errno));
         _exit(1);
+    } else if (pid < 0) {
+        // Fork failed
+        printf("[TCC-SPAWN] ERROR: fork failed: %s\n", strerror(errno));
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -1;
     }
-    // Parent process continues immediately (non-blocking)
+
+    // Parent process: close write end (parent only reads)
+    close(pipefd[1]);
+
+    printf("[TCC-SPAWN] Parent continuing with read_fd=%d for child pid=%d\n", pipefd[0], pid);
+
+    // Return read-end file descriptor for parent to monitor
+    return pipefd[0];
 }

@@ -23,14 +23,17 @@ int show_tcc_permissions_window(void);
  * Display the TCC permissions window asynchronously (non-blocking)
  *
  * Spawns a child process with "-tccCheck" flag to show the permissions UI.
- * Returns immediately (non-blocking). The child process will save the
- * "Do not remind me again" preference to the database when the window is closed.
+ * Returns immediately (non-blocking). The child process will write the
+ * "Do not remind me again" preference (0 or 1) to a pipe when the window is closed.
  *
  * Parameters:
  *   exe_path - Path to the meshagent executable (for re-execing self)
- *   db_path - Path to the ILibSimpleDataStore database file
+ *
+ * Returns:
+ *   File descriptor for reading result from child (read end of pipe)
+ *   -1 on error (e.g., pipe creation failed, TCC UI already running)
  */
-void show_tcc_permissions_window_async(const char* exe_path, const char* db_path);
+int show_tcc_permissions_window_async(const char* exe_path);
 
 #ifdef __cplusplus
 }

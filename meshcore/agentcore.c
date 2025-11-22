@@ -144,6 +144,16 @@ typedef struct RemoteDesktop_Ptrs
 	ILibDuktape_DuplexStream *stream;
 }RemoteDesktop_Ptrs;
 
+#ifdef __APPLE__
+// TCC Pipe Monitor - Async handler for reading results from -tccCheck child process
+typedef struct TCCPipeMonitor
+{
+	void *chain;                      // ILibChain for event loop
+	ILibSimpleDataStore masterDb;     // Database for saving preference
+	int pipe_fd;                      // File descriptor for reading from child
+	int active;                       // 1 if monitoring, 0 if closed
+}TCCPipeMonitor;
+#endif
 
 typedef struct ScriptContainerSettings
 {
@@ -449,6 +459,111 @@ size_t MeshAgent_Linux_ReadMemFile(char *path, char **buffer)
 	}
 	return(i);
 }
+
+#ifdef __APPLE__
+// ============================================================================
+// TCC Pipe Monitor - Async event loop handlers for reading -tccCheck results
+// ============================================================================
+
+// PreSelect: Add pipe fd to readset for monitoring
+void TCCPipeMonitor_PreSelect(void* object, fd_set *readset, fd_set *writeset, fd_set *errorset, int* blocktime)
+{
+	TCCPipeMonitor *monitor = (TCCPipeMonitor*)((ILibChain_Link*)object)->ExtraMemoryPtr;
+	if (monitor->active && monitor->pipe_fd >= 0)
+	{
+		FD_SET(monitor->pipe_fd, readset);
+	}
+}
+
+// PostSelect: Check if pipe has data, read it, and update database
+void TCCPipeMonitor_PostSelect(void* object, int slct, fd_set *readset, fd_set *writeset, fd_set *errorset)
+{
+	TCCPipeMonitor *monitor = (TCCPipeMonitor*)((ILibChain_Link*)object)->ExtraMemoryPtr;
+
+	if (monitor->active && monitor->pipe_fd >= 0 && FD_ISSET(monitor->pipe_fd, readset))
+	{
+		unsigned char result_byte;
+		ssize_t bytes_read = read(monitor->pipe_fd, &result_byte, 1);
+
+		if (bytes_read == 1)
+		{
+			ILIBMESSAGE2("[TCC-PIPE] Read result from -tccCheck child:", result_byte);
+
+			// If result is 1, user clicked "Do not remind me again"
+			if (result_byte == 1)
+			{
+				ILIBMESSAGE("[TCC-PIPE] Saving tccPermissionsUIDisabled=1 to database");
+				ILibSimpleDataStore_Put(monitor->masterDb, "tccPermissionsUIDisabled", "1");
+			}
+			else
+			{
+				ILIBMESSAGE("[TCC-PIPE] User chose to be reminded again (not saving preference)");
+			}
+
+			// Close pipe and mark inactive
+			close(monitor->pipe_fd);
+			monitor->pipe_fd = -1;
+			monitor->active = 0;
+			ILIBMESSAGE("[TCC-PIPE] Closed pipe, monitoring complete");
+		}
+		else if (bytes_read == 0)
+		{
+			// EOF - child closed pipe without writing (shouldn't happen)
+			ILIBMESSAGE("[TCC-PIPE] WARNING: Child closed pipe without sending result");
+			close(monitor->pipe_fd);
+			monitor->pipe_fd = -1;
+			monitor->active = 0;
+		}
+		else if (bytes_read < 0)
+		{
+			// Error reading
+			ILIBMESSAGE2("[TCC-PIPE] ERROR reading from pipe, errno:", errno);
+			close(monitor->pipe_fd);
+			monitor->pipe_fd = -1;
+			monitor->active = 0;
+		}
+	}
+}
+
+// Destroy: Cleanup when chain is destroyed
+void TCCPipeMonitor_Destroy(void* object)
+{
+	TCCPipeMonitor *monitor = (TCCPipeMonitor*)((ILibChain_Link*)object)->ExtraMemoryPtr;
+	if (monitor->pipe_fd >= 0)
+	{
+		ILIBMESSAGE("[TCC-PIPE] Cleanup: closing pipe fd");
+		close(monitor->pipe_fd);
+		monitor->pipe_fd = -1;
+	}
+	monitor->active = 0;
+}
+
+// Create and initialize TCC pipe monitor
+void* TCCPipeMonitor_Create(void *chain, ILibSimpleDataStore masterDb, int pipe_fd)
+{
+	ILibChain_Link *link = ILibChain_Link_Allocate(sizeof(ILibChain_Link), sizeof(TCCPipeMonitor));
+	TCCPipeMonitor *monitor = (TCCPipeMonitor*)link->ExtraMemoryPtr;
+
+	// Initialize monitor structure
+	monitor->chain = chain;
+	monitor->masterDb = masterDb;
+	monitor->pipe_fd = pipe_fd;
+	monitor->active = 1;
+
+	// Set up event loop handlers
+	link->PreSelectHandler = TCCPipeMonitor_PreSelect;
+	link->PostSelectHandler = TCCPipeMonitor_PostSelect;
+	link->DestroyHandler = TCCPipeMonitor_Destroy;
+	link->MetaData = "TCC Pipe Monitor";
+
+	// Add to chain
+	ILibChain_SafeAdd(chain, link);
+
+	ILIBMESSAGE2("[TCC-PIPE] Created monitor for pipe fd:", pipe_fd);
+
+	return link;
+}
+#endif
 
 int MeshAgent_Helper_CommandLine(char **commands, char **result, int *resultLen)
 {
@@ -1443,18 +1558,39 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 		// Spawn TCC check before establishing KVM connection (non-blocking)
 		// The -tccCheck process will check permissions and decide whether to show UI
 		// Check "do not remind" preference before spawning
-		int disabledLen = ILibSimpleDataStore_Get(agent->masterDb, "tccPermissionsUIDisabled", NULL, 0);
-		ILIBMESSAGE2("[TCC-REMOTE] Checking tccPermissionsUIDisabled flag, result length", disabledLen);
+		// Only skip TCC check if the value is specifically "1"
+		char value_buf[16];
+		int disabledLen = ILibSimpleDataStore_Get(agent->masterDb, "tccPermissionsUIDisabled", value_buf, sizeof(value_buf));
+		int should_spawn = 1;  // Default: spawn -tccCheck
 
-		if (disabledLen == 0)
+		if (disabledLen > 0 && disabledLen < sizeof(value_buf))
 		{
-			ILIBMESSAGE("[TCC-REMOTE] tccPermissionsUIDisabled NOT set - spawning -tccCheck");
-			char* dbPath = MeshAgent_MakeAbsolutePath(agent->exePath, ".db");
-			show_tcc_permissions_window_async(agent->exePath, dbPath);
+			value_buf[disabledLen] = '\0';
+			if (strcmp(value_buf, "1") == 0)
+			{
+				should_spawn = 0;  // Value is "1", don't spawn
+				ILIBMESSAGE("[TCC-REMOTE] tccPermissionsUIDisabled=1 - NOT spawning -tccCheck");
+			}
+			else
+			{
+				ILIBMESSAGE("[TCC-REMOTE] tccPermissionsUIDisabled is not 1, spawning -tccCheck");
+			}
 		}
 		else
 		{
-			ILIBMESSAGE("[TCC-REMOTE] tccPermissionsUIDisabled IS set - NOT spawning -tccCheck");
+			ILIBMESSAGE("[TCC-REMOTE] tccPermissionsUIDisabled NOT set - spawning -tccCheck");
+		}
+
+		if (should_spawn)
+		{
+			int tcc_pipe_fd = show_tcc_permissions_window_async(agent->exePath);
+			if (tcc_pipe_fd >= 0) {
+				ILIBMESSAGE2("[TCC-REMOTE] Spawned -tccCheck, pipe fd for reading result:", tcc_pipe_fd);
+				// Create async monitor to read result from pipe
+				TCCPipeMonitor_Create(agent->chain, agent->masterDb, tcc_pipe_fd);
+			} else {
+				ILIBMESSAGE("[TCC-REMOTE] Failed to spawn -tccCheck (already running or error)");
+			}
 		}
 
 		char msg[128];
@@ -5084,21 +5220,39 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 	if (fetchstate == 0 && installFlag == 0)
 	{
 		// Check "do not remind" preference before spawning
-		int disabledLen = ILibSimpleDataStore_Get(agentHost->masterDb, "tccPermissionsUIDisabled", NULL, 0);
-		ILIBMESSAGE2("[TCC-STARTUP] Checking tccPermissionsUIDisabled flag, result length", disabledLen);
+		// Only skip TCC check if the value is specifically "1"
+		char value_buf[16];
+		int disabledLen = ILibSimpleDataStore_Get(agentHost->masterDb, "tccPermissionsUIDisabled", value_buf, sizeof(value_buf));
+		int should_spawn = 1;  // Default: spawn -tccCheck
 
-		if (disabledLen == 0)
+		if (disabledLen > 0 && disabledLen < sizeof(value_buf))
 		{
-			ILIBMESSAGE("[TCC-STARTUP] tccPermissionsUIDisabled NOT set - spawning -tccCheck");
-			// Get database path for async UI function
-			char* dbPath = MeshAgent_MakeAbsolutePath(agentHost->exePath, ".db");
-
-			// Spawn -tccCheck (it will check permissions and decide whether to show UI)
-			show_tcc_permissions_window_async(agentHost->exePath, dbPath);
+			value_buf[disabledLen] = '\0';
+			if (strcmp(value_buf, "1") == 0)
+			{
+				should_spawn = 0;  // Value is "1", don't spawn
+				ILIBMESSAGE("[TCC-STARTUP] tccPermissionsUIDisabled=1 - NOT spawning -tccCheck");
+			}
+			else
+			{
+				ILIBMESSAGE("[TCC-STARTUP] tccPermissionsUIDisabled is not 1, spawning -tccCheck");
+			}
 		}
 		else
 		{
-			ILIBMESSAGE("[TCC-STARTUP] tccPermissionsUIDisabled IS set - NOT spawning -tccCheck");
+			ILIBMESSAGE("[TCC-STARTUP] tccPermissionsUIDisabled NOT set - spawning -tccCheck");
+		}
+
+		if (should_spawn)
+		{
+			int tcc_pipe_fd = show_tcc_permissions_window_async(agentHost->exePath);
+			if (tcc_pipe_fd >= 0) {
+				ILIBMESSAGE2("[TCC-STARTUP] Spawned -tccCheck, pipe fd for reading result:", tcc_pipe_fd);
+				// Create async monitor to read result from pipe
+				TCCPipeMonitor_Create(agentHost->chain, agentHost->masterDb, tcc_pipe_fd);
+			} else {
+				ILIBMESSAGE("[TCC-STARTUP] Failed to spawn -tccCheck (already running or error)");
+			}
 		}
 	}
 #endif

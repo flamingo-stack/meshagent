@@ -47,7 +47,6 @@ limitations under the License.
 #include "meshcore/MacOS/bundle_detection.h"
 #include "meshcore/MacOS/mac_tcc_detection.h"
 #include "meshcore/MacOS/TCC_UI/mac_permissions_window.h"
-#include "microstack/ILibSimpleDataStore.h"
 #endif
 
 MeshAgentHostContainer *agentHost = NULL;
@@ -641,37 +640,19 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 	}
 
 	// -tccCheck: Check TCC permissions and show UI if needed
+	// Communicates result back to parent via pipe (no database or network access)
 	if (argc > 1 && strcasecmp(argv[1], "-tccCheck") == 0)
 	{
 		printf("[TCC-CHILD] -tccCheck process started (PID: %d)\n", getpid());
 
-		char* db_path = NULL;
+		// Parse pipe file descriptor from argv[2]
+		int pipe_fd = -1;
 		if (argc > 2) {
-			db_path = argv[2]; // Database path passed as second argument
-			printf("[TCC-CHILD] Database path: %s\n", db_path);
+			pipe_fd = atoi(argv[2]);
+			printf("[TCC-CHILD] Pipe write fd: %d\n", pipe_fd);
 		} else {
-			printf("[TCC-CHILD] WARNING: No database path provided\n");
-		}
-
-		// Check "do not remind" flag first
-		if (db_path != NULL) {
-			void* db = ILibSimpleDataStore_Create(db_path);
-			if (db != NULL) {
-				int disabledLen = ILibSimpleDataStore_Get(db, "tccPermissionsUIDisabled", NULL, 0);
-				printf("[TCC-CHILD] Checking tccPermissionsUIDisabled in child, result length: %d\n", disabledLen);
-
-				if (disabledLen != 0) {
-					// User doesn't want to be reminded - exit silently
-					printf("[TCC-CHILD] tccPermissionsUIDisabled IS set - exiting without UI\n");
-					ILibSimpleDataStore_Close(db);
-					return 0;
-				} else {
-					printf("[TCC-CHILD] tccPermissionsUIDisabled NOT set - continuing to check permissions\n");
-				}
-				ILibSimpleDataStore_Close(db);
-			} else {
-				printf("[TCC-CHILD] WARNING: Failed to open database\n");
-			}
+			printf("[TCC-CHILD] ERROR: No pipe fd provided - cannot communicate with parent\n");
+			return 1;
 		}
 
 		// Check all three permissions (fresh check in this new process!)
@@ -687,7 +668,7 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 		TCC_PermissionStatus screen_recording = check_screen_recording_permission();
 		printf("[TCC-CHILD] Screen Recording result: %d\n", screen_recording);
 
-		// If ALL are granted, exit without showing UI
+		// If ALL are granted, write 0 to pipe and exit without showing UI
 		int all_granted = (accessibility == TCC_PERMISSION_GRANTED_USER || accessibility == TCC_PERMISSION_GRANTED_MDM) &&
 		                  (fda == TCC_PERMISSION_GRANTED_USER || fda == TCC_PERMISSION_GRANTED_MDM) &&
 		                  (screen_recording == TCC_PERMISSION_GRANTED_USER || screen_recording == TCC_PERMISSION_GRANTED_MDM);
@@ -696,8 +677,11 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 		       all_granted, accessibility, fda, screen_recording);
 
 		if (all_granted) {
-			printf("[TCC-CHILD] All permissions granted - exiting without UI\n");
-			return 0; // All permissions granted - no UI needed
+			printf("[TCC-CHILD] All permissions granted - writing 0 to pipe and exiting without UI\n");
+			unsigned char result_byte = 0;
+			write(pipe_fd, &result_byte, 1);
+			close(pipe_fd);
+			return 0;
 		}
 
 		// At least one permission missing - show UI
@@ -705,18 +689,14 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 		int result = show_tcc_permissions_window();
 		printf("[TCC-CHILD] UI closed with result: %d (1 = do not remind, 0 = remind again)\n", result);
 
-		// If user clicked "Do not remind me again", save to database
-		if (result == 1 && db_path != NULL) {
-			printf("[TCC-CHILD] Saving tccPermissionsUIDisabled = 1 to database\n");
-			void* db = ILibSimpleDataStore_Create(db_path);
-			if (db != NULL) {
-				ILibSimpleDataStore_Put(db, "tccPermissionsUIDisabled", "1");
-				ILibSimpleDataStore_Close(db);
-				printf("[TCC-CHILD] Successfully saved preference\n");
-			} else {
-				printf("[TCC-CHILD] WARNING: Failed to save preference - couldn't open database\n");
-			}
+		// Write result to pipe (parent will read this and save to database if needed)
+		unsigned char result_byte = (result == 1) ? 1 : 0;
+		printf("[TCC-CHILD] Writing result %d to pipe fd %d\n", result_byte, pipe_fd);
+		ssize_t written = write(pipe_fd, &result_byte, 1);
+		if (written != 1) {
+			printf("[TCC-CHILD] ERROR: Failed to write to pipe (wrote %zd bytes)\n", written);
 		}
+		close(pipe_fd);
 
 		printf("[TCC-CHILD] -tccCheck process exiting\n");
 		return 0;
