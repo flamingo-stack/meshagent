@@ -20,6 +20,15 @@
 // Global progress callback
 static ProgressCallback g_progressCallback = NULL;
 
+// Cleanup function called when library/executable unloads
+__attribute__((destructor))
+static void cleanup_progress_callback(void) {
+    if (g_progressCallback) {
+        Block_release(g_progressCallback);
+        g_progressCallback = NULL;
+    }
+}
+
 void set_progress_callback(ProgressCallback callback) {
     if (g_progressCallback) {
         Block_release(g_progressCallback);

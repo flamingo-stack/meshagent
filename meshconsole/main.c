@@ -127,34 +127,71 @@ ILibTransport_DoneState kvm_serviceWriteSink(char *buffer, int bufferLen, void *
 }
 
 // Helper function to extract Label from a plist file
+// SECURITY: Uses CoreFoundation plist parser instead of shell commands to prevent command injection
 char* extract_plist_label(const char* plistPath)
 {
-	FILE *fp;
-	char cmd[1024];
 	char *result = NULL;
-	char buffer[512];
+	CFURLRef fileURL = NULL;
+	CFReadStreamRef stream = NULL;
+	CFPropertyListRef plist = NULL;
+	CFStringRef label = NULL;
 
-	// Use awk to extract Label value from plist
-	snprintf(cmd, sizeof(cmd),
-		"cat '%s' | tr '\\n' '.' | awk '{ split($0, a, \"<key>Label</key>\"); "
-		"split(a[2], b, \"</string>\"); split(b[1], c, \"<string>\"); print c[2]; }'",
-		plistPath);
+	// Create URL from file path
+	CFStringRef pathString = CFStringCreateWithCString(NULL, plistPath, kCFStringEncodingUTF8);
+	if (!pathString) {
+		goto cleanup;
+	}
 
-	fp = popen(cmd, "r");
-	if (fp != NULL)
-	{
-		if (fgets(buffer, sizeof(buffer), fp) != NULL)
-		{
-			// Remove trailing newline
-			size_t len = strlen(buffer);
-			if (len > 0 && buffer[len-1] == '\n') buffer[len-1] = '\0';
-			if (strlen(buffer) > 0)
-			{
-				result = strdup(buffer);
+	fileURL = CFURLCreateWithFileSystemPath(NULL, pathString, kCFURLPOSIXPathStyle, false);
+	CFRelease(pathString);
+	if (!fileURL) {
+		goto cleanup;
+	}
+
+	// Open file stream
+	stream = CFReadStreamCreateWithFile(NULL, fileURL);
+	if (!stream) {
+		goto cleanup;
+	}
+
+	if (!CFReadStreamOpen(stream)) {
+		goto cleanup;
+	}
+
+	// Parse plist
+	CFErrorRef error = NULL;
+	plist = CFPropertyListCreateWithStream(NULL, stream, 0, kCFPropertyListImmutable, NULL, &error);
+	if (error) {
+		CFRelease(error);
+		goto cleanup;
+	}
+
+	if (!plist || CFGetTypeID(plist) != CFDictionaryGetTypeID()) {
+		goto cleanup;
+	}
+
+	// Extract Label key
+	label = CFDictionaryGetValue((CFDictionaryRef)plist, CFSTR("Label"));
+	if (label && CFGetTypeID(label) == CFStringGetTypeID()) {
+		// Convert CFString to C string
+		CFIndex length = CFStringGetLength(label);
+		CFIndex maxSize = CFStringGetMaximumSizeForEncoding(length, kCFStringEncodingUTF8) + 1;
+		result = (char*)malloc(maxSize);
+		if (result) {
+			if (!CFStringGetCString(label, result, maxSize, kCFStringEncodingUTF8)) {
+				free(result);
+				result = NULL;
 			}
 		}
-		pclose(fp);
 	}
+
+cleanup:
+	if (stream) {
+		CFReadStreamClose(stream);
+		CFRelease(stream);
+	}
+	if (fileURL) CFRelease(fileURL);
+	if (plist) CFRelease(plist);
 
 	return result;
 }

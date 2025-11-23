@@ -66,6 +66,7 @@ static void remove_lock_file(void) {
 @interface TCCButtonHandler : NSObject
 @property (nonatomic, assign) NSView *contentView;
 @property (nonatomic, strong) NSTimer *updateTimer;
+@property (nonatomic, assign) BOOL cancelled;  // Flag to indicate handler is being deallocated
 
 - (instancetype)initWithContentView:(NSView*)view;
 - (void)openAccessibilitySettings:(id)sender;
@@ -83,11 +84,13 @@ static void remove_lock_file(void) {
     if (self) {
         _contentView = view;
         _updateTimer = nil;
+        _cancelled = NO;
     }
     return self;
 }
 
 - (void)dealloc {
+    self.cancelled = YES;  // Signal to async blocks that handler is being deallocated
     [self stopPeriodicUpdates];
     [super dealloc];
 }
@@ -165,15 +168,16 @@ static void remove_lock_file(void) {
 }
 
 - (void)updatePermissionStatus {
-    // Use unsafe_unretained instead of weak for MRC compatibility
-    __unsafe_unretained TCCButtonHandler *unsafeSelf = self;
+    // Retain self for block's lifetime to prevent use-after-free
+    __block TCCButtonHandler *blockSelf = [self retain];
 
     // Check permissions on background thread to avoid blocking UI
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         @autoreleasepool {
-            // Check if window is still valid (unsafe but necessary without ARC __weak)
-            if (!unsafeSelf || !unsafeSelf.contentView) {
-                NSLog(@"[TCC-UI] Window deallocated during permission check, aborting");
+            // Check if handler was cancelled
+            if (blockSelf.cancelled) {
+                NSLog(@"[TCC-UI] Handler cancelled during permission check, aborting");
+                [blockSelf release];
                 return;
             }
 
@@ -184,14 +188,15 @@ static void remove_lock_file(void) {
 
             // Update UI on main thread
             dispatch_async(dispatch_get_main_queue(), ^{
-                // Check again if window is still valid
-                if (!unsafeSelf || !unsafeSelf.contentView) {
-                    NSLog(@"[TCC-UI] Window deallocated before UI update, aborting");
+                // Check again if handler was cancelled
+                if (blockSelf.cancelled || !blockSelf.contentView) {
+                    NSLog(@"[TCC-UI] Handler cancelled before UI update, aborting");
+                    [blockSelf release];
                     return;
                 }
 
                 // Snapshot subviews to avoid issues if view hierarchy changes during iteration
-                NSArray *subviews = [unsafeSelf.contentView subviews];
+                NSArray *subviews = [blockSelf.contentView subviews];
                 for (NSView *subview in subviews) {
                 if ([subview isKindOfClass:[NSButton class]]) {
                     NSButton *button = (NSButton*)subview;
@@ -210,12 +215,13 @@ static void remove_lock_file(void) {
 
                     // Update button display based on status
                     if (status == TCC_PERMISSION_GRANTED_USER || status == TCC_PERMISSION_GRANTED_MDM) {
-                        [unsafeSelf replaceButtonWithSuccessIcon:button];
+                        [blockSelf replaceButtonWithSuccessIcon:button];
                     } else {
-                        [unsafeSelf showButton:button];
+                        [blockSelf showButton:button];
                     }
                 }
             }
+                [blockSelf release];  // Release after UI update
             });
         }
     });
@@ -238,16 +244,17 @@ static void remove_lock_file(void) {
 
     // For Screen Recording and FDA, we need light polling since there's no notification
     // Use 3-second interval since we have real-time updates for Accessibility via notification
-    __unsafe_unretained TCCButtonHandler *unsafeSelf = self;
+    __block TCCButtonHandler *blockSelf = [self retain];
     self.updateTimer = [NSTimer timerWithTimeInterval:3.0
                                                repeats:YES
                                                  block:^(NSTimer *timer) {
-        if (unsafeSelf) {
+        if (!blockSelf.cancelled) {
             // Only check Screen Recording and FDA (Accessibility updated via notification)
-            [unsafeSelf checkScreenRecordingAndFDA];
+            [blockSelf checkScreenRecordingAndFDA];
         } else {
-            NSLog(@"[TCC-UI] Window deallocated, invalidating timer");
+            NSLog(@"[TCC-UI] Handler cancelled, invalidating timer");
             [timer invalidate];
+            [blockSelf release];
         }
     }];
 
@@ -258,15 +265,16 @@ static void remove_lock_file(void) {
 - (void)accessibilityPermissionChanged:(NSNotification *)notification {
     NSLog(@"[TCC-UI] Accessibility permission changed notification received");
 
-    // Use unsafe_unretained instead of weak for MRC compatibility
-    __unsafe_unretained TCCButtonHandler *unsafeSelf = self;
+    // Retain self for block's lifetime to prevent use-after-free
+    __block TCCButtonHandler *blockSelf = [self retain];
 
     // Small delay to let the change settle, then check on background thread
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         @autoreleasepool {
-            // Check if window is still valid
-            if (!unsafeSelf || !unsafeSelf.contentView) {
-                NSLog(@"[TCC-UI] Window deallocated during accessibility check, aborting");
+            // Check if handler was cancelled
+            if (blockSelf.cancelled) {
+                NSLog(@"[TCC-UI] Handler cancelled during accessibility check, aborting");
+                [blockSelf release];
                 return;
             }
 
@@ -274,27 +282,29 @@ static void remove_lock_file(void) {
 
             // Update UI on main thread
             dispatch_async(dispatch_get_main_queue(), ^{
-                // Check again if window is still valid before UI update
-                if (!unsafeSelf || !unsafeSelf.contentView) {
-                    NSLog(@"[TCC-UI] Window deallocated before accessibility UI update, aborting");
+                // Check again if handler was cancelled before UI update
+                if (blockSelf.cancelled || !blockSelf.contentView) {
+                    NSLog(@"[TCC-UI] Handler cancelled before accessibility UI update, aborting");
+                    [blockSelf release];
                     return;
                 }
 
                 // Snapshot subviews to avoid issues if view hierarchy changes during iteration
-                NSArray *subviews = [unsafeSelf.contentView subviews];
+                NSArray *subviews = [blockSelf.contentView subviews];
                 for (NSView *subview in subviews) {
                     if ([subview isKindOfClass:[NSButton class]]) {
                         NSButton *button = (NSButton*)subview;
                         if ([button tag] == BUTTON_TAG_ACCESSIBILITY) {
                             if (accessibility == TCC_PERMISSION_GRANTED_USER || accessibility == TCC_PERMISSION_GRANTED_MDM) {
-                                [unsafeSelf replaceButtonWithSuccessIcon:button];
+                                [blockSelf replaceButtonWithSuccessIcon:button];
                             } else {
-                                [unsafeSelf showButton:button];
+                                [blockSelf showButton:button];
                             }
                             break;
                         }
                     }
                 }
+                [blockSelf release];  // Release after UI update
             });
         }
     });
@@ -302,14 +312,15 @@ static void remove_lock_file(void) {
 
 // Check only Screen Recording and FDA (called by timer)
 - (void)checkScreenRecordingAndFDA {
-    // Use unsafe_unretained instead of weak for MRC compatibility
-    __unsafe_unretained TCCButtonHandler *unsafeSelf = self;
+    // Retain self for block's lifetime to prevent use-after-free
+    __block TCCButtonHandler *blockSelf = [self retain];
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         @autoreleasepool {
-            // Check if window is still valid before doing expensive work
-            if (!unsafeSelf || !unsafeSelf.contentView) {
-                NSLog(@"[TCC-UI] Window deallocated during permission check, aborting");
+            // Check if handler was cancelled before doing expensive work
+            if (blockSelf.cancelled) {
+                NSLog(@"[TCC-UI] Handler cancelled during permission check, aborting");
+                [blockSelf release];
                 return;
             }
 
@@ -317,14 +328,15 @@ static void remove_lock_file(void) {
             TCC_PermissionStatus screen_recording = check_screen_recording_permission();
 
             dispatch_async(dispatch_get_main_queue(), ^{
-                // Check again if window is still valid before UI update
-                if (!unsafeSelf || !unsafeSelf.contentView) {
-                    NSLog(@"[TCC-UI] Window deallocated before UI update, aborting");
+                // Check again if handler was cancelled before UI update
+                if (blockSelf.cancelled || !blockSelf.contentView) {
+                    NSLog(@"[TCC-UI] Handler cancelled before UI update, aborting");
+                    [blockSelf release];
                     return;
                 }
 
                 // Snapshot subviews to avoid issues if view hierarchy changes during iteration
-                NSArray *subviews = [unsafeSelf.contentView subviews];
+                NSArray *subviews = [blockSelf.contentView subviews];
                 for (NSView *subview in subviews) {
                 if ([subview isKindOfClass:[NSButton class]]) {
                     NSButton *button = (NSButton*)subview;
@@ -340,12 +352,13 @@ static void remove_lock_file(void) {
                     }
 
                     if (status == TCC_PERMISSION_GRANTED_USER || status == TCC_PERMISSION_GRANTED_MDM) {
-                        [unsafeSelf replaceButtonWithSuccessIcon:button];
+                        [blockSelf replaceButtonWithSuccessIcon:button];
                     } else {
-                        [unsafeSelf showButton:button];
+                        [blockSelf showButton:button];
                     }
                 }
             }
+                [blockSelf release];  // Release after UI update
             });
         }
     });
