@@ -3,7 +3,6 @@
 #include <Security/AuthorizationTags.h>
 #include <mach-o/dyld.h>
 #include <stdio.h>
-#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -14,8 +13,8 @@
 #include <time.h>
 #include <errno.h>
 #include "../../../microstack/ILibSimpleDataStore.h"
-
-#define LOG_FILE "/tmp/meshagent-install-ui.log"
+#include "../mac_logging_utils.h"  // Shared logging utility
+#include "../mac_plist_utils.h"    // Shared plist parsing utility
 
 // Global progress callback
 static ProgressCallback g_progressCallback = NULL;
@@ -40,28 +39,6 @@ void set_progress_callback(ProgressCallback callback) {
 }
 
 /**
- * Helper function to log to both stderr and file
- */
-static void log_message(const char* format, ...) {
-    va_list args1, args2;
-    va_start(args1, format);
-    va_copy(args2, args1);
-
-    // Log to stderr
-    vfprintf(stderr, format, args1);
-    va_end(args1);
-
-    // Log to file
-    FILE* logFile = fopen(LOG_FILE, "a");
-    if (logFile) {
-        vfprintf(logFile, format, args2);
-        fflush(logFile);
-        fclose(logFile);
-    }
-    va_end(args2);
-}
-
-/**
  * Get the path to the current executable
  */
 static char* get_executable_path(void) {
@@ -69,7 +46,7 @@ static char* get_executable_path(void) {
     uint32_t size = sizeof(exePath);
 
     if (_NSGetExecutablePath(exePath, &size) != 0) {
-        log_message("[AUTH-INSTALL] Error: Failed to get executable path\n");
+        mesh_log_message("[AUTH-INSTALL] Error: Failed to get executable path\n");
         return NULL;
     }
 
@@ -87,7 +64,7 @@ static int execute_with_authorization(const char* executable, char* const argv[]
     status = AuthorizationCreate(NULL, kAuthorizationEmptyEnvironment,
                                   kAuthorizationFlagDefaults, &authRef);
     if (status != errAuthorizationSuccess) {
-        log_message("[AUTH-INSTALL] Error: Failed to create authorization reference (status: %d)\n", status);
+        mesh_log_message("[AUTH-INSTALL] Error: Failed to create authorization reference (status: %d)\n", status);
         return -1;
     }
 
@@ -101,20 +78,20 @@ static int execute_with_authorization(const char* executable, char* const argv[]
 
     status = AuthorizationCopyRights(authRef, &rights, NULL, flags, NULL);
     if (status != errAuthorizationSuccess) {
-        log_message("[AUTH-INSTALL] Error: Failed to obtain authorization (status: %d)\n", status);
+        mesh_log_message("[AUTH-INSTALL] Error: Failed to obtain authorization (status: %d)\n", status);
         if (status == errAuthorizationCanceled) {
-            log_message("[AUTH-INSTALL] User cancelled authentication\n");
+            mesh_log_message("[AUTH-INSTALL] User cancelled authentication\n");
         }
         AuthorizationFree(authRef, kAuthorizationFlagDefaults);
         return -2;
     }
 
     // Execute the command with privileges
-    log_message("[AUTH-INSTALL] Executing: %s", executable);
+    mesh_log_message("[AUTH-INSTALL] Executing: %s", executable);
     for (int i = 0; argv[i] != NULL; i++) {
-        log_message(" %s", argv[i]);
+        mesh_log_message(" %s", argv[i]);
     }
-    log_message("\n");
+    mesh_log_message("\n");
 
     FILE* pipe = NULL;
     status = AuthorizationExecuteWithPrivileges(authRef, executable,
@@ -122,13 +99,13 @@ static int execute_with_authorization(const char* executable, char* const argv[]
                                                  argv, &pipe);
 
     if (status != errAuthorizationSuccess) {
-        log_message("[AUTH-INSTALL] Error: Failed to execute command (status: %d)\n", status);
+        mesh_log_message("[AUTH-INSTALL] Error: Failed to execute command (status: %d)\n", status);
         AuthorizationFree(authRef, kAuthorizationFlagDefaults);
         return -3;
     }
 
     // Wait for process and read output simultaneously
-    log_message("[AUTH-INSTALL] [%ld] Starting upgrade process...\n", time(NULL));
+    mesh_log_message("[AUTH-INSTALL] [%ld] Starting upgrade process...\n", time(NULL));
 
     // Set pipe to non-blocking mode if we have one
     int fd = -1;
@@ -162,7 +139,7 @@ static int execute_with_authorization(const char* executable, char* const argv[]
 
         if (result > 0) {
             // Process exited - read any remaining output
-            log_message("[AUTH-INSTALL] [%ld] Process exited (PID=%d), reading remaining output...\n", time(NULL), result);
+            mesh_log_message("[AUTH-INSTALL] [%ld] Process exited (PID=%d), reading remaining output...\n", time(NULL), result);
             if (pipe) {
                 while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
                     printf("%s", buffer);
@@ -175,7 +152,7 @@ static int execute_with_authorization(const char* executable, char* const argv[]
             break;
         } else if (result < 0) {
             // Error or no child processes
-            log_message("[AUTH-INSTALL] [%ld] ✗ No child process found (errno=%d)\n", time(NULL), errno);
+            mesh_log_message("[AUTH-INSTALL] [%ld] ✗ No child process found (errno=%d)\n", time(NULL), errno);
             if (pipe) fclose(pipe);
             break;
         }
@@ -186,38 +163,38 @@ static int execute_with_authorization(const char* executable, char* const argv[]
 
     // Handle timeout case
     if (result == 0) {
-        log_message("[AUTH-INSTALL] [%ld] ⏱ Process timed out after %d seconds\n", time(NULL), waitTimeoutSeconds);
+        mesh_log_message("[AUTH-INSTALL] [%ld] ⏱ Process timed out after %d seconds\n", time(NULL), waitTimeoutSeconds);
         if (pipe) fclose(pipe);
     }
 
     // Clean up
     AuthorizationFree(authRef, kAuthorizationFlagDefaults);
 
-    log_message("[AUTH-INSTALL] [%ld] Wait loop exited: result=%d, WIFEXITED=%d\n",
+    mesh_log_message("[AUTH-INSTALL] [%ld] Wait loop exited: result=%d, WIFEXITED=%d\n",
             time(NULL), result, result > 0 ? WIFEXITED(waitStatus) : 0);
 
     if (result > 0 && WIFEXITED(waitStatus)) {
         int exitCode = WEXITSTATUS(waitStatus);
-        log_message("[AUTH-INSTALL] [%ld] ✓ Command completed with exit code: %d\n", time(NULL), exitCode);
+        mesh_log_message("[AUTH-INSTALL] [%ld] ✓ Command completed with exit code: %d\n", time(NULL), exitCode);
         return exitCode;
     } else if (result > 0 && WIFSIGNALED(waitStatus)) {
         // Process was killed by a signal
         int signal = WTERMSIG(waitStatus);
-        log_message("[AUTH-INSTALL] [%ld] ✗ Command was killed by signal %d\n", time(NULL), signal);
+        mesh_log_message("[AUTH-INSTALL] [%ld] ✗ Command was killed by signal %d\n", time(NULL), signal);
         return -4;
     } else if (result == 0) {
         // Timeout - process is still running
-        log_message("[AUTH-INSTALL] [%ld] ⏱ Command timed out but may be running in background\n", time(NULL));
+        mesh_log_message("[AUTH-INSTALL] [%ld] ⏱ Command timed out but may be running in background\n", time(NULL));
         return 0;  // Return success - the command was launched
     } else {
-        log_message("[AUTH-INSTALL] [%ld] ✗ Command did not exit normally (result=%d)\n", time(NULL), result);
+        mesh_log_message("[AUTH-INSTALL] [%ld] ✗ Command did not exit normally (result=%d)\n", time(NULL), result);
         return -4;
     }
 }
 
 int execute_meshagent_install(const char* installPath, const char* mshFilePath, int enableDisableUpdate) {
     if (!installPath || !mshFilePath) {
-        log_message("[AUTH-INSTALL] Error: Invalid parameters\n");
+        mesh_log_message("[AUTH-INSTALL] Error: Invalid parameters\n");
         return -1;
     }
 
@@ -227,9 +204,9 @@ int execute_meshagent_install(const char* installPath, const char* mshFilePath, 
         return -1;
     }
 
-    log_message("[AUTH-INSTALL] Installing MeshAgent to: %s\n", installPath);
-    log_message("[AUTH-INSTALL] Using config file: %s\n", mshFilePath);
-    log_message("[AUTH-INSTALL] Automatic updates: %s\n", enableDisableUpdate ? "enabled" : "disabled");
+    mesh_log_message("[AUTH-INSTALL] Installing MeshAgent to: %s\n", installPath);
+    mesh_log_message("[AUTH-INSTALL] Using config file: %s\n", mshFilePath);
+    mesh_log_message("[AUTH-INSTALL] Automatic updates: %s\n", enableDisableUpdate ? "enabled" : "disabled");
 
     // Build command arguments
     char installPathArg[2048];
@@ -255,7 +232,7 @@ int execute_meshagent_install(const char* installPath, const char* mshFilePath, 
 
 int execute_meshagent_upgrade(const char* installPath, int enableDisableUpdate) {
     if (!installPath) {
-        log_message("[AUTH-INSTALL] Error: Invalid parameter\n");
+        mesh_log_message("[AUTH-INSTALL] Error: Invalid parameter\n");
         return -1;
     }
 
@@ -265,8 +242,8 @@ int execute_meshagent_upgrade(const char* installPath, int enableDisableUpdate) 
         return -1;
     }
 
-    log_message("[AUTH-INSTALL] Upgrading MeshAgent at: %s\n", installPath);
-    log_message("[AUTH-INSTALL] Automatic updates: %s\n", enableDisableUpdate ? "enabled" : "disabled");
+    mesh_log_message("[AUTH-INSTALL] Upgrading MeshAgent at: %s\n", installPath);
+    mesh_log_message("[AUTH-INSTALL] Automatic updates: %s\n", enableDisableUpdate ? "enabled" : "disabled");
 
     // Build command arguments
     char installPathArg[2048];
@@ -295,13 +272,7 @@ static int read_update_setting_from_launchdaemon(const char* installPath) {
     DIR* dir = opendir("/Library/LaunchDaemons");
     if (!dir) return -1;
 
-    typedef struct {
-        char plistPath[1024];
-        int hasDisableUpdate;
-        time_t modTime;
-    } PlistInfo;
-
-    PlistInfo plists[100];
+    MeshPlistInfo plists[100];
     int plistCount = 0;
 
     struct dirent* entry;
@@ -311,58 +282,12 @@ static int read_update_setting_from_launchdaemon(const char* installPath) {
         char plistPath[1024];
         snprintf(plistPath, sizeof(plistPath), "/Library/LaunchDaemons/%s", entry->d_name);
 
-        FILE* fp = fopen(plistPath, "r");
-        if (!fp) continue;
-
-        char line[2048];
-        int inProgramArguments = 0;
-        int foundMatchingPath = 0;
-        int hasDisableUpdate = 0;
-
-        while (fgets(line, sizeof(line), fp)) {
-            if (strstr(line, "<key>ProgramArguments</key>")) {
-                inProgramArguments = 1;
-                continue;
+        MeshPlistInfo info;
+        if (mesh_parse_launchdaemon_plist(plistPath, &info)) {
+            // Check if this plist contains a path matching our install path
+            if (strstr(info.programPath, installPath) != NULL) {
+                plists[plistCount++] = info;
             }
-
-            if (inProgramArguments) {
-                if (strstr(line, "</array>")) {
-                    break;
-                }
-
-                char* stringStart = strstr(line, "<string>");
-                char* stringEnd = strstr(line, "</string>");
-                if (stringStart && stringEnd) {
-                    stringStart += 8;
-                    int len = stringEnd - stringStart;
-                    if (len > 0 && len < 1024) {
-                        char value[1024];
-                        strncpy(value, stringStart, len);
-                        value[len] = '\0';
-
-                        // Check if this path matches our install path
-                        if (strstr(value, "meshagent") && strstr(value, installPath)) {
-                            foundMatchingPath = 1;
-                        }
-
-                        // Check for --disableUpdate=1
-                        if (strcmp(value, "--disableUpdate=1") == 0) {
-                            hasDisableUpdate = 1;
-                        }
-                    }
-                }
-            }
-        }
-        fclose(fp);
-
-        if (foundMatchingPath) {
-            PlistInfo info;
-            strncpy(info.plistPath, plistPath, sizeof(info.plistPath) - 1);
-            info.hasDisableUpdate = hasDisableUpdate;
-
-            struct stat st;
-            info.modTime = (stat(plistPath, &st) == 0) ? st.st_mtime : 0;
-            plists[plistCount++] = info;
         }
     }
     closedir(dir);
@@ -377,8 +302,8 @@ static int read_update_setting_from_launchdaemon(const char* installPath) {
         }
     }
 
-    log_message("[READ-SETTING] Found LaunchDaemon plist: %s\n", plists[newestIndex].plistPath);
-    log_message("[READ-SETTING] Has --disableUpdate=1: %s\n", plists[newestIndex].hasDisableUpdate ? "yes" : "no");
+    mesh_log_message("[READ-SETTING] Found LaunchDaemon plist: %s\n", plists[newestIndex].plistPath);
+    mesh_log_message("[READ-SETTING] Has --disableUpdate=1: %s\n", plists[newestIndex].hasDisableUpdate ? "yes" : "no");
 
     // Return: 0 if updates disabled (checkbox checked), 1 if enabled (checkbox unchecked)
     return plists[newestIndex].hasDisableUpdate ? 0 : 1;
@@ -403,12 +328,12 @@ int read_existing_update_setting(const char* installPath) {
     snprintf(mshPath, sizeof(mshPath), "%smeshagent.msh", installPath);
     snprintf(dbPath, sizeof(dbPath), "%smeshagent.db", installPath);
 
-    log_message("[READ-SETTING] Checking for update settings in: %s\n", installPath);
+    mesh_log_message("[READ-SETTING] Checking for update settings in: %s\n", installPath);
 
     // FIRST: Check LaunchDaemon plist (highest priority)
     int plistResult = read_update_setting_from_launchdaemon(installPath);
     if (plistResult >= 0) {
-        log_message("[READ-SETTING] Using setting from LaunchDaemon plist\n");
+        mesh_log_message("[READ-SETTING] Using setting from LaunchDaemon plist\n");
         return plistResult;
     }
 
@@ -423,7 +348,7 @@ int read_existing_update_setting(const char* installPath) {
             // Check if this line is disableUpdate=...
             if (strncmp(line, "disableUpdate=", 14) == 0) {
                 char* value = line + 14;
-                log_message("[READ-SETTING] Found disableUpdate in .msh: %s\n", value);
+                mesh_log_message("[READ-SETTING] Found disableUpdate in .msh: %s\n", value);
 
                 // If value is "1" or non-empty, updates are disabled
                 if (value[0] != '\0' && strcmp(value, "0") != 0) {
@@ -436,9 +361,9 @@ int read_existing_update_setting(const char* installPath) {
             }
         }
         fclose(mshFile);
-        log_message("[READ-SETTING] No disableUpdate found in .msh file\n");
+        mesh_log_message("[READ-SETTING] No disableUpdate found in .msh file\n");
     } else {
-        log_message("[READ-SETTING] No .msh file found\n");
+        mesh_log_message("[READ-SETTING] No .msh file found\n");
     }
 
     // THIRD: Try to read from meshagent.db
@@ -447,7 +372,7 @@ int read_existing_update_setting(const char* installPath) {
         int len = ILibSimpleDataStore_Get(db, "disableUpdate", buffer, sizeof(buffer));
         if (len > 0) {
             buffer[len] = '\0';
-            log_message("[READ-SETTING] Found disableUpdate in database: %s\n", buffer);
+            mesh_log_message("[READ-SETTING] Found disableUpdate in database: %s\n", buffer);
 
             // If value is "1" or non-empty, updates are disabled
             if (strcmp(buffer, "1") == 0) {
@@ -456,13 +381,13 @@ int read_existing_update_setting(const char* installPath) {
                 result = 1;  // Checkbox should be unchecked (enable updates)
             }
         } else {
-            log_message("[READ-SETTING] No disableUpdate found in database\n");
+            mesh_log_message("[READ-SETTING] No disableUpdate found in database\n");
         }
         ILibSimpleDataStore_Close(db);
     } else {
-        log_message("[READ-SETTING] Could not open meshagent.db\n");
+        mesh_log_message("[READ-SETTING] Could not open meshagent.db\n");
     }
 
-    log_message("[READ-SETTING] Final result: %d (1=enable updates, 0=disable updates)\n", result);
+    mesh_log_message("[READ-SETTING] Final result: %d (1=enable updates, 0=disable updates)\n", result);
     return result;
 }

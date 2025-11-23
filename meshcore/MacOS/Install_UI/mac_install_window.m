@@ -6,31 +6,9 @@
 #include <libgen.h>
 #include <dirent.h>
 #include <mach-o/dyld.h>
-#include <stdarg.h>
-
-#define LOG_FILE "/tmp/meshagent-install-ui.log"
-
-/**
- * Helper function to log to both stderr and file
- */
-static void log_message(const char* format, ...) {
-    va_list args1, args2;
-    va_start(args1, format);
-    va_copy(args2, args1);
-
-    // Log to stderr
-    vfprintf(stderr, format, args1);
-    va_end(args1);
-
-    // Log to file
-    FILE* logFile = fopen(LOG_FILE, "a");
-    if (logFile) {
-        vfprintf(logFile, format, args2);
-        fflush(logFile);
-        fclose(logFile);
-    }
-    va_end(args2);
-}
+#include "../mac_logging_utils.h"  // Shared logging utility
+#include "../mac_plist_utils.h"    // Shared plist parsing utility
+#import "../mac_ui_helpers.h"      // Shared UI helpers
 
 // Button handler class
 @interface InstallButtonHandler : NSObject
@@ -369,10 +347,10 @@ static void log_message(const char* format, ...) {
 @implementation InstallWindowDelegate
 
 - (void)windowWillClose:(NSNotification *)notification {
-    log_message("[INSTALL-UI] [%ld] windowWillClose called, stopping modal loop\n", time(NULL));
+    mesh_log_message("[INSTALL-UI] [%ld] windowWillClose called, stopping modal loop\n", time(NULL));
     _windowClosed = YES;
     [NSApp stopModal];
-    log_message("[INSTALL-UI] [%ld] Modal loop stopModal called\n", time(NULL));
+    mesh_log_message("[INSTALL-UI] [%ld] Modal loop stopModal called\n", time(NULL));
 }
 
 - (void)cancelClicked:(id)sender {
@@ -389,83 +367,7 @@ static BOOL fileExists(const char* path) {
     return (stat(path, &st) == 0);
 }
 
-// Structure to hold plist information
-typedef struct {
-    char plistPath[1024];
-    char meshagentPath[1024];
-    int hasDisableUpdate;  // 1 if --disableUpdate=1 is in ProgramArguments, 0 otherwise
-    time_t modTime;
-} MeshAgentPlistInfo;
-
-// Helper function to parse a plist file and extract meshagent path and disableUpdate setting
-static int parseLaunchDaemonPlist(const char* plistPath, MeshAgentPlistInfo* info) {
-    FILE* fp = fopen(plistPath, "r");
-    if (!fp) return 0;
-
-    char line[2048];
-    int inProgramArguments = 0;
-    int foundMeshagent = 0;
-    int hasDisableUpdate = 0;
-    char meshagentPath[1024] = {0};
-
-    while (fgets(line, sizeof(line), fp)) {
-        // Check if we're entering ProgramArguments array
-        if (strstr(line, "<key>ProgramArguments</key>")) {
-            inProgramArguments = 1;
-            continue;
-        }
-
-        if (inProgramArguments) {
-            // Check if we're exiting the array
-            if (strstr(line, "</array>")) {
-                inProgramArguments = 0;
-                break;
-            }
-
-            // Look for <string> entries containing "meshagent"
-            char* stringStart = strstr(line, "<string>");
-            char* stringEnd = strstr(line, "</string>");
-            if (stringStart && stringEnd) {
-                stringStart += 8; // Skip "<string>"
-                int len = stringEnd - stringStart;
-                if (len > 0 && len < 1024) {
-                    char value[1024];
-                    strncpy(value, stringStart, len);
-                    value[len] = '\0';
-
-                    // Check if this is a meshagent path
-                    if (strstr(value, "meshagent") && !foundMeshagent) {
-                        strncpy(meshagentPath, value, sizeof(meshagentPath) - 1);
-                        foundMeshagent = 1;
-                    }
-
-                    // Check for --disableUpdate=1
-                    if (strcmp(value, "--disableUpdate=1") == 0) {
-                        hasDisableUpdate = 1;
-                    }
-                }
-            }
-        }
-    }
-    fclose(fp);
-
-    if (foundMeshagent) {
-        strncpy(info->plistPath, plistPath, sizeof(info->plistPath) - 1);
-        strncpy(info->meshagentPath, meshagentPath, sizeof(info->meshagentPath) - 1);
-        info->hasDisableUpdate = hasDisableUpdate;
-
-        // Get modification time
-        struct stat st;
-        if (stat(plistPath, &st) == 0) {
-            info->modTime = st.st_mtime;
-        } else {
-            info->modTime = 0;
-        }
-        return 1;
-    }
-
-    return 0;
-}
+// Legacy parsing function removed - now using shared mac_plist_utils.h
 
 // Helper function to find existing MeshAgent installation by scanning LaunchDaemons
 // Returns NULL if not found, otherwise returns the installation directory path
@@ -473,7 +375,7 @@ static char* findExistingInstallation(void) {
     DIR* dir = opendir("/Library/LaunchDaemons");
     if (!dir) return NULL;
 
-    MeshAgentPlistInfo plists[100];
+    MeshPlistInfo plists[100];
     int plistCount = 0;
 
     struct dirent* entry;
@@ -484,8 +386,8 @@ static char* findExistingInstallation(void) {
         char plistPath[1024];
         snprintf(plistPath, sizeof(plistPath), "/Library/LaunchDaemons/%s", entry->d_name);
 
-        MeshAgentPlistInfo info;
-        if (parseLaunchDaemonPlist(plistPath, &info)) {
+        MeshPlistInfo info;
+        if (mesh_parse_launchdaemon_plist(plistPath, &info)) {
             plists[plistCount++] = info;
         }
     }
@@ -503,7 +405,7 @@ static char* findExistingInstallation(void) {
 
     // Extract installation directory from meshagent path
     char pathCopy[1024];
-    strncpy(pathCopy, plists[newestIndex].meshagentPath, sizeof(pathCopy) - 1);
+    strncpy(pathCopy, plists[newestIndex].programPath, sizeof(pathCopy) - 1);
     pathCopy[sizeof(pathCopy) - 1] = '\0';
 
     // Check if path contains .app bundle
@@ -581,25 +483,6 @@ static char* findMshFile(void) {
     return NULL;
 }
 
-// Helper function to create labels
-static NSTextField* createLabel(NSString* text, NSRect frame, BOOL bold) {
-    NSTextField* label = [[NSTextField alloc] initWithFrame:frame];
-    [label setStringValue:text];
-    [label setBezeled:NO];
-    [label setDrawsBackground:NO];
-    [label setEditable:NO];
-    [label setSelectable:NO];
-
-    if (bold) {
-        [label setFont:[NSFont boldSystemFontOfSize:13]];
-    } else {
-        [label setFont:[NSFont systemFontOfSize:12]];
-        [label setTextColor:[NSColor secondaryLabelColor]];
-    }
-
-    return label;
-}
-
 InstallResult show_install_assistant_window(void) {
     @autoreleasepool {
         InstallResult result = {0};
@@ -654,12 +537,12 @@ InstallResult show_install_assistant_window(void) {
         }
 
         // Add title
-        NSTextField* titleLabel = createLabel(@"MeshAgent Deployment Assistant", NSMakeRect(90, 350, 490, 24), YES);
+        NSTextField* titleLabel = mesh_createLabel(@"MeshAgent Deployment Assistant", NSMakeRect(90, 350, 490, 24), YES);
         [titleLabel setFont:[NSFont systemFontOfSize:16 weight:NSFontWeightBold]];
         [contentView addSubview:titleLabel];
 
         // Add description
-        NSTextField* descLabel = createLabel(@"Install or upgrade MeshAgent", NSMakeRect(90, 325, 490, 20), NO);
+        NSTextField* descLabel = mesh_createLabel(@"Install or upgrade MeshAgent", NSMakeRect(90, 325, 490, 20), NO);
         [contentView addSubview:descLabel];
 
         // Radio buttons for mode selection - Install first, then Upgrade
@@ -673,7 +556,7 @@ InstallResult show_install_assistant_window(void) {
         [contentView addSubview:newInstallRadio];
 
         // Install path field
-        NSTextField* installPathLabel = createLabel(@"Install path:", NSMakeRect(60, 240, 520, 20), NO);
+        NSTextField* installPathLabel = mesh_createLabel(@"Install path:", NSMakeRect(60, 240, 520, 20), NO);
         [contentView addSubview:installPathLabel];
 
         NSTextField* installPathField = [[NSTextField alloc] initWithFrame:NSMakeRect(60, 215, 380, 24)];
@@ -695,7 +578,7 @@ InstallResult show_install_assistant_window(void) {
         [contentView addSubview:browseInstall];
 
         // MSH file field (grouped with Install)
-        NSTextField* mshFileLabel = createLabel(@"Configuration file (.msh):", NSMakeRect(60, 185, 520, 20), NO);
+        NSTextField* mshFileLabel = mesh_createLabel(@"Configuration file (.msh):", NSMakeRect(60, 185, 520, 20), NO);
         [contentView addSubview:mshFileLabel];
 
         NSTextField* mshFileField = [[NSTextField alloc] initWithFrame:NSMakeRect(60, 160, 380, 24)];
@@ -727,7 +610,7 @@ InstallResult show_install_assistant_window(void) {
         [contentView addSubview:upgradeRadio];
 
         // Upgrade path field
-        NSTextField* upgradePathLabel = createLabel(@"Current install path:", NSMakeRect(60, 85, 520, 20), NO);
+        NSTextField* upgradePathLabel = mesh_createLabel(@"Current install path:", NSMakeRect(60, 85, 520, 20), NO);
         [contentView addSubview:upgradePathLabel];
 
         NSTextField* upgradePathField = [[NSTextField alloc] initWithFrame:NSMakeRect(60, 60, 380, 24)];
@@ -790,9 +673,9 @@ InstallResult show_install_assistant_window(void) {
         // Show window and run modal
         [window makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
-        log_message("[INSTALL-UI] [%ld] Entering modal loop...\n", time(NULL));
+        mesh_log_message("[INSTALL-UI] [%ld] Entering modal loop...\n", time(NULL));
         [NSApp runModalForWindow:window];
-        log_message("[INSTALL-UI] [%ld] Modal loop returned, cleaning up\n", time(NULL));
+        mesh_log_message("[INSTALL-UI] [%ld] Modal loop returned, cleaning up\n", time(NULL));
 
         // Cleanup
         [window close];

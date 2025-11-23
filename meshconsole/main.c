@@ -53,31 +53,9 @@ limitations under the License.
 #include "meshcore/MacOS/TCC_UI/mac_permissions_window.h"
 #include "meshcore/MacOS/Install_UI/mac_install_window.h"
 #include "meshcore/MacOS/Install_UI/mac_authorized_install.h"
+#include "meshcore/MacOS/mac_logging_utils.h"  // Shared logging utility
+#include "meshcore/MacOS/mac_plist_utils.h"    // Shared plist parsing utility
 #include <CoreGraphics/CoreGraphics.h>  // For CGEventSourceFlagsState()
-
-#define LOG_FILE "/tmp/meshagent-install-ui.log"
-
-/**
- * Helper function to log to both stderr and file
- */
-static void log_message(const char* format, ...) {
-    va_list args1, args2;
-    va_start(args1, format);
-    va_copy(args2, args1);
-
-    // Log to stderr
-    vfprintf(stderr, format, args1);
-    va_end(args1);
-
-    // Log to file
-    FILE* logFile = fopen(LOG_FILE, "a");
-    if (logFile) {
-        vfprintf(logFile, format, args2);
-        fflush(logFile);
-        fclose(logFile);
-    }
-    va_end(args2);
-}
 
 #endif
 
@@ -126,109 +104,7 @@ ILibTransport_DoneState kvm_serviceWriteSink(char *buffer, int bufferLen, void *
 	return ILibTransport_DoneState_COMPLETE;
 }
 
-// Helper function to extract Label from a plist file
-// SECURITY: Uses CoreFoundation plist parser instead of shell commands to prevent command injection
-char* extract_plist_label(const char* plistPath)
-{
-	char *result = NULL;
-	CFURLRef fileURL = NULL;
-	CFReadStreamRef stream = NULL;
-	CFPropertyListRef plist = NULL;
-	CFStringRef label = NULL;
-
-	// Create URL from file path
-	CFStringRef pathString = CFStringCreateWithCString(NULL, plistPath, kCFStringEncodingUTF8);
-	if (!pathString) {
-		goto cleanup;
-	}
-
-	fileURL = CFURLCreateWithFileSystemPath(NULL, pathString, kCFURLPOSIXPathStyle, false);
-	CFRelease(pathString);
-	if (!fileURL) {
-		goto cleanup;
-	}
-
-	// Open file stream
-	stream = CFReadStreamCreateWithFile(NULL, fileURL);
-	if (!stream) {
-		goto cleanup;
-	}
-
-	if (!CFReadStreamOpen(stream)) {
-		goto cleanup;
-	}
-
-	// Parse plist
-	CFErrorRef error = NULL;
-	plist = CFPropertyListCreateWithStream(NULL, stream, 0, kCFPropertyListImmutable, NULL, &error);
-	if (error) {
-		CFRelease(error);
-		goto cleanup;
-	}
-
-	if (!plist || CFGetTypeID(plist) != CFDictionaryGetTypeID()) {
-		goto cleanup;
-	}
-
-	// Extract Label key
-	label = CFDictionaryGetValue((CFDictionaryRef)plist, CFSTR("Label"));
-	if (label && CFGetTypeID(label) == CFStringGetTypeID()) {
-		// Convert CFString to C string
-		CFIndex length = CFStringGetLength(label);
-		CFIndex maxSize = CFStringGetMaximumSizeForEncoding(length, kCFStringEncodingUTF8) + 1;
-		result = (char*)malloc(maxSize);
-		if (result) {
-			if (!CFStringGetCString(label, result, maxSize, kCFStringEncodingUTF8)) {
-				free(result);
-				result = NULL;
-			}
-		}
-	}
-
-cleanup:
-	if (stream) {
-		CFReadStreamClose(stream);
-		CFRelease(stream);
-	}
-	if (fileURL) CFRelease(fileURL);
-	if (plist) CFRelease(plist);
-
-	return result;
-}
-
-// Helper function to extract first ProgramArguments path from plist
-char* extract_plist_program_path(const char* plistPath)
-{
-	FILE *fp;
-	char cmd[1024];
-	char *result = NULL;
-	char buffer[512];
-
-	// Use awk to extract first ProgramArguments string (the binary path)
-	snprintf(cmd, sizeof(cmd),
-		"cat '%s' | tr '\\n' '.' | awk '{ split($0, a, \"<key>ProgramArguments</key>\"); "
-		"split(a[2], b, \"</array>\"); split(b[1], c, \"<string>\"); "
-		"split(c[2], d, \"</string>\"); print d[1]; }'",
-		plistPath);
-
-	fp = popen(cmd, "r");
-	if (fp != NULL)
-	{
-		if (fgets(buffer, sizeof(buffer), fp) != NULL)
-		{
-			// Remove trailing newline
-			size_t len = strlen(buffer);
-			if (len > 0 && buffer[len-1] == '\n') buffer[len-1] = '\0';
-			if (strlen(buffer) > 0)
-			{
-				result = strdup(buffer);
-			}
-		}
-		pclose(fp);
-	}
-
-	return result;
-}
+// Legacy functions removed - now using shared plist utilities from mac_plist_utils.h
 
 // Discover serviceId by finding which LaunchAgent plist references our binary
 char* discover_service_id_from_plist(const char* binaryPath)
@@ -254,15 +130,15 @@ char* discover_service_id_from_plist(const char* binaryPath)
 		char plistPath[PATH_MAX];
 		snprintf(plistPath, sizeof(plistPath), "%s/%s", launchAgentDir, entry->d_name);
 
-		// Extract ProgramArguments path
-		char *programPath = extract_plist_program_path(plistPath);
+		// Extract ProgramArguments path using shared utility
+		char *programPath = mesh_plist_get_program_path(plistPath);
 		if (programPath != NULL)
 		{
 			// Check if it matches our binary path
 			if (strcmp(programPath, binaryPath) == 0)
 			{
-				// Found it! Extract the Label
-				serviceId = extract_plist_label(plistPath);
+				// Found it! Extract the Label using shared utility
+				serviceId = mesh_plist_get_label(plistPath);
 				free(programPath);
 				break;
 			}
@@ -470,7 +346,7 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 		if (cmdKeyHeld)
 		{
 			// CMD + double-click -> show Installation Assistant
-			log_message("[MAIN] [%ld] MeshAgent launched from Finder with CMD key - showing Installation Assistant\n", time(NULL));
+			mesh_log_message("[MAIN] [%ld] MeshAgent launched from Finder with CMD key - showing Installation Assistant\n", time(NULL));
 
 			// Redirect stdout and stderr to log file to capture ALL output including TCC spawn traces
 			int log_fd = open("/tmp/meshagent-install-ui.log", O_WRONLY | O_APPEND | O_CREAT, 0666);
@@ -485,12 +361,12 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 			}
 
 			InstallResult result = show_install_assistant_window();
-			log_message("[MAIN] [%ld] Installation Assistant returned (cancelled=%d, mode=%d)\n",
+			mesh_log_message("[MAIN] [%ld] Installation Assistant returned (cancelled=%d, mode=%d)\n",
 			        time(NULL), result.cancelled, result.mode);
 
 			// Note: The Installation Assistant window handles upgrade/install execution internally
 			// with progress UI, so we don't need to execute anything here. Just exit.
-			log_message("[MAIN] [%ld] Installation Assistant closed, exiting\n", time(NULL));
+			mesh_log_message("[MAIN] [%ld] Installation Assistant closed, exiting\n", time(NULL));
 			exit(0);
 		}
 		else if (shiftKeyHeld)

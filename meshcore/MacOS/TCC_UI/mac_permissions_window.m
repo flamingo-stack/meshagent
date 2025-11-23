@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <execinfo.h>
 #include <crt_externs.h>
+#import "../mac_ui_helpers.h"  // Shared UI helpers
 
 // Lock file to prevent multiple TCC UI processes
 #define TCC_LOCK_FILE "/tmp/meshagent_tcccheck.lock"
@@ -73,6 +74,10 @@ static void remove_lock_file(void) {
 - (void)openFullDiskAccessSettings:(id)sender;
 - (void)openScreenRecordingSettings:(id)sender;
 - (void)updatePermissionStatus;
+- (void)updateButtonsWithAccessibility:(TCC_PermissionStatus)accessibility
+                                    fda:(TCC_PermissionStatus)fda
+                         screenRecording:(TCC_PermissionStatus)screenRecording
+                         updateAllButtons:(BOOL)updateAll;
 - (void)startPeriodicUpdates;
 - (void)stopPeriodicUpdates;
 @end
@@ -93,6 +98,57 @@ static void remove_lock_file(void) {
     self.cancelled = YES;  // Signal to async blocks that handler is being deallocated
     [self stopPeriodicUpdates];
     [super dealloc];
+}
+
+/**
+ * Shared helper to update permission buttons based on status
+ * Eliminates duplication across updatePermissionStatus, accessibilityPermissionChanged, and checkScreenRecordingAndFDA
+ *
+ * @param accessibility Accessibility permission status (or TCC_PERMISSION_NOT_DETERMINED to skip)
+ * @param fda FDA permission status (or TCC_PERMISSION_NOT_DETERMINED to skip)
+ * @param screenRecording Screen Recording permission status (or TCC_PERMISSION_NOT_DETERMINED to skip)
+ * @param updateAll If YES, update all buttons; if NO, only update buttons with non-NOT_DETERMINED status
+ */
+- (void)updateButtonsWithAccessibility:(TCC_PermissionStatus)accessibility
+                                    fda:(TCC_PermissionStatus)fda
+                         screenRecording:(TCC_PermissionStatus)screenRecording
+                         updateAllButtons:(BOOL)updateAll {
+    if (self.cancelled || !self.contentView) {
+        return;
+    }
+
+    // Snapshot subviews to avoid issues if view hierarchy changes during iteration
+    NSArray *subviews = [self.contentView subviews];
+    for (NSView *subview in subviews) {
+        if ([subview isKindOfClass:[NSButton class]]) {
+            NSButton *button = (NSButton*)subview;
+            NSInteger tag = [button tag];
+
+            // Map button tag to corresponding permission status
+            TCC_PermissionStatus status = TCC_PERMISSION_NOT_DETERMINED;
+            if (tag == BUTTON_TAG_ACCESSIBILITY) {
+                status = accessibility;
+            } else if (tag == BUTTON_TAG_FDA) {
+                status = fda;
+            } else if (tag == BUTTON_TAG_SCREEN_RECORDING) {
+                status = screenRecording;
+            } else {
+                continue; // Not a permission button
+            }
+
+            // Skip if we're not updating this button and updateAll is NO
+            if (!updateAll && status == TCC_PERMISSION_NOT_DETERMINED) {
+                continue;
+            }
+
+            // Update button display based on status
+            if (status == TCC_PERMISSION_GRANTED_USER || status == TCC_PERMISSION_GRANTED_MDM) {
+                [self replaceButtonWithSuccessIcon:button];
+            } else {
+                [self showButton:button];
+            }
+        }
+    }
 }
 
 - (void)replaceButtonWithSuccessIcon:(NSButton*)button {
@@ -188,39 +244,11 @@ static void remove_lock_file(void) {
 
             // Update UI on main thread
             dispatch_async(dispatch_get_main_queue(), ^{
-                // Check again if handler was cancelled
-                if (blockSelf.cancelled || !blockSelf.contentView) {
-                    NSLog(@"[TCC-UI] Handler cancelled before UI update, aborting");
-                    [blockSelf release];
-                    return;
-                }
-
-                // Snapshot subviews to avoid issues if view hierarchy changes during iteration
-                NSArray *subviews = [blockSelf.contentView subviews];
-                for (NSView *subview in subviews) {
-                if ([subview isKindOfClass:[NSButton class]]) {
-                    NSButton *button = (NSButton*)subview;
-                    NSInteger tag = [button tag];
-
-                    TCC_PermissionStatus status = TCC_PERMISSION_NOT_DETERMINED;
-                    if (tag == BUTTON_TAG_ACCESSIBILITY) {
-                        status = accessibility;
-                    } else if (tag == BUTTON_TAG_FDA) {
-                        status = fda;
-                    } else if (tag == BUTTON_TAG_SCREEN_RECORDING) {
-                        status = screen_recording;
-                    } else {
-                        continue; // Not a permission button
-                    }
-
-                    // Update button display based on status
-                    if (status == TCC_PERMISSION_GRANTED_USER || status == TCC_PERMISSION_GRANTED_MDM) {
-                        [blockSelf replaceButtonWithSuccessIcon:button];
-                    } else {
-                        [blockSelf showButton:button];
-                    }
-                }
-            }
+                // Update all buttons using shared helper
+                [blockSelf updateButtonsWithAccessibility:accessibility
+                                                       fda:fda
+                                            screenRecording:screen_recording
+                                           updateAllButtons:YES];
                 [blockSelf release];  // Release after UI update
             });
         }
@@ -282,28 +310,11 @@ static void remove_lock_file(void) {
 
             // Update UI on main thread
             dispatch_async(dispatch_get_main_queue(), ^{
-                // Check again if handler was cancelled before UI update
-                if (blockSelf.cancelled || !blockSelf.contentView) {
-                    NSLog(@"[TCC-UI] Handler cancelled before accessibility UI update, aborting");
-                    [blockSelf release];
-                    return;
-                }
-
-                // Snapshot subviews to avoid issues if view hierarchy changes during iteration
-                NSArray *subviews = [blockSelf.contentView subviews];
-                for (NSView *subview in subviews) {
-                    if ([subview isKindOfClass:[NSButton class]]) {
-                        NSButton *button = (NSButton*)subview;
-                        if ([button tag] == BUTTON_TAG_ACCESSIBILITY) {
-                            if (accessibility == TCC_PERMISSION_GRANTED_USER || accessibility == TCC_PERMISSION_GRANTED_MDM) {
-                                [blockSelf replaceButtonWithSuccessIcon:button];
-                            } else {
-                                [blockSelf showButton:button];
-                            }
-                            break;
-                        }
-                    }
-                }
+                // Update only accessibility button using shared helper
+                [blockSelf updateButtonsWithAccessibility:accessibility
+                                                       fda:TCC_PERMISSION_NOT_DETERMINED
+                                            screenRecording:TCC_PERMISSION_NOT_DETERMINED
+                                           updateAllButtons:NO];
                 [blockSelf release];  // Release after UI update
             });
         }
@@ -328,36 +339,11 @@ static void remove_lock_file(void) {
             TCC_PermissionStatus screen_recording = check_screen_recording_permission();
 
             dispatch_async(dispatch_get_main_queue(), ^{
-                // Check again if handler was cancelled before UI update
-                if (blockSelf.cancelled || !blockSelf.contentView) {
-                    NSLog(@"[TCC-UI] Handler cancelled before UI update, aborting");
-                    [blockSelf release];
-                    return;
-                }
-
-                // Snapshot subviews to avoid issues if view hierarchy changes during iteration
-                NSArray *subviews = [blockSelf.contentView subviews];
-                for (NSView *subview in subviews) {
-                if ([subview isKindOfClass:[NSButton class]]) {
-                    NSButton *button = (NSButton*)subview;
-                    NSInteger tag = [button tag];
-
-                    TCC_PermissionStatus status = TCC_PERMISSION_NOT_DETERMINED;
-                    if (tag == BUTTON_TAG_FDA) {
-                        status = fda;
-                    } else if (tag == BUTTON_TAG_SCREEN_RECORDING) {
-                        status = screen_recording;
-                    } else {
-                        continue;
-                    }
-
-                    if (status == TCC_PERMISSION_GRANTED_USER || status == TCC_PERMISSION_GRANTED_MDM) {
-                        [blockSelf replaceButtonWithSuccessIcon:button];
-                    } else {
-                        [blockSelf showButton:button];
-                    }
-                }
-            }
+                // Update FDA and Screen Recording buttons using shared helper
+                [blockSelf updateButtonsWithAccessibility:TCC_PERMISSION_NOT_DETERMINED
+                                                       fda:fda
+                                            screenRecording:screen_recording
+                                           updateAllButtons:NO];
                 [blockSelf release];  // Release after UI update
             });
         }
@@ -478,33 +464,14 @@ static void remove_lock_file(void) {
 
 @end
 
-// Helper function to create label text
-static NSTextField* createLabel(NSString* text, NSRect frame, BOOL bold) {
-    NSTextField* label = [[NSTextField alloc] initWithFrame:frame];
-    [label setStringValue:text];
-    [label setBezeled:NO];
-    [label setDrawsBackground:NO];
-    [label setEditable:NO];
-    [label setSelectable:NO];
-
-    if (bold) {
-        [label setFont:[NSFont boldSystemFontOfSize:13]];
-    } else {
-        [label setFont:[NSFont systemFontOfSize:12]];
-        [label setTextColor:[NSColor secondaryLabelColor]];
-    }
-
-    return label;
-}
-
 // Helper function to create section with permission name, description, and button
 static void createPermissionSection(NSView* contentView, NSString* title, NSString* description, CGFloat yPos, SEL action, id target, NSInteger buttonTag) {
     // Title label (bold)
-    NSTextField* titleLabel = createLabel(title, NSMakeRect(40, yPos, 380, 20), YES);
+    NSTextField* titleLabel = mesh_createLabel(title, NSMakeRect(40, yPos, 380, 20), YES);
     [contentView addSubview:titleLabel];
 
     // Description label (gray, wrapped)
-    NSTextField* descLabel = createLabel(description, NSMakeRect(40, yPos - 35, 380, 32), NO);
+    NSTextField* descLabel = mesh_createLabel(description, NSMakeRect(40, yPos - 35, 380, 32), NO);
     [descLabel setLineBreakMode:NSLineBreakByWordWrapping];
     [[descLabel cell] setWraps:YES];
     [contentView addSubview:descLabel];

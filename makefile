@@ -559,7 +559,7 @@ CFLAGS += -D_REMOTELOGGINGSERVER -D_REMOTELOGGING
 endif
 
 # macOS utility sources (always compiled for macOS builds)
-MACOSUTILSOURCES = meshcore/MacOS/bundle_detection.c meshcore/MacOS/mac_tcc_detection.c meshcore/MacOS/TCC_UI/mac_permissions_window.m meshcore/MacOS/Install_UI/mac_install_window.m meshcore/MacOS/Install_UI/mac_authorized_install.m
+MACOSUTILSOURCES = meshcore/MacOS/bundle_detection.c meshcore/MacOS/mac_tcc_detection.c meshcore/MacOS/mac_logging_utils.c meshcore/MacOS/mac_plist_utils.c meshcore/MacOS/mac_ui_helpers.m meshcore/MacOS/TCC_UI/mac_permissions_window.m meshcore/MacOS/Install_UI/mac_install_window.m meshcore/MacOS/Install_UI/mac_authorized_install.m
 
 ifeq ($(KVM),1)
 # Mesh Agent KVM, this is only included in builds that have KVM support
