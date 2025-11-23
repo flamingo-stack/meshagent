@@ -13,11 +13,15 @@ extern "C" {
  * - Full Disk Access
  * - Screen & System Audio Recording
  *
+ * Parameters:
+ *   show_reminder_checkbox - If 1, show "Do not remind me again" checkbox
+ *                            If 0, hide the checkbox (for explicit SHIFT+click)
+ *
  * Returns:
  *   0 if user clicked "Finish"
- *   1 if user wants "Do not remind me again"
+ *   1 if user wants "Do not remind me again" (only if checkbox was shown)
  */
-int show_tcc_permissions_window(void);
+int show_tcc_permissions_window(int show_reminder_checkbox);
 
 /**
  * Display the TCC permissions window asynchronously (non-blocking)

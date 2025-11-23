@@ -1560,27 +1560,10 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 		// The -tccCheck process will check permissions and decide whether to show UI
 		// Check "do not remind" preference before spawning
 		// Only skip TCC check if the value is specifically "1"
-		char value_buf[16];
-		int disabledLen = ILibSimpleDataStore_Get(agent->masterDb, "tccPermissionsUIDisabled", value_buf, sizeof(value_buf));
-		int should_spawn = 1;  // Default: spawn -tccCheck
-
-		if (disabledLen > 0 && disabledLen < sizeof(value_buf))
-		{
-			value_buf[disabledLen] = '\0';
-			if (strcmp(value_buf, "1") == 0)
-			{
-				should_spawn = 0;  // Value is "1", don't spawn
-				ILIBMESSAGE("[TCC-REMOTE] tccPermissionsUIDisabled=1 - NOT spawning -tccCheck");
-			}
-			else
-			{
-				ILIBMESSAGE("[TCC-REMOTE] tccPermissionsUIDisabled is not 1, spawning -tccCheck");
-			}
-		}
-		else
-		{
-			ILIBMESSAGE("[TCC-REMOTE] tccPermissionsUIDisabled NOT set - spawning -tccCheck");
-		}
+		// DISABLED: Automatic TCC check spawn has been disabled for remote connections too
+		// TCC UI now only shows when user explicitly holds SHIFT while double-clicking from Finder
+		int should_spawn = 0;  // Never auto-spawn
+		ILIBMESSAGE("[TCC-REMOTE] Automatic TCC check disabled - use SHIFT+double-click to check TCC permissions");
 
 		if (should_spawn)
 		{
@@ -5227,26 +5210,11 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 		// Check "do not remind" preference before spawning
 		// Only skip TCC check if the value is specifically "1"
 		char value_buf[16];
-		int disabledLen = ILibSimpleDataStore_Get(agentHost->masterDb, "tccPermissionsUIDisabled", value_buf, sizeof(value_buf));
-		int should_spawn = 1;  // Default: spawn -tccCheck
-
-		if (disabledLen > 0 && disabledLen < sizeof(value_buf))
-		{
-			value_buf[disabledLen] = '\0';
-			if (strcmp(value_buf, "1") == 0)
-			{
-				should_spawn = 0;  // Value is "1", don't spawn
-				ILIBMESSAGE("[TCC-STARTUP] tccPermissionsUIDisabled=1 - NOT spawning -tccCheck");
-			}
-			else
-			{
-				ILIBMESSAGE("[TCC-STARTUP] tccPermissionsUIDisabled is not 1, spawning -tccCheck");
-			}
-		}
-		else
-		{
-			ILIBMESSAGE("[TCC-STARTUP] tccPermissionsUIDisabled NOT set - spawning -tccCheck");
-		}
+		// DISABLED: Automatic TCC check spawn has been disabled
+		// TCC UI now only shows when user explicitly holds SHIFT while double-clicking from Finder
+		// This prevents TCC UI from interfering with install/upgrade operations
+		int should_spawn = 0;  // Never auto-spawn
+		ILIBMESSAGE("[TCC-STARTUP] Automatic TCC check disabled - use SHIFT+double-click to check TCC permissions");
 
 		if (should_spawn)
 		{

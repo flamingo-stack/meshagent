@@ -12,6 +12,8 @@
 #include <fcntl.h>
 #include <string.h>
 #include <errno.h>
+#include <execinfo.h>
+#include <crt_externs.h>
 
 // Lock file to prevent multiple TCC UI processes
 #define TCC_LOCK_FILE "/tmp/meshagent_tcccheck.lock"
@@ -504,7 +506,7 @@ static void createPermissionSection(NSView* contentView, NSString* title, NSStri
     [contentView addSubview:settingsButton];
 }
 
-int show_tcc_permissions_window(void) {
+int show_tcc_permissions_window(int show_reminder_checkbox) {
     @autoreleasepool {
         // Create lock file to prevent multiple instances
         create_lock_file();
@@ -613,13 +615,15 @@ int show_tcc_permissions_window(void) {
             BUTTON_TAG_SCREEN_RECORDING
         );
 
-        // Add "Do not remind me again" checkbox
-        NSButton* checkbox = [[NSButton alloc] initWithFrame:NSMakeRect(20, 15, 250, 20)];
-        [checkbox setButtonType:NSButtonTypeSwitch];
-        [checkbox setTitle:@"Do not remind me again"];
-        [checkbox setTarget:delegate];
-        [checkbox setAction:@selector(checkboxToggled:)];
-        [contentView addSubview:checkbox];
+        // Add "Do not remind me again" checkbox (only if requested)
+        if (show_reminder_checkbox) {
+            NSButton* checkbox = [[NSButton alloc] initWithFrame:NSMakeRect(20, 15, 250, 20)];
+            [checkbox setButtonType:NSButtonTypeSwitch];
+            [checkbox setTitle:@"Do not remind me again"];
+            [checkbox setTarget:delegate];
+            [checkbox setAction:@selector(checkboxToggled:)];
+            [contentView addSubview:checkbox];
+        }
 
         // Add "Finish" button
         NSButton* finishButton = [[NSButton alloc] initWithFrame:NSMakeRect(490, 15, 90, 32)];
@@ -655,8 +659,87 @@ int show_tcc_permissions_window(void) {
 // This spawns a child process with "-tccCheck" flag to show the UI
 // Returns file descriptor for reading result from child, or -1 on error
 int show_tcc_permissions_window_async(const char* exe_path, void* pipeManager, int uid) {
+    // CRITICAL SAFETY CHECK: NEVER spawn TCC UI during install/upgrade/uninstall operations
+    // Check command line arguments for forbidden flags
+    char*** argvPtr = _NSGetArgv();
+    int* argcPtr = _NSGetArgc();
+
+    if (argvPtr && argcPtr) {
+        char** argv = *argvPtr;
+        int argc = *argcPtr;
+
+        const char* forbidden_flags[] = {
+            "-upgrade", "-install", "-fullinstall",
+            "-uninstall", "-fulluninstall", "-update"
+        };
+
+        for (int i = 0; i < argc; i++) {
+            for (int j = 0; j < 6; j++) {
+                if (strcmp(argv[i], forbidden_flags[j]) == 0) {
+                    // Log the blocked attempt
+                    FILE* block_log = fopen("/tmp/meshagent-tcc-spawn-trace.log", "a");
+                    if (block_log) {
+                        fprintf(block_log, "[TCC-BLOCKED] TCC spawn blocked - running with %s flag\n", argv[i]);
+                        fprintf(block_log, "[TCC-BLOCKED] TCC should NEVER spawn during install/upgrade/uninstall\n");
+                        fflush(block_log);
+                        fclose(block_log);
+                    }
+                    printf("[TCC-BLOCKED] TCC spawn blocked - running with %s flag\n", argv[i]);
+                    return -1; // Refuse to spawn
+                }
+            }
+        }
+    }
+
+    // EMERGENCY LOGGING: Write directly to file (stdout doesn't work in Auth Services child processes)
+    FILE* log_file = fopen("/tmp/meshagent-tcc-spawn-trace.log", "a");
+    if (log_file) {
+        fprintf(log_file, "\n");
+        fprintf(log_file, "╔════════════════════════════════════════════════════════════════╗\n");
+        fprintf(log_file, "║ WARNING: show_tcc_permissions_window_async() was called!      ║\n");
+        fprintf(log_file, "║ This should ONLY happen via SHIFT+double-click from Finder    ║\n");
+        fprintf(log_file, "║ If you see this during install/upgrade, something is wrong!   ║\n");
+        fprintf(log_file, "╚════════════════════════════════════════════════════════════════╝\n");
+        fprintf(log_file, "[TCC-SPAWN-TRACE] Function called from:\n");
+        fprintf(log_file, "[TCC-SPAWN-TRACE]   exe_path: %s\n", exe_path ? exe_path : "NULL");
+        fprintf(log_file, "[TCC-SPAWN-TRACE]   uid: %d\n", uid);
+        fprintf(log_file, "[TCC-SPAWN-TRACE]   pipeManager: %p\n", pipeManager);
+
+        // Print stack trace to help identify caller
+        void* callstack[128];
+        int frames = backtrace(callstack, 128);
+        char** strs = backtrace_symbols(callstack, frames);
+        fprintf(log_file, "[TCC-SPAWN-TRACE] Stack trace:\n");
+        for (int i = 0; i < frames && i < 10; i++) {
+            fprintf(log_file, "[TCC-SPAWN-TRACE]   [%d] %s\n", i, strs[i]);
+        }
+        free(strs);
+        fprintf(log_file, "\n");
+        fflush(log_file);
+        fclose(log_file);
+    }
+
+    // Also print to stdout for good measure
+    printf("\n");
+    printf("╔════════════════════════════════════════════════════════════════╗\n");
+    printf("║ WARNING: show_tcc_permissions_window_async() was called!      ║\n");
+    printf("║ This should ONLY happen via SHIFT+double-click from Finder    ║\n");
+    printf("║ If you see this during install/upgrade, something is wrong!   ║\n");
+    printf("╚════════════════════════════════════════════════════════════════╝\n");
+    printf("[TCC-SPAWN-TRACE] Function called from:\n");
+    printf("[TCC-SPAWN-TRACE]   exe_path: %s\n", exe_path ? exe_path : "NULL");
+    printf("[TCC-SPAWN-TRACE]   uid: %d\n", uid);
+    printf("[TCC-SPAWN-TRACE]   pipeManager: %p\n", pipeManager);
+    printf("[TCC-SPAWN-TRACE] Full details written to /tmp/meshagent-tcc-spawn-trace.log\n");
+    printf("\n");
+
     // Check if TCC UI is already running
     if (is_tcc_ui_running()) {
+        FILE* log_file = fopen("/tmp/meshagent-tcc-spawn-trace.log", "a");
+        if (log_file) {
+            fprintf(log_file, "[TCC-SPAWN] TCC UI already running - not spawning\n");
+            fclose(log_file);
+        }
         printf("[TCC-SPAWN] TCC UI already running - not spawning\n");
         return -1; // Don't spawn another instance
     }
@@ -685,6 +768,22 @@ int show_tcc_permissions_window_async(const char* exe_path, void* pipeManager, i
         NULL             // argv terminator
     };
 
+    // Log spawn details to trace file
+    FILE* log_file2 = fopen("/tmp/meshagent-tcc-spawn-trace.log", "a");
+    if (log_file2) {
+        fprintf(log_file2, "[TCC-SPAWN] ========================================\n");
+        fprintf(log_file2, "[TCC-SPAWN] About to spawn -tccCheck:\n");
+        fprintf(log_file2, "[TCC-SPAWN]   exe_path:    %s\n", exe_path);
+        fprintf(log_file2, "[TCC-SPAWN]   pipeManager: %p\n", pipeManager);
+        fprintf(log_file2, "[TCC-SPAWN]   UID:         %d\n", uid);
+        fprintf(log_file2, "[TCC-SPAWN]   argv[0]:     %s\n", argv[0]);
+        fprintf(log_file2, "[TCC-SPAWN]   argv[1]:     %s\n", argv[1]);
+        fprintf(log_file2, "[TCC-SPAWN]   argv[2]:     %s\n", argv[2]);
+        fprintf(log_file2, "[TCC-SPAWN] ========================================\n");
+        fflush(log_file2);
+        fclose(log_file2);
+    }
+
     printf("[TCC-SPAWN] ========================================\n");
     printf("[TCC-SPAWN] About to spawn -tccCheck:\n");
     printf("[TCC-SPAWN]   exe_path:    %s\n", exe_path);
@@ -696,6 +795,11 @@ int show_tcc_permissions_window_async(const char* exe_path, void* pipeManager, i
     printf("[TCC-SPAWN] ========================================\n");
 
     if (pipeManager == NULL) {
+        FILE* log_file3 = fopen("/tmp/meshagent-tcc-spawn-trace.log", "a");
+        if (log_file3) {
+            fprintf(log_file3, "[TCC-SPAWN] ERROR: pipeManager is NULL!\n");
+            fclose(log_file3);
+        }
         printf("[TCC-SPAWN] ERROR: pipeManager is NULL!\n");
         close(pipefd[0]);
         close(pipefd[1]);

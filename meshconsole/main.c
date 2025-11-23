@@ -45,10 +45,40 @@ limitations under the License.
 #ifdef __APPLE__
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
+#include <stdarg.h>
+#include <fcntl.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include "meshcore/MacOS/bundle_detection.h"
 #include "meshcore/MacOS/mac_tcc_detection.h"
 #include "meshcore/MacOS/TCC_UI/mac_permissions_window.h"
+#include "meshcore/MacOS/Install_UI/mac_install_window.h"
+#include "meshcore/MacOS/Install_UI/mac_authorized_install.h"
+#include <CoreGraphics/CoreGraphics.h>  // For CGEventSourceFlagsState()
+
+#define LOG_FILE "/tmp/meshagent-install-ui.log"
+
+/**
+ * Helper function to log to both stderr and file
+ */
+static void log_message(const char* format, ...) {
+    va_list args1, args2;
+    va_start(args1, format);
+    va_copy(args2, args1);
+
+    // Log to stderr
+    vfprintf(stderr, format, args1);
+    va_end(args1);
+
+    // Log to file
+    FILE* logFile = fopen(LOG_FILE, "a");
+    if (logFile) {
+        vfprintf(logFile, format, args2);
+        fflush(logFile);
+        fclose(logFile);
+    }
+    va_end(args2);
+}
+
 #endif
 
 MeshAgentHostContainer *agentHost = NULL;
@@ -376,13 +406,70 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 
 	// Check if launched from Finder (via Info.plist LSEnvironment variable)
 	// This check MUST happen early, before any command processing that might trigger TCC permission prompts
-	if (getenv("LAUNCHED_FROM_FINDER") != NULL)
+	// IMPORTANT: Skip this check if running with install/upgrade/uninstall flags
+	int has_forbidden_flag = 0;
+	const char* forbidden_flags[] = {
+		"-upgrade", "-install", "-fullinstall",
+		"-uninstall", "-fulluninstall", "-update"
+	};
+	for (int i = 1; i < argc; i++) {
+		for (int j = 0; j < 6; j++) {
+			if (strcmp(argv[i], forbidden_flags[j]) == 0) {
+				has_forbidden_flag = 1;
+				fprintf(stderr, "[MAIN] Skipping LAUNCHED_FROM_FINDER check - running with %s flag\n", argv[i]);
+				break;
+			}
+		}
+		if (has_forbidden_flag) break;
+	}
+
+	if (!has_forbidden_flag && getenv("LAUNCHED_FROM_FINDER") != NULL)
 	{
-		// User double-clicked the app - show TCC permissions UI
-		fprintf(stderr, "MeshAgent launched from Finder - showing TCC permissions window\n");
-		int result = show_tcc_permissions_window();
-		fprintf(stderr, "TCC permissions window closed (do not remind again: %d)\n", result);
-		return 0;
+		// Check which modifier keys are being held
+		CGEventFlags flags = CGEventSourceFlagsState(kCGEventSourceStateCombinedSessionState);
+		int cmdKeyHeld = (flags & kCGEventFlagMaskCommand) != 0;
+		int shiftKeyHeld = (flags & kCGEventFlagMaskShift) != 0;
+
+		if (cmdKeyHeld)
+		{
+			// CMD + double-click -> show Installation Assistant
+			log_message("[MAIN] [%ld] MeshAgent launched from Finder with CMD key - showing Installation Assistant\n", time(NULL));
+
+			// Redirect stdout and stderr to log file to capture ALL output including TCC spawn traces
+			int log_fd = open("/tmp/meshagent-install-ui.log", O_WRONLY | O_APPEND | O_CREAT, 0666);
+			if (log_fd >= 0) {
+				dup2(log_fd, STDOUT_FILENO);
+				dup2(log_fd, STDERR_FILENO);
+				close(log_fd);
+				// Make stdout/stderr unbuffered so we see output immediately
+				setvbuf(stdout, NULL, _IONBF, 0);
+				setvbuf(stderr, NULL, _IONBF, 0);
+				printf("[MAIN] [%ld] ===== STDOUT/STDERR NOW REDIRECTED TO LOG FILE =====\n", time(NULL));
+			}
+
+			InstallResult result = show_install_assistant_window();
+			log_message("[MAIN] [%ld] Installation Assistant returned (cancelled=%d, mode=%d)\n",
+			        time(NULL), result.cancelled, result.mode);
+
+			// Note: The Installation Assistant window handles upgrade/install execution internally
+			// with progress UI, so we don't need to execute anything here. Just exit.
+			log_message("[MAIN] [%ld] Installation Assistant closed, exiting\n", time(NULL));
+			exit(0);
+		}
+		else if (shiftKeyHeld)
+		{
+			// SHIFT + double-click -> ALWAYS show TCC permissions UI (regardless of current status)
+			fprintf(stderr, "MeshAgent launched from Finder with SHIFT key - showing TCC permissions window\n");
+			int result = show_tcc_permissions_window(0); // 0 = hide "Do not remind me again" checkbox
+			fprintf(stderr, "TCC permissions window closed (do not remind again: %d)\n", result);
+			return 0;
+		}
+		else
+		{
+			// Normal double-click (no modifier keys) -> Exit without showing any UI
+			fprintf(stderr, "MeshAgent launched from Finder without modifier keys - exiting\n");
+			return 0;
+		}
 	}
 #endif
 
@@ -700,7 +787,7 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 
 		// At least one permission missing - show UI
 		printf("[TCC-CHILD] At least one permission missing - showing UI\n");
-		int result = show_tcc_permissions_window();
+		int result = show_tcc_permissions_window(1); // 1 = show "Do not remind me again" checkbox
 		printf("[TCC-CHILD] UI closed with result: %d (1 = do not remind, 0 = remind again)\n", result);
 
 		// Write result to pipe (parent will read this and save to database if needed)
