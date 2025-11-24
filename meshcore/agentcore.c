@@ -1557,13 +1557,7 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 			if (strcmp(ILibScratchPad, "1") == 0)
 			{
 				should_spawn = 0;
-				ILIBMESSAGE("[TCC-REMOTE] TCC check disabled by user preference (tccPermissionsUIDisabled=1)");
 			}
-		}
-
-		if (should_spawn)
-		{
-			ILIBMESSAGE("[TCC-REMOTE] Spawning TCC permissions check for remote connection");
 		}
 
 		if (should_spawn)
@@ -1574,10 +1568,6 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 				TCCPipeMonitor_Create(agent->chain, agent->masterDb, tcc_pipe_fd);
 			}
 		}
-
-		char msg[128];
-		sprintf_s(msg, sizeof(msg), "Establishing domain socket connection for KVM (console_uid=%d)", console_uid);
-		MeshAgent_sendConsoleText(ctx, msg);
 
 		// Get the connected FD from kvm_relay_setup (daemon accepts connection from -kvm1)
 		int client_fd = (int)(intptr_t)kvm_relay_setup(agent->exePath, agent->pipeManager, ILibDuktape_MeshAgent_RemoteDesktop_KVM_WriteSink, ptrs, console_uid, agent->companyName, agent->meshServiceName, agent->serviceID);
@@ -5217,13 +5207,7 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 			if (strcmp(ILibScratchPad, "1") == 0)
 			{
 				should_spawn = 0;
-				ILIBMESSAGE("[TCC-STARTUP] TCC check disabled by user preference (tccPermissionsUIDisabled=1)");
 			}
-		}
-
-		if (should_spawn)
-		{
-			ILIBMESSAGE("[TCC-STARTUP] Spawning TCC permissions check");
 		}
 
 		if (should_spawn)

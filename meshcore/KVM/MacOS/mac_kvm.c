@@ -1174,7 +1174,6 @@ void* kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler 
 	}
 
 	// Accept connection from -kvm1 LaunchAgent (triggered by QueueDirectories)
-	printf("KVM: Waiting for -kvm1 to connect...\n");
 	client_fd = accept(KVM_Daemon_Listener_FD, NULL, NULL);
 
 	if (client_fd < 0)
@@ -1184,8 +1183,6 @@ void* kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler 
 		return NULL;
 	}
 
-	printf("KVM: Connection accepted (fd=%d), verifying peer...\n", client_fd);
-
 	// Verify connecting process is legitimate meshagent binary
 	if (!verify_peer_codesign(client_fd))
 	{
@@ -1194,8 +1191,6 @@ void* kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler 
 		kvm_cleanup_session();  // Clean up on failure
 		return NULL;
 	}
-
-	printf("KVM: Peer verified successfully - connection established\n");
 
 	// Return FD cast as void* for use with ILibAsyncSocket
 	return (void*)(intptr_t)client_fd;
