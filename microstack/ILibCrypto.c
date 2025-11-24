@@ -70,21 +70,25 @@ char utils_HexTable2[16] = { '0','1','2','3','4','5','6','7','8','9','a','b','c'
 
 void  __fastcall util_md5(char* data, size_t datalen, char* result)
 {
-	MD5_CTX c;
-	MD5_Init(&c);
-	MD5_Update(&c, data, datalen);
-	MD5_Final((unsigned char*)result, &c);
+	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+	if (ctx == NULL) return;
+	EVP_DigestInit_ex(ctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(ctx, data, datalen);
+	EVP_DigestFinal_ex(ctx, (unsigned char*)result, NULL);
+	EVP_MD_CTX_free(ctx);
 }
 void  __fastcall util_md5hex(char* data, size_t datalen, char *out)
 {
 	int i = 0;
 	unsigned char *temp = (unsigned char*)out;
-	MD5_CTX mdContext;
+	EVP_MD_CTX *mdContext = EVP_MD_CTX_new();
 	unsigned char digest[16];
 
-	MD5_Init(&mdContext);
-	MD5_Update(&mdContext, (unsigned char *)data, datalen);
-	MD5_Final(digest, &mdContext);
+	if (mdContext == NULL) return;
+	EVP_DigestInit_ex(mdContext, EVP_md5(), NULL);
+	EVP_DigestUpdate(mdContext, (unsigned char *)data, datalen);
+	EVP_DigestFinal_ex(mdContext, digest, NULL);
+	EVP_MD_CTX_free(mdContext);
 
 	for (i = 0; i < sizeof(digest); i++)
 	{
@@ -96,52 +100,62 @@ void  __fastcall util_md5hex(char* data, size_t datalen, char *out)
 }
 void  __fastcall util_sha1(char* data, size_t datalen, char* result)
 {
-	SHA_CTX c;
-	SHA1_Init(&c);
-	SHA1_Update(&c, data, datalen);
-	SHA1_Final((unsigned char*)result, &c);
+	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+	if (ctx == NULL) return;
+	EVP_DigestInit_ex(ctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(ctx, data, datalen);
+	EVP_DigestFinal_ex(ctx, (unsigned char*)result, NULL);
+	EVP_MD_CTX_free(ctx);
 	result[20] = 0;
 }
 void  __fastcall util_sha256(char* data, size_t datalen, char* result)
 {
-	SHA256_CTX c;
-	SHA256_Init(&c);
-	SHA256_Update(&c, data, datalen);
-	SHA256_Final((unsigned char*)result, &c);
+	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+	if (ctx == NULL) return;
+	EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
+	EVP_DigestUpdate(ctx, data, datalen);
+	EVP_DigestFinal_ex(ctx, (unsigned char*)result, NULL);
+	EVP_MD_CTX_free(ctx);
 }
 void  __fastcall util_sha384(char* data, size_t datalen, char* result)
 {
-	SHA512_CTX c;
-	SHA384_Init(&c);
-	SHA384_Update(&c, data, datalen);
-	SHA384_Final((unsigned char*)result, &c);
+	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+	if (ctx == NULL) return;
+	EVP_DigestInit_ex(ctx, EVP_sha384(), NULL);
+	EVP_DigestUpdate(ctx, data, datalen);
+	EVP_DigestFinal_ex(ctx, (unsigned char*)result, NULL);
+	EVP_MD_CTX_free(ctx);
 }
 int   __fastcall util_sha384file(char* filename, char* result)
 {
 	FILE *pFile = NULL;
-	SHA512_CTX c;
+	EVP_MD_CTX *ctx = NULL;
 	size_t len = 0;
 	char *buf = NULL;
 
 	if (filename == NULL) return -1;
-#ifdef WIN32 
+#ifdef WIN32
 	_wfopen_s(&pFile, ILibUTF8ToWide(filename, -1), L"rbN");
 #else
 	pFile = fopen(filename, "rb");
 #endif
 	if (pFile == NULL) goto error;
-	SHA384_Init(&c);
+	ctx = EVP_MD_CTX_new();
+	if (ctx == NULL) goto error;
+	EVP_DigestInit_ex(ctx, EVP_sha384(), NULL);
 	if ((buf = (char*)malloc(4096)) == NULL) goto error;
-	while ((len = fread(buf, 1, 4096, pFile)) > 0) SHA384_Update(&c, buf, len);
+	while ((len = fread(buf, 1, 4096, pFile)) > 0) EVP_DigestUpdate(ctx, buf, len);
 	free(buf);
 	buf = NULL;
 	fclose(pFile);
 	pFile = NULL;
-	SHA384_Final((unsigned char*)result, &c);
+	EVP_DigestFinal_ex(ctx, (unsigned char*)result, NULL);
+	EVP_MD_CTX_free(ctx);
 	return 0;
 
 error:
 	if (buf != NULL) free(buf);
+	if (ctx != NULL) EVP_MD_CTX_free(ctx);
 	if (pFile != NULL) fclose(pFile);
 	return -1;
 }
@@ -675,9 +689,14 @@ void __fastcall util_printcert(struct util_cert cert)
 
 void __fastcall util_printcert_pk(struct util_cert cert)
 {
+	BIO *bio_out = NULL;
 	if (cert.pkey == NULL) return;
-	//RSA_print_fp(stdout, cert.pkey->pkey.rsa, 0);
-	RSA_print_fp(stdout, EVP_PKEY_get1_RSA(cert.pkey), 0);
+	bio_out = BIO_new_fp(stdout, BIO_NOCLOSE);
+	if (bio_out != NULL)
+	{
+		EVP_PKEY_print_private(bio_out, cert.pkey, 0, NULL);
+		BIO_free(bio_out);
+	}
 }
 
 // Creates a X509 certificate, if rootcert is NULL this creates a root (self-signed) certificate.
@@ -687,7 +706,6 @@ int __fastcall util_mkCertEx(struct util_cert *rootcert, struct util_cert* cert,
 	X509 *x = NULL;
 	X509_EXTENSION *ex = NULL;
 	EVP_PKEY *pk = NULL;
-	RSA *rsa = NULL;
 	X509_NAME *cname = NULL;
 	X509 **x509p = NULL;
 	EVP_PKEY **pkeyp = NULL;
@@ -695,40 +713,39 @@ int __fastcall util_mkCertEx(struct util_cert *rootcert, struct util_cert* cert,
 	char hash[UTIL_SHA384_HASHSIZE];
 	char serial[8];
 	char nameStr[(UTIL_SHA384_HASHSIZE * 2) + 2];
-	BIGNUM *oBigNbr;
-
-	CRYPTO_mem_ctrl(CRYPTO_MEM_CHECK_ON);
+	EVP_PKEY_CTX *pctx = NULL;
 
 	if (initialcert != NULL)
 	{
-		pk = X509_get_pubkey(initialcert->x509);
-		rsa = EVP_PKEY_get1_RSA(initialcert->pkey);
+		// Use existing key from initial cert
+		pk = EVP_PKEY_dup(initialcert->pkey);
+		if (pk == NULL) return 0;
 		if ((x = X509_new()) == NULL) goto err;
 	}
 	else
 	{
-		if ((pkeyp == NULL) || (*pkeyp == NULL)) { if ((pk = EVP_PKEY_new()) == NULL) return 0; }
-		else pk = *pkeyp;
 		if ((x509p == NULL) || (*x509p == NULL)) { if ((x = X509_new()) == NULL) goto err; }
 		else x = *x509p;
-		oBigNbr = BN_new();
-		rsa = RSA_new();
-		BN_set_word(oBigNbr, RSA_F4);
-		if (RSA_generate_key_ex(rsa, bits, oBigNbr, NULL) == -1)
-		{
-			RSA_free(rsa);
-			BN_free(oBigNbr);
-			abort();
-		}
-		BN_free(oBigNbr);
-	}
 
-	if (!EVP_PKEY_assign_RSA(pk, rsa))
-	{
-		RSA_free(rsa);
-		abort();
+		// Generate new RSA key using EVP API
+		if ((pkeyp == NULL) || (*pkeyp == NULL))
+		{
+			pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, NULL);
+			if (pctx == NULL) return 0;
+			if (EVP_PKEY_keygen_init(pctx) <= 0 ||
+				EVP_PKEY_CTX_set_rsa_keygen_bits(pctx, bits) <= 0 ||
+				EVP_PKEY_keygen(pctx, &pk) <= 0)
+			{
+				EVP_PKEY_CTX_free(pctx);
+				abort();
+			}
+			EVP_PKEY_CTX_free(pctx);
+		}
+		else
+		{
+			pk = *pkeyp;
+		}
 	}
-	rsa = NULL;
 
 	util_randomtext(8, serial);
 	X509_set_version(x, 2);
@@ -1025,61 +1042,112 @@ error:
 // Encrypt a block of data using raw RSA. This is used to handle data in the most compact possible way.
 int __fastcall util_rsaencrypt(X509 *cert, char* data, int datalen, char** encdata)
 {
-	int len;
-	RSA *rsa;
+	size_t outlen;
+	int keysize;
 	EVP_PKEY *pkey;
+	EVP_PKEY_CTX *ctx = NULL;
 
 	pkey = X509_get_pubkey(cert);
-	rsa = EVP_PKEY_get1_RSA(pkey);
-	if (datalen > RSA_size(rsa)) { EVP_PKEY_free(pkey); RSA_free(rsa); return 0; }
-	*encdata = (char*)malloc(RSA_size(rsa));
-	len = RSA_public_encrypt(datalen, (const unsigned char*)data, (unsigned char*)*encdata, rsa, RSA_PKCS1_OAEP_PADDING);
+	if (pkey == NULL) return 0;
+
+	keysize = EVP_PKEY_size(pkey);
+	if (datalen > keysize - 42) { EVP_PKEY_free(pkey); return 0; } // OAEP padding overhead is 42 bytes
+
+	ctx = EVP_PKEY_CTX_new(pkey, NULL);
+	if (ctx == NULL) { EVP_PKEY_free(pkey); return 0; }
+
+	if (EVP_PKEY_encrypt_init(ctx) <= 0 ||
+		EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING) <= 0)
+	{
+		EVP_PKEY_CTX_free(ctx);
+		EVP_PKEY_free(pkey);
+		return 0;
+	}
+
+	*encdata = (char*)malloc(keysize);
+	outlen = keysize;
+
+	if (EVP_PKEY_encrypt(ctx, (unsigned char*)*encdata, &outlen, (const unsigned char*)data, datalen) <= 0)
+	{
+		free(*encdata);
+		*encdata = NULL;
+		EVP_PKEY_CTX_free(ctx);
+		EVP_PKEY_free(pkey);
+		return 0;
+	}
+
+	EVP_PKEY_CTX_free(ctx);
 	EVP_PKEY_free(pkey);
-	RSA_free(rsa);
-	if (len == RSA_size(rsa)) return len;
-	free(*encdata);
-	*encdata = NULL;
-	return 0;
+	return (int)outlen;
 }
 
 // Decrypt a block of data using raw RSA. This is used to handle data in the most compact possible way.
 int __fastcall util_rsadecrypt(struct util_cert cert, char* data, int datalen, char** decdata)
 {
-	int len;
-	RSA *rsa;
+	size_t outlen;
+	int keysize;
+	EVP_PKEY_CTX *ctx = NULL;
 
-	rsa = EVP_PKEY_get1_RSA(cert.pkey);
-	*decdata = (char*)malloc(RSA_size(rsa));
-	len = RSA_private_decrypt(datalen, (const unsigned char*)data, (unsigned char*)*decdata, rsa, RSA_PKCS1_OAEP_PADDING);
-	RSA_free(rsa);
-	if (len != 0) return len;
-	free(*decdata);
-	*decdata = NULL;
-	return 0;
+	if (cert.pkey == NULL) return 0;
+
+	keysize = EVP_PKEY_size(cert.pkey);
+	*decdata = (char*)malloc(keysize);
+
+	ctx = EVP_PKEY_CTX_new(cert.pkey, NULL);
+	if (ctx == NULL) { free(*decdata); *decdata = NULL; return 0; }
+
+	if (EVP_PKEY_decrypt_init(ctx) <= 0 ||
+		EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING) <= 0)
+	{
+		EVP_PKEY_CTX_free(ctx);
+		free(*decdata);
+		*decdata = NULL;
+		return 0;
+	}
+
+	outlen = keysize;
+	if (EVP_PKEY_decrypt(ctx, (unsigned char*)*decdata, &outlen, (const unsigned char*)data, datalen) <= 0)
+	{
+		EVP_PKEY_CTX_free(ctx);
+		free(*decdata);
+		*decdata = NULL;
+		return 0;
+	}
+
+	EVP_PKEY_CTX_free(ctx);
+	return (int)outlen;
 }
 
 // Verify the RSA signature of a block using SHA1 hash
 int __fastcall util_rsaverify(X509 *cert, char* data, int datalen, char* sign, int signlen)
 {
 	int r;
-	RSA *rsa = NULL;
 	EVP_PKEY *pkey = NULL;
-	SHA_CTX c;
-	char hash[20];
+	EVP_MD_CTX *mdctx = NULL;
 
-	SHA1_Init(&c);
-	SHA1_Update(&c, data, datalen);
-	SHA1_Final((unsigned char*)hash, &c);
 	pkey = X509_get_pubkey(cert);
-	rsa = EVP_PKEY_get1_RSA(pkey);
-	//rsa->pad = RSA_PKCS1_PADDING; // OPENSSL 1.0
-#ifdef WIN32
-	r = RSA_verify(NID_sha1, (const unsigned char*)hash, 20, (const unsigned char*)sign, signlen, rsa);
-#else
-	r = RSA_verify(NID_sha1, (const unsigned char*)hash, 20, (unsigned char*)sign, signlen, rsa);
-#endif
+	if (pkey == NULL) return 0;
+
+	mdctx = EVP_MD_CTX_new();
+	if (mdctx == NULL) { EVP_PKEY_free(pkey); return 0; }
+
+	if (EVP_DigestVerifyInit(mdctx, NULL, EVP_sha1(), NULL, pkey) <= 0)
+	{
+		EVP_MD_CTX_free(mdctx);
+		EVP_PKEY_free(pkey);
+		return 0;
+	}
+
+	if (EVP_DigestVerifyUpdate(mdctx, data, datalen) <= 0)
+	{
+		EVP_MD_CTX_free(mdctx);
+		EVP_PKEY_free(pkey);
+		return 0;
+	}
+
+	r = EVP_DigestVerifyFinal(mdctx, (unsigned char*)sign, signlen);
+	EVP_MD_CTX_free(mdctx);
 	EVP_PKEY_free(pkey);
-	RSA_free(rsa);
 	return r;
 }
 

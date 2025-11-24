@@ -2437,7 +2437,7 @@ void ILibDuktape_dataGenerator_onPause(struct ILibDuktape_readableStream *sender
 }
 void ILibDuktape_dataGenerator_onResume(struct ILibDuktape_readableStream *sender, void *user)
 {
-	SHA256_CTX shctx;
+	EVP_MD_CTX *mdctx = NULL;
 
 	char *buffer = (char*)user;
 	size_t bufferLen = ILibMemory_Size(buffer);
@@ -2453,10 +2453,14 @@ void ILibDuktape_dataGenerator_onResume(struct ILibDuktape_readableStream *sende
 		//util_random((int)(bufferLen - UTIL_SHA256_HASHSIZE), buffer + UTIL_SHA256_HASHSIZE);
 		memset(buffer + UTIL_SHA256_HASHSIZE, val, bufferLen - UTIL_SHA256_HASHSIZE);
 
-
-		SHA256_Init(&shctx);
-		SHA256_Update(&shctx, buffer + UTIL_SHA256_HASHSIZE, bufferLen - UTIL_SHA256_HASHSIZE);
-		SHA256_Final((unsigned char*)buffer, &shctx);
+		mdctx = EVP_MD_CTX_new();
+		if (mdctx != NULL)
+		{
+			EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL);
+			EVP_DigestUpdate(mdctx, buffer + UTIL_SHA256_HASHSIZE, bufferLen - UTIL_SHA256_HASHSIZE);
+			EVP_DigestFinal_ex(mdctx, (unsigned char*)buffer, NULL);
+			EVP_MD_CTX_free(mdctx);
+		}
 		ILibDuktape_readableStream_WriteData(sender, buffer, (int)bufferLen);
 	}
 }
