@@ -232,7 +232,6 @@ static void remove_lock_file(void) {
         @autoreleasepool {
             // Check if handler was cancelled
             if (blockSelf.cancelled) {
-                NSLog(@"[TCC-UI] Handler cancelled during permission check, aborting");
                 [blockSelf release];
                 return;
             }
@@ -268,8 +267,6 @@ static void remove_lock_file(void) {
         object:nil
         suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
 
-    NSLog(@"[TCC-UI] Registered for accessibility permission change notifications");
-
     // For Screen Recording and FDA, we need light polling since there's no notification
     // Use 3-second interval since we have real-time updates for Accessibility via notification
     __block TCCButtonHandler *blockSelf = [self retain];
@@ -280,7 +277,6 @@ static void remove_lock_file(void) {
             // Only check Screen Recording and FDA (Accessibility updated via notification)
             [blockSelf checkScreenRecordingAndFDA];
         } else {
-            NSLog(@"[TCC-UI] Handler cancelled, invalidating timer");
             [timer invalidate];
             [blockSelf release];
         }
@@ -291,8 +287,6 @@ static void remove_lock_file(void) {
 
 // Called when Accessibility permission changes (real-time notification)
 - (void)accessibilityPermissionChanged:(NSNotification *)notification {
-    NSLog(@"[TCC-UI] Accessibility permission changed notification received");
-
     // Retain self for block's lifetime to prevent use-after-free
     __block TCCButtonHandler *blockSelf = [self retain];
 
@@ -301,7 +295,6 @@ static void remove_lock_file(void) {
         @autoreleasepool {
             // Check if handler was cancelled
             if (blockSelf.cancelled) {
-                NSLog(@"[TCC-UI] Handler cancelled during accessibility check, aborting");
                 [blockSelf release];
                 return;
             }
@@ -330,7 +323,6 @@ static void remove_lock_file(void) {
         @autoreleasepool {
             // Check if handler was cancelled before doing expensive work
             if (blockSelf.cancelled) {
-                NSLog(@"[TCC-UI] Handler cancelled during permission check, aborting");
                 [blockSelf release];
                 return;
             }
@@ -351,25 +343,18 @@ static void remove_lock_file(void) {
 }
 
 - (void)stopPeriodicUpdates {
-    NSLog(@"[TCC-UI] stopPeriodicUpdates called");
-
     // Remove notification observer
     [[NSDistributedNotificationCenter defaultCenter] removeObserver:self];
-    NSLog(@"[TCC-UI] Removed notification observers");
 
     if (self.updateTimer) {
         [self.updateTimer invalidate];
         self.updateTimer = nil;
-        NSLog(@"[TCC-UI] Timer invalidated and cleared");
     }
 }
 
 - (void)openAccessibilitySettings:(id)sender {
-    NSLog(@"[TCC-UI] openAccessibilitySettings clicked");
-
     // Trigger the system permission prompt to add MeshAgent to the Accessibility list
     if (__builtin_available(macOS 10.9, *)) {
-        NSLog(@"[TCC-UI] Calling AXIsProcessTrustedWithOptions on background thread");
         // Call on background thread to avoid blocking UI (API blocks until user responds)
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
             @autoreleasepool {
@@ -384,15 +369,13 @@ static void remove_lock_file(void) {
                     &kCFTypeDictionaryValueCallBacks);
 
                 // This will show the system dialog: "MeshAgent.app would like to control this computer using accessibility features"
-                Boolean result = AXIsProcessTrustedWithOptions(options);
-                NSLog(@"[TCC-UI] AXIsProcessTrustedWithOptions returned: %d", result);
+                AXIsProcessTrustedWithOptions(options);
                 CFRelease(options);
             }
         });
     }
 
     // Also open System Settings so user can see MeshAgent was added to the list
-    NSLog(@"[TCC-UI] Opening System Settings for Accessibility");
     NSURL* url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"];
     [[NSWorkspace sharedWorkspace] openURL:url];
 }
@@ -403,30 +386,22 @@ static void remove_lock_file(void) {
 }
 
 - (void)openScreenRecordingSettings:(id)sender {
-    NSLog(@"[TCC-UI] openScreenRecordingSettings clicked");
-
     // Trigger the system permission prompt to add MeshAgent to the Screen Recording list
     if (__builtin_available(macOS 10.15, *)) {
         // Check current permission status
         Boolean hasPermission = CGPreflightScreenCaptureAccess();
-        NSLog(@"[TCC-UI] CGPreflightScreenCaptureAccess returned: %d", hasPermission);
 
         if (!hasPermission) {
             // Call on background thread to avoid blocking UI (API blocks until user responds)
-            NSLog(@"[TCC-UI] Calling CGRequestScreenCaptureAccess on background thread");
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
                 @autoreleasepool {
-                    Boolean result = CGRequestScreenCaptureAccess();
-                    NSLog(@"[TCC-UI] CGRequestScreenCaptureAccess returned: %d", result);
+                    CGRequestScreenCaptureAccess();
                 }
             });
-        } else {
-            NSLog(@"[TCC-UI] Screen recording already granted, not requesting");
         }
     }
 
     // Also open System Settings so user can see MeshAgent was added to the list
-    NSLog(@"[TCC-UI] Opening System Settings for Screen Recording");
     NSURL* url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"];
     [[NSWorkspace sharedWorkspace] openURL:url];
 }
@@ -656,85 +631,25 @@ int show_tcc_permissions_window_async(const char* exe_path, void* pipeManager, i
         for (int i = 0; i < argc; i++) {
             for (int j = 0; j < 6; j++) {
                 if (strcmp(argv[i], forbidden_flags[j]) == 0) {
-                    // Log the blocked attempt
-                    FILE* block_log = fopen("/tmp/meshagent-tcc-spawn-trace.log", "a");
-                    if (block_log) {
-                        fprintf(block_log, "[TCC-BLOCKED] TCC spawn blocked - running with %s flag\n", argv[i]);
-                        fprintf(block_log, "[TCC-BLOCKED] TCC should NEVER spawn during install/upgrade/uninstall\n");
-                        fflush(block_log);
-                        fclose(block_log);
-                    }
-                    printf("[TCC-BLOCKED] TCC spawn blocked - running with %s flag\n", argv[i]);
-                    return -1; // Refuse to spawn
+                    return -1; // Refuse to spawn during install/upgrade operations
                 }
             }
         }
     }
 
-    // EMERGENCY LOGGING: Write directly to file (stdout doesn't work in Auth Services child processes)
-    FILE* log_file = fopen("/tmp/meshagent-tcc-spawn-trace.log", "a");
-    if (log_file) {
-        fprintf(log_file, "\n");
-        fprintf(log_file, "╔════════════════════════════════════════════════════════════════╗\n");
-        fprintf(log_file, "║ WARNING: show_tcc_permissions_window_async() was called!      ║\n");
-        fprintf(log_file, "║ This should ONLY happen via SHIFT+double-click from Finder    ║\n");
-        fprintf(log_file, "║ If you see this during install/upgrade, something is wrong!   ║\n");
-        fprintf(log_file, "╚════════════════════════════════════════════════════════════════╝\n");
-        fprintf(log_file, "[TCC-SPAWN-TRACE] Function called from:\n");
-        fprintf(log_file, "[TCC-SPAWN-TRACE]   exe_path: %s\n", exe_path ? exe_path : "NULL");
-        fprintf(log_file, "[TCC-SPAWN-TRACE]   uid: %d\n", uid);
-        fprintf(log_file, "[TCC-SPAWN-TRACE]   pipeManager: %p\n", pipeManager);
-
-        // Print stack trace to help identify caller
-        void* callstack[128];
-        int frames = backtrace(callstack, 128);
-        char** strs = backtrace_symbols(callstack, frames);
-        fprintf(log_file, "[TCC-SPAWN-TRACE] Stack trace:\n");
-        for (int i = 0; i < frames && i < 10; i++) {
-            fprintf(log_file, "[TCC-SPAWN-TRACE]   [%d] %s\n", i, strs[i]);
-        }
-        free(strs);
-        fprintf(log_file, "\n");
-        fflush(log_file);
-        fclose(log_file);
-    }
-
-    // Also print to stdout for good measure
-    printf("\n");
-    printf("╔════════════════════════════════════════════════════════════════╗\n");
-    printf("║ WARNING: show_tcc_permissions_window_async() was called!      ║\n");
-    printf("║ This should ONLY happen via SHIFT+double-click from Finder    ║\n");
-    printf("║ If you see this during install/upgrade, something is wrong!   ║\n");
-    printf("╚════════════════════════════════════════════════════════════════╝\n");
-    printf("[TCC-SPAWN-TRACE] Function called from:\n");
-    printf("[TCC-SPAWN-TRACE]   exe_path: %s\n", exe_path ? exe_path : "NULL");
-    printf("[TCC-SPAWN-TRACE]   uid: %d\n", uid);
-    printf("[TCC-SPAWN-TRACE]   pipeManager: %p\n", pipeManager);
-    printf("[TCC-SPAWN-TRACE] Full details written to /tmp/meshagent-tcc-spawn-trace.log\n");
-    printf("\n");
-
     // Check if TCC UI is already running
     if (is_tcc_ui_running()) {
-        FILE* log_file = fopen("/tmp/meshagent-tcc-spawn-trace.log", "a");
-        if (log_file) {
-            fprintf(log_file, "[TCC-SPAWN] TCC UI already running - not spawning\n");
-            fclose(log_file);
-        }
-        printf("[TCC-SPAWN] TCC UI already running - not spawning\n");
         return -1; // Don't spawn another instance
     }
 
     // Create pipe for IPC (child writes result, parent reads)
     int pipefd[2];
     if (pipe(pipefd) != 0) {
-        printf("[TCC-SPAWN] ERROR: Failed to create pipe: %s\n", strerror(errno));
         return -1;
     }
 
     // Set read end to non-blocking
     fcntl(pipefd[0], F_SETFL, O_NONBLOCK);
-
-    printf("[TCC-SPAWN] Created pipe: read_fd=%d, write_fd=%d\n", pipefd[0], pipefd[1]);
 
     // Convert write-end fd to string for passing via argv
     char fd_str[16];
@@ -748,39 +663,7 @@ int show_tcc_permissions_window_async(const char* exe_path, void* pipeManager, i
         NULL             // argv terminator
     };
 
-    // Log spawn details to trace file
-    FILE* log_file2 = fopen("/tmp/meshagent-tcc-spawn-trace.log", "a");
-    if (log_file2) {
-        fprintf(log_file2, "[TCC-SPAWN] ========================================\n");
-        fprintf(log_file2, "[TCC-SPAWN] About to spawn -tccCheck:\n");
-        fprintf(log_file2, "[TCC-SPAWN]   exe_path:    %s\n", exe_path);
-        fprintf(log_file2, "[TCC-SPAWN]   pipeManager: %p\n", pipeManager);
-        fprintf(log_file2, "[TCC-SPAWN]   UID:         %d\n", uid);
-        fprintf(log_file2, "[TCC-SPAWN]   argv[0]:     %s\n", argv[0]);
-        fprintf(log_file2, "[TCC-SPAWN]   argv[1]:     %s\n", argv[1]);
-        fprintf(log_file2, "[TCC-SPAWN]   argv[2]:     %s\n", argv[2]);
-        fprintf(log_file2, "[TCC-SPAWN] ========================================\n");
-        fflush(log_file2);
-        fclose(log_file2);
-    }
-
-    printf("[TCC-SPAWN] ========================================\n");
-    printf("[TCC-SPAWN] About to spawn -tccCheck:\n");
-    printf("[TCC-SPAWN]   exe_path:    %s\n", exe_path);
-    printf("[TCC-SPAWN]   pipeManager: %p\n", pipeManager);
-    printf("[TCC-SPAWN]   UID:         %d\n", uid);
-    printf("[TCC-SPAWN]   argv[0]:     %s\n", argv[0]);
-    printf("[TCC-SPAWN]   argv[1]:     %s\n", argv[1]);
-    printf("[TCC-SPAWN]   argv[2]:     %s\n", argv[2]);
-    printf("[TCC-SPAWN] ========================================\n");
-
     if (pipeManager == NULL) {
-        FILE* log_file3 = fopen("/tmp/meshagent-tcc-spawn-trace.log", "a");
-        if (log_file3) {
-            fprintf(log_file3, "[TCC-SPAWN] ERROR: pipeManager is NULL!\n");
-            fclose(log_file3);
-        }
-        printf("[TCC-SPAWN] ERROR: pipeManager is NULL!\n");
         close(pipefd[0]);
         close(pipefd[1]);
         return -1;
@@ -798,22 +681,13 @@ int show_tcc_permissions_window_async(const char* exe_path, void* pipeManager, i
     );
 
     if (childProcess == NULL) {
-        printf("[TCC-SPAWN] ERROR: ILibProcessPipe_Manager_SpawnProcessEx3 returned NULL - spawn failed!\n");
-        printf("[TCC-SPAWN] Check if executable exists and has correct permissions\n");
         close(pipefd[0]);
         close(pipefd[1]);
         return -1;
     }
 
-    printf("[TCC-SPAWN] SUCCESS: Spawn function returned non-NULL process handle\n");
-
-    pid_t child_pid = ILibProcessPipe_Process_GetPID(childProcess);
-    printf("[TCC-SPAWN] Spawned -tccCheck child process, PID=%d, UID=%d\n", child_pid, uid);
-
     // Parent process: close write end (parent only reads)
     close(pipefd[1]);
-
-    printf("[TCC-SPAWN] Parent continuing with read_fd=%d for child pid=%d\n", pipefd[0], child_pid);
 
     // Return read-end file descriptor for parent to monitor
     return pipefd[0];

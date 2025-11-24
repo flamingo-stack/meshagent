@@ -126,7 +126,6 @@ static int execute_with_authorization(const char* executable, char* const argv[]
         // Try to read from pipe if available
         if (pipe) {
             while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
-                printf("%s", buffer);
                 // Send to progress callback if set
                 if (g_progressCallback) {
                     g_progressCallback(buffer);
@@ -142,7 +141,6 @@ static int execute_with_authorization(const char* executable, char* const argv[]
             mesh_log_message("[AUTH-INSTALL] [%ld] Process exited (PID=%d), reading remaining output...\n", time(NULL), result);
             if (pipe) {
                 while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
-                    printf("%s", buffer);
                     if (g_progressCallback) {
                         g_progressCallback(buffer);
                     }
