@@ -17,21 +17,16 @@
 TCC_PermissionStatus check_fda_permission(void) {
     sqlite3 *db = NULL;
 
-    printf("[TCC-API] check_fda_permission: Attempting to open TCC.db at: %s\n", TCC_DB_PATH);
     // Try to open TCC.db read-only
     // If this succeeds, we have Full Disk Access
     int rc = sqlite3_open_v2(TCC_DB_PATH, &db, SQLITE_OPEN_READONLY, NULL);
 
-    printf("[TCC-API] check_fda_permission: sqlite3_open_v2 returned: %d (SQLITE_OK=%d)\n", rc, SQLITE_OK);
-
     if (rc == SQLITE_OK) {
         sqlite3_close(db);
-        printf("[TCC-API] check_fda_permission: GRANTED (TCC_PERMISSION_GRANTED_USER=%d)\n", TCC_PERMISSION_GRANTED_USER);
         return TCC_PERMISSION_GRANTED_USER;
     }
 
     // Cannot open TCC.db - no FDA permission
-    printf("[TCC-API] check_fda_permission: DENIED (TCC_PERMISSION_DENIED=%d)\n", TCC_PERMISSION_DENIED);
     return TCC_PERMISSION_DENIED;
 }
 
@@ -42,14 +37,8 @@ TCC_PermissionStatus check_fda_permission(void) {
  * has been granted Accessibility permission.
  */
 TCC_PermissionStatus check_accessibility_permission(void) {
-    printf("[TCC-API] check_accessibility_permission: Calling AXIsProcessTrusted()\n");
     Boolean isTrusted = AXIsProcessTrusted();
-    printf("[TCC-API] check_accessibility_permission: AXIsProcessTrusted returned: %d\n", isTrusted);
-
-    TCC_PermissionStatus result = isTrusted ? TCC_PERMISSION_GRANTED_USER : TCC_PERMISSION_DENIED;
-    printf("[TCC-API] check_accessibility_permission: Returning %d (%s)\n",
-           result, isTrusted ? "GRANTED" : "DENIED");
-    return result;
+    return isTrusted ? TCC_PERMISSION_GRANTED_USER : TCC_PERMISSION_DENIED;
 }
 
 /**
@@ -72,7 +61,6 @@ TCC_PermissionStatus check_screen_recording_permission(void) {
     // Get list of all on-screen windows
     CFArrayRef windowList = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID);
     if (!windowList) {
-        printf("[TCC-API] ERROR: CGWindowListCopyWindowInfo failed - returning DENIED\n");
         return TCC_PERMISSION_DENIED;
     }
 
@@ -115,7 +103,6 @@ TCC_PermissionStatus check_screen_recording_permission(void) {
             // Found a window with visible name - we have permission!
             foundWithName++;
             hasPermission = true;
-            printf("[TCC-API] Screen Recording: GRANTED (found named window from PID %d)\n", windowPID);
             break; // Exit immediately on first success
         }
     }
@@ -124,12 +111,10 @@ TCC_PermissionStatus check_screen_recording_permission(void) {
 
     // If we checked windows but none had visible names → no permission
     if (checkedWindows > 0 && foundWithName == 0) {
-        printf("[TCC-API] Screen Recording: DENIED (checked %d windows, all had NULL names)\n", checkedWindows);
         hasPermission = false;
     } else if (checkedWindows == 0) {
         // No valid windows to check (only our own, Dock, WindowServer)
         // Return DENIED but note that we couldn't verify
-        printf("[TCC-API] Screen Recording: DENIED (no valid windows to check)\n");
         hasPermission = false;
     }
 

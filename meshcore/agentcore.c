@@ -488,24 +488,16 @@ void TCCPipeMonitor_PostSelect(void* object, int slct, fd_set *readset, fd_set *
 
 		if (bytes_read == 1)
 		{
-			ILIBMESSAGE2("[TCC-PIPE] Read result from -tccCheck child:", result_byte);
-
 			// If result is 1, user clicked "Do not remind me again"
 			if (result_byte == 1)
 			{
-				ILIBMESSAGE("[TCC-PIPE] Saving tccPermissionsUIDisabled=1 to database");
 				ILibSimpleDataStore_Put(monitor->masterDb, "tccPermissionsUIDisabled", "1");
-			}
-			else
-			{
-				ILIBMESSAGE("[TCC-PIPE] User chose to be reminded again (not saving preference)");
 			}
 
 			// Close pipe and mark inactive
 			close(monitor->pipe_fd);
 			monitor->pipe_fd = -1;
 			monitor->active = 0;
-			ILIBMESSAGE("[TCC-PIPE] Closed pipe, monitoring complete");
 		}
 		else if (bytes_read == 0)
 		{
@@ -532,7 +524,6 @@ void TCCPipeMonitor_Destroy(void* object)
 	TCCPipeMonitor *monitor = (TCCPipeMonitor*)((ILibChain_Link*)object)->ExtraMemoryPtr;
 	if (monitor->pipe_fd >= 0)
 	{
-		ILIBMESSAGE("[TCC-PIPE] Cleanup: closing pipe fd");
 		close(monitor->pipe_fd);
 		monitor->pipe_fd = -1;
 	}
@@ -559,8 +550,6 @@ void* TCCPipeMonitor_Create(void *chain, ILibSimpleDataStore masterDb, int pipe_
 
 	// Add to chain
 	ILibChain_SafeAdd(chain, link);
-
-	ILIBMESSAGE2("[TCC-PIPE] Created monitor for pipe fd:", pipe_fd);
 
 	return link;
 }
@@ -1581,11 +1570,8 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 		{
 			int tcc_pipe_fd = show_tcc_permissions_window_async(agent->exePath, agent->pipeManager, console_uid);
 			if (tcc_pipe_fd >= 0) {
-				ILIBMESSAGE2("[TCC-REMOTE] Spawned -tccCheck, pipe fd for reading result:", tcc_pipe_fd);
 				// Create async monitor to read result from pipe
 				TCCPipeMonitor_Create(agent->chain, agent->masterDb, tcc_pipe_fd);
-			} else {
-				ILIBMESSAGE("[TCC-REMOTE] Failed to spawn -tccCheck (already running or error)");
 			}
 		}
 
@@ -5253,26 +5239,14 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 				{
 					console_uid = (int)uid;
 					CFRelease(userName);
-					ILIBMESSAGE2("[TCC-STARTUP] Got console UID from SCDynamicStore:", console_uid);
-				}
-				else
-				{
-					ILIBMESSAGE("[TCC-STARTUP] No console user logged in, console_uid = 0");
 				}
 				CFRelease(store);
-			}
-			else
-			{
-				ILIBMESSAGE("[TCC-STARTUP] ERROR: Could not create SCDynamicStore");
 			}
 
 			int tcc_pipe_fd = show_tcc_permissions_window_async(agentHost->exePath, agentHost->pipeManager, console_uid);
 			if (tcc_pipe_fd >= 0) {
-				ILIBMESSAGE2("[TCC-STARTUP] Spawned -tccCheck, pipe fd for reading result:", tcc_pipe_fd);
 				// Create async monitor to read result from pipe
 				TCCPipeMonitor_Create(agentHost->chain, agentHost->masterDb, tcc_pipe_fd);
-			} else {
-				ILIBMESSAGE("[TCC-STARTUP] Failed to spawn -tccCheck (already running or error)");
 			}
 		}
 	}
