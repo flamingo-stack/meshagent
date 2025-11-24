@@ -132,7 +132,7 @@ int signcheck_verifysign(char* filename, int upgrade)
 	int endblock[4];
 	char* signatureblock = NULL;
 	int signatureblocklen = 0;
-	SHA512_CTX c;
+	EVP_MD_CTX *mdctx = NULL;
 	char *buf = NULL;
 	char *hashs = NULL;
 	int hashslen;
@@ -188,14 +188,18 @@ int signcheck_verifysign(char* filename, int upgrade)
 	if (agentid != g_agentid) { ILIBMESSAGE("BAD-ARCH-CHECK"); fclose(pFile); return 0; }
 
 	// Seek to the start and hash the entire file except for the signature stuff at the end
-	SHA384_Init(&c);
+	mdctx = EVP_MD_CTX_new();
+	if (mdctx == NULL) goto error;
+	EVP_DigestInit_ex(mdctx, EVP_sha384(), NULL);
 	if (fseek(pFile, 0, SEEK_SET)) goto error;
 	i = totallen - (size_t)(endblock[0] + 16);
 	if ((buf = (char*)malloc(4096)) == NULL) goto error;
-	while ((i > 0) && (len = fread(buf, 1, i > 4096 ? 4096 : i, pFile)) > 0) { SHA384_Update(&c, buf, len); i -= len; }
+	while ((i > 0) && (len = fread(buf, 1, i > 4096 ? 4096 : i, pFile)) > 0) { EVP_DigestUpdate(mdctx, buf, len); i -= len; }
 	free(buf);
 	if (i != 0) goto error;
-	SHA384_Final((unsigned char*)totalfilehash, &c);
+	EVP_DigestFinal_ex(mdctx, (unsigned char*)totalfilehash, NULL);
+	EVP_MD_CTX_free(mdctx);
+	mdctx = NULL;
 
 	// Check that the file hash is the same as the second hash in the hash block
 	if (memcmp(hashs + 48, totalfilehash, 48) != 0) goto error;
@@ -211,6 +215,7 @@ int signcheck_verifysign(char* filename, int upgrade)
 
 error:
 	// Clean up
+	if (mdctx != NULL) EVP_MD_CTX_free(mdctx);
 	util_freecert(&cert);
 	if (certbuf != NULL) free(certbuf);
 	if (hashs != NULL) free(hashs);

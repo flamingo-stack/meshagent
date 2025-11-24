@@ -2865,34 +2865,36 @@ int GenerateSHA384FileHash(char *filePath, char *fileHash)
 		}
 	}
 
-	SHA512_CTX ctx;
-	SHA384_Init(&ctx);
+	EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+	if (mdctx == NULL) { fclose(tmpFile); return -1; }
+	EVP_DigestInit_ex(mdctx, EVP_sha384(), NULL);
 	bytesLeft = endIndex;
 	fseek(tmpFile, 0, SEEK_SET);
 	if (checkSumIndex != 0)
 	{
 		bytesRead = fread(ILibScratchPad, 1, checkSumIndex + 4, tmpFile);
 		((unsigned int*)(ILibScratchPad + checkSumIndex))[0] = 0;
-		SHA384_Update(&ctx, ILibScratchPad, bytesRead);
+		EVP_DigestUpdate(mdctx, ILibScratchPad, bytesRead);
 		if (endIndex > 0) { bytesLeft -= (unsigned int)bytesRead; }
 
 		bytesRead = fread(ILibScratchPad, 1, tableIndex + 8 - (checkSumIndex + 4), tmpFile);
 		((unsigned int*)(ILibScratchPad + bytesRead - 8))[0] = 0;
 		((unsigned int*)(ILibScratchPad + bytesRead - 8))[1] = 0;
-		SHA384_Update(&ctx, ILibScratchPad, bytesRead);
+		EVP_DigestUpdate(mdctx, ILibScratchPad, bytesRead);
 		if (endIndex > 0) { bytesLeft -= (unsigned int)bytesRead; }
 	}
 
 	while ((bytesRead = fread(ILibScratchPad, 1, endIndex == 0 ? sizeof(ILibScratchPad) : (bytesLeft > sizeof(ILibScratchPad) ? sizeof(ILibScratchPad) : bytesLeft), tmpFile)) > 0)
 	{
-		SHA384_Update(&ctx, ILibScratchPad, bytesRead);
-		if (endIndex > 0) 
-		{ 
-			bytesLeft -= (unsigned int)bytesRead; 
+		EVP_DigestUpdate(mdctx, ILibScratchPad, bytesRead);
+		if (endIndex > 0)
+		{
+			bytesLeft -= (unsigned int)bytesRead;
 			if (bytesLeft == 0) { break; }
 		}
 	}
-	SHA384_Final((unsigned char*)fileHash, &ctx);
+	EVP_DigestFinal_ex(mdctx, (unsigned char*)fileHash, NULL);
+	EVP_MD_CTX_free(mdctx);
 	fclose(tmpFile);
 
 	return(0);
@@ -3166,11 +3168,10 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 			if (cmdLen == sizeof(MeshCommand_BinaryPacket_AuthRequest))
 			{
 				if (agent->controlChannelDebug != 0) { ILIBLOGMESSAGEX("Processing Authentication Request..."); }
-				MeshCommand_BinaryPacket_AuthRequest *AuthRequest = (MeshCommand_BinaryPacket_AuthRequest*)cmd;
-				int signLen;
-				SHA512_CTX c;
+					MeshCommand_BinaryPacket_AuthRequest *AuthRequest = (MeshCommand_BinaryPacket_AuthRequest*)cmd;
+				size_t signLen;
+				EVP_MD_CTX *mdctx = NULL;
 				EVP_PKEY *evp_prikey;
-				RSA *rsa_prikey;
 
 				// Hash the server's web certificate and check if it matches the one in the auth request
 				util_certhash2(peer, ILibScratchPad2); // Hash the server certificate
@@ -3200,22 +3201,27 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 				if (agent->selfcert.pkey != NULL) {
 #endif
 					// Use our agent root private key to sign HASH(ServerWebHash + ServerNonce + AgentNonce)
-					SHA384_Init(&c);
-					SHA384_Update(&c, AuthRequest->serverHash, UTIL_SHA384_HASHSIZE); // Server web hash
-					SHA384_Update(&c, agent->serverNonce, UTIL_SHA384_HASHSIZE); // Server nonce
-					SHA384_Update(&c, agent->agentNonce, UTIL_SHA384_HASHSIZE); // Agent nonce
-					SHA384_Final((unsigned char*)ILibScratchPad, &c);
-
-					// Create a RSA signature using OpenSSL & send it
-					evp_prikey = agent->selfcert.pkey;
-					rsa_prikey = EVP_PKEY_get1_RSA(evp_prikey);
-					signLen = sizeof(ILibScratchPad2) - sizeof(MeshCommand_BinaryPacket_AuthVerify_Header) - certLen;
-					if (RSA_sign(NID_sha384, (unsigned char*)ILibScratchPad, UTIL_SHA384_HASHSIZE, (unsigned char*)(rav->data + certLen), (unsigned int*)&signLen, rsa_prikey) == 1)
+					mdctx = EVP_MD_CTX_new();
+					if (mdctx != NULL)
 					{
-						// Signature succesful, send the result to the server
-						ILibWebClient_WebSocket_Send(WebStateObject, ILibWebClient_WebSocket_DataType_BINARY, (char*)rav, sizeof(MeshCommand_BinaryPacket_AuthVerify_Header) + certLen + signLen, ILibAsyncSocket_MemoryOwnership_USER, ILibWebClient_WebSocket_FragmentFlag_Complete);
+						evp_prikey = agent->selfcert.pkey;
+
+						// Hash: ServerWebHash + ServerNonce + AgentNonce and sign with EVP_DigestSign
+						if (EVP_DigestSignInit(mdctx, NULL, EVP_sha384(), NULL, evp_prikey) == 1)
+						{
+							EVP_DigestSignUpdate(mdctx, AuthRequest->serverHash, UTIL_SHA384_HASHSIZE); // Server web hash
+							EVP_DigestSignUpdate(mdctx, agent->serverNonce, UTIL_SHA384_HASHSIZE); // Server nonce
+							EVP_DigestSignUpdate(mdctx, agent->agentNonce, UTIL_SHA384_HASHSIZE); // Agent nonce
+
+							signLen = sizeof(ILibScratchPad2) - sizeof(MeshCommand_BinaryPacket_AuthVerify_Header) - certLen;
+							if (EVP_DigestSignFinal(mdctx, (unsigned char*)(rav->data + certLen), &signLen) == 1)
+							{
+								// Signature successful, send the result to the server
+								ILibWebClient_WebSocket_Send(WebStateObject, ILibWebClient_WebSocket_DataType_BINARY, (char*)rav, sizeof(MeshCommand_BinaryPacket_AuthVerify_Header) + certLen + (int)signLen, ILibAsyncSocket_MemoryOwnership_USER, ILibWebClient_WebSocket_FragmentFlag_Complete);
+							}
+						}
+						EVP_MD_CTX_free(mdctx);
 					}
-					RSA_free(rsa_prikey);
 #ifdef WIN32
 				} else {
 					// Use our agent root private key to sign: ServerWebHash + ServerNonce + AgentNonce
@@ -3253,13 +3259,12 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 				AuthVerify->signature = avh->data + AuthVerify->certLen;
 				AuthVerify->signatureLen = (unsigned short)(cmdLen - (int)(sizeof(MeshCommand_BinaryPacket_AuthVerify_Header) + AuthVerify->certLen));
 
-				if (cmdLen > (int)(sizeof(MeshCommand_BinaryPacket_AuthVerify_Header) + AuthVerify->certLen))
+					if (cmdLen > (int)(sizeof(MeshCommand_BinaryPacket_AuthVerify_Header) + AuthVerify->certLen))
 				{
 					int hashlen = UTIL_SHA384_HASHSIZE;
-					SHA512_CTX c;
+					EVP_MD_CTX *mdctx = NULL;
 					X509* serverCert = NULL;
 					EVP_PKEY *evp_pubkey;
-					RSA *rsa_pubkey;
 
 					// Get the server certificate
 					if (!d2i_X509(&serverCert, (const unsigned char**)&AuthVerify->cert, AuthVerify->certLen)) { printf("Invalid server certificate\r\n"); break; } // TODO: Disconnect
@@ -3268,25 +3273,25 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 					X509_pubkey_digest(serverCert, EVP_sha384(), (unsigned char*)ILibScratchPad, (unsigned int*)&hashlen); // OpenSSL 1.1, SHA384
 					if (memcmp(ILibScratchPad, agent->serverHash, UTIL_SHA384_HASHSIZE) != 0) {
 						X509_pubkey_digest(serverCert, EVP_sha256(), (unsigned char*)ILibScratchPad, (unsigned int*)&hashlen); // OpenSSL 1.1, SHA256 (For older .mshx policy file)
-						if (memcmp(ILibScratchPad, agent->serverHash, UTIL_SHA256_HASHSIZE) != 0) 
+						if (memcmp(ILibScratchPad, agent->serverHash, UTIL_SHA256_HASHSIZE) != 0)
 						{
 							printf("Server certificate mismatch\r\n"); break; // TODO: Disconnect
 							if (agent->controlChannelDebug != 0) { ILIBLOGMESSAGEX("Server certificate mismatch"); }
 						}
 					}
 
-					// Compute the authentication hash
-					SHA384_Init(&c);
-					util_certhash2(peer, ILibScratchPad2);
-					SHA384_Update(&c, ILibScratchPad2, UTIL_SHA384_HASHSIZE);
-					SHA384_Update(&c, agent->agentNonce, UTIL_SHA384_HASHSIZE);
-					SHA384_Update(&c, agent->serverNonce, UTIL_SHA384_HASHSIZE);
-					SHA384_Final((unsigned char*)ILibScratchPad, &c);
-
-					// Verify the hash signature using the server certificate
+					// Verify the signature using EVP_DigestVerify
 					evp_pubkey = X509_get_pubkey(serverCert);
-					rsa_pubkey = EVP_PKEY_get1_RSA(evp_pubkey);
-					if (RSA_verify(NID_sha384, (unsigned char*)ILibScratchPad, UTIL_SHA384_HASHSIZE, (unsigned char*)AuthVerify->signature, AuthVerify->signatureLen, rsa_pubkey) == 1)
+					mdctx = EVP_MD_CTX_new();
+					if (mdctx != NULL && EVP_DigestVerifyInit(mdctx, NULL, EVP_sha384(), NULL, evp_pubkey) == 1)
+					{
+						// Hash: ServerWebCertHash + AgentNonce + ServerNonce
+						util_certhash2(peer, ILibScratchPad2);
+						EVP_DigestVerifyUpdate(mdctx, ILibScratchPad2, UTIL_SHA384_HASHSIZE);
+						EVP_DigestVerifyUpdate(mdctx, agent->agentNonce, UTIL_SHA384_HASHSIZE);
+						EVP_DigestVerifyUpdate(mdctx, agent->serverNonce, UTIL_SHA384_HASHSIZE);
+
+						if (EVP_DigestVerifyFinal(mdctx, (unsigned char*)AuthVerify->signature, AuthVerify->signatureLen) == 1)
 					{
 						// Server signature verified, we are good to go.
 						agent->serverAuthState |= 1;
@@ -3294,15 +3299,16 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 						// Store the server's TLS cert hash so in the future, we can skip server auth.
 						ILibSimpleDataStore_PutEx(agent->masterDb, "ServerTlsCertHash", 17, ILibScratchPad2, UTIL_SHA384_HASHSIZE);
 
-						// Send our agent information to the server
+							// Send our agent information to the server
 						MeshServer_SendAgentInfo(agent, WebStateObject);
 					} else {
 						printf("Invalid server signature\r\n");
 						if (agent->controlChannelDebug != 0) { ILIBLOGMESSAGEX("Invalid Server Signature"); }
 						// TODO: Disconnect
 					}
+					}
 
-					RSA_free(rsa_pubkey);
+					if (mdctx != NULL) { EVP_MD_CTX_free(mdctx); }
 					EVP_PKEY_free(evp_pubkey);
 					X509_free(serverCert);
 				}
@@ -5905,14 +5911,19 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 			struct sockaddr_in multicastAddr4;
 			struct sockaddr_in6 multicastAddr6;
 
-			// Read DiscoveryKey if present, perform SHA384 on it and use it as UDP encryption/decryption key.
-			SHA512_CTX c;
+				// Read DiscoveryKey if present, perform SHA384 on it and use it as UDP encryption/decryption key.
+			EVP_MD_CTX *mdctx = NULL;
 			int i = (ILibSimpleDataStore_Get(agentHost->masterDb, "DiscoveryKey", ILibScratchPad, sizeof(ILibScratchPad)));
-			if (i > 1) 
+			if (i > 1)
 			{
-				SHA384_Init(&c);
-				SHA384_Update(&c, ILibScratchPad, i - 1); // Hash the discovery key
-				SHA384_Final((unsigned char*)ILibScratchPad, &c);
+				mdctx = EVP_MD_CTX_new();
+				if (mdctx != NULL)
+				{
+					EVP_DigestInit_ex(mdctx, EVP_sha384(), NULL);
+					EVP_DigestUpdate(mdctx, ILibScratchPad, i - 1); // Hash the discovery key
+					EVP_DigestFinal_ex(mdctx, (unsigned char*)ILibScratchPad, NULL);
+					EVP_MD_CTX_free(mdctx);
+				}
 				if ((agentHost->multicastDiscoveryKey = (char*)malloc(32)) == NULL) { ILIBCRITICALEXIT(254); }
 				memcpy(agentHost->multicastDiscoveryKey, ILibScratchPad, 32); // Save the first 32 bytes of the hash as key
 			}

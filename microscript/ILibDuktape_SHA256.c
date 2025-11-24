@@ -40,7 +40,7 @@ typedef struct ILibDuktape_SHA256_Data
 
 	void *object;
 	char buffer[UTIL_SHA256_HASHSIZE];
-	SHA256_CTX shctx;
+	EVP_MD_CTX *shctx;
 }ILibDuktape_SHA256_Data;
 typedef struct ILibDuktape_SHA512_Data
 {
@@ -48,7 +48,7 @@ typedef struct ILibDuktape_SHA512_Data
 
 	void *object;
 	char buffer[UTIL_SHA512_HASHSIZE];
-	SHA512_CTX shctx;
+	EVP_MD_CTX *shctx;
 }ILibDuktape_SHA512_Data;
 typedef struct ILibDuktape_MD5_Data
 {
@@ -56,7 +56,7 @@ typedef struct ILibDuktape_MD5_Data
 
 	void *object;
 	char buffer[UTIL_MD5_HASHSIZE];
-	MD5_CTX mctx;
+	EVP_MD_CTX *mctx;
 }ILibDuktape_MD5_Data;
 
 typedef struct ILibDuktape_SHA1_Data
@@ -65,7 +65,7 @@ typedef struct ILibDuktape_SHA1_Data
 
 	void *object;
 	char buffer[UTIL_SHA1_HASHSIZE];
-	SHA_CTX sctx;
+	EVP_MD_CTX *sctx;
 }ILibDuktape_SHA1_Data;
 
 #ifndef MICROSTACK_NOTLS
@@ -103,20 +103,25 @@ ILibTransport_DoneState ILibDuktape_SHA256_Write(struct ILibDuktape_WritableStre
 {
 	ILibDuktape_SHA256_Data *data = (ILibDuktape_SHA256_Data*)user;
 
-	SHA256_Update(&(data->shctx), buffer, bufferLen);
+	if (data->shctx != NULL) EVP_DigestUpdate(data->shctx, buffer, bufferLen);
 	return(ILibTransport_DoneState_COMPLETE);
 }
 ILibTransport_DoneState ILibDuktape_SHA384_Write(struct ILibDuktape_WritableStream *stream, char *buffer, int bufferLen, void *user)
 {
 	ILibDuktape_SHA512_Data *data = (ILibDuktape_SHA512_Data*)user;
 
-	SHA384_Update(&(data->shctx), buffer, bufferLen);
+	if (data->shctx != NULL) EVP_DigestUpdate(data->shctx, buffer, bufferLen);
 	return(ILibTransport_DoneState_COMPLETE);
 }
 void ILibDuktape_SHA256_End(struct ILibDuktape_WritableStream *stream, void *user)
 {
 	ILibDuktape_SHA256_Data *data = (ILibDuktape_SHA256_Data*)user;
-	SHA256_Final((unsigned char*)data->buffer, &(data->shctx));
+	if (data->shctx != NULL)
+	{
+		EVP_DigestFinal_ex(data->shctx, (unsigned char*)data->buffer, NULL);
+		EVP_MD_CTX_free(data->shctx);
+		data->shctx = NULL;
+	}
 
 	duk_push_external_buffer(data->ctx);														// [extBuffer]
 	duk_config_buffer(data->ctx, -1, data->buffer, UTIL_SHA256_HASHSIZE);
@@ -128,7 +133,12 @@ void ILibDuktape_SHA256_End(struct ILibDuktape_WritableStream *stream, void *use
 void ILibDuktape_SHA384_End(struct ILibDuktape_WritableStream *stream, void *user)
 {
 	ILibDuktape_SHA512_Data *data = (ILibDuktape_SHA512_Data*)user;
-	SHA384_Final((unsigned char*)data->buffer, &(data->shctx));
+	if (data->shctx != NULL)
+	{
+		EVP_DigestFinal_ex(data->shctx, (unsigned char*)data->buffer, NULL);
+		EVP_MD_CTX_free(data->shctx);
+		data->shctx = NULL;
+	}
 
 	duk_push_external_buffer(data->ctx);														// [extBuffer]
 	duk_config_buffer(data->ctx, -1, data->buffer, UTIL_SHA384_HASHSIZE);
@@ -147,7 +157,7 @@ duk_ret_t ILibDuktape_SHA256_SIGNER_Finalizer(duk_context *ctx)
 	data = (ILibDuktape_SHA256_Signer_Data*)Duktape_GetBuffer(ctx, -1, NULL);
 	if (data->mdctx != NULL)
 	{
-		EVP_MD_CTX_destroy(data->mdctx);
+		EVP_MD_CTX_free(data->mdctx);
 		data->mdctx = NULL;
 	}
 
@@ -251,7 +261,7 @@ duk_ret_t ILibDuktape_SHA256_SIGNER_Create(duk_context *ctx)
 
 	ILibDuktape_CreateFinalizer(ctx, ILibDuktape_SHA256_SIGNER_Finalizer);
 
-	data->mdctx = EVP_MD_CTX_create();
+	data->mdctx = EVP_MD_CTX_new();
 	EVP_DigestSignInit(data->mdctx, NULL, EVP_sha256(), NULL, cert->pkey);
 	data->writableStream = ILibDuktape_WritableStream_Init(ctx, ILibDuktape_SHA256_SIGNER_Write, ILibDuktape_SHA256_SIGNER_End, data);
 
@@ -342,7 +352,7 @@ duk_ret_t ILibDuktape_VERIFIER_Create(duk_context *ctx)
 	EVP_PKEY *pkey = X509_get0_pubkey(data->cert->x509);
 #endif
 
-
+	data->mdctx = EVP_MD_CTX_new();
 	EVP_DigestVerifyInit(data->mdctx, NULL, mdtype, NULL, pkey);
 	data->writableStream = ILibDuktape_WritableStream_Init(ctx, ILibDuktape_VERIFIER_WriteSink, ILibDuktape_VERIFIER_EndSink, data);
 	return(1);
@@ -369,20 +379,30 @@ duk_ret_t ILibDuktape_RSA_Sign(duk_context *ctx)
 
 	duk_size_t bufferLen;
 	char *buffer = Duktape_GetBuffer(ctx, 2, &bufferLen);
-	RSA *r = EVP_PKEY_get1_RSA(cert->pkey);
-	int rsalen = RSA_size(r);
-	char *sig = duk_push_fixed_buffer(ctx, rsalen);
-	duk_push_buffer_object(ctx, -1, 0, rsalen, DUK_BUFOBJ_NODEJS_BUFFER);
+	int keysize = EVP_PKEY_size(cert->pkey);
+	char *sig = duk_push_fixed_buffer(ctx, keysize);
+	duk_push_buffer_object(ctx, -1, 0, keysize, DUK_BUFOBJ_NODEJS_BUFFER);
 
-	if (RSA_sign(duk_require_int(ctx, 0), (unsigned char*)buffer, (unsigned int)bufferLen, (unsigned char*)sig, (unsigned int*)&rsalen, r) != 1)
+	EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+	if (mdctx == NULL) return(ILibDuktape_Error(ctx, "EVP_MD_CTX_new() failed"));
+
+	const EVP_MD *md;
+	int nid = duk_require_int(ctx, 0);
+	if (nid == NID_sha256) md = EVP_sha256();
+	else if (nid == NID_sha384) md = EVP_sha384();
+	else if (nid == NID_sha512) md = EVP_sha512();
+	else { EVP_MD_CTX_free(mdctx); return(ILibDuktape_Error(ctx, "Unsupported digest type")); }
+
+	size_t siglen = keysize;
+	if (EVP_DigestSignInit(mdctx, NULL, md, NULL, cert->pkey) <= 0 ||
+		EVP_DigestSign(mdctx, (unsigned char*)sig, &siglen, (const unsigned char*)buffer, bufferLen) <= 0)
 	{
-		// Failed
 		unsigned long err = ERR_get_error();
 		char *reason = (char*)ERR_reason_error_string(err);
-		RSA_free(r);
-		return(ILibDuktape_Error(ctx, "RSA_sign() Error: (%lu, %s)", err, reason));
+		EVP_MD_CTX_free(mdctx);
+		return(ILibDuktape_Error(ctx, "EVP_DigestSign() Error: (%lu, %s)", err, reason));
 	}
-	RSA_free(r);
+	EVP_MD_CTX_free(mdctx);
 	return(1);
 }
 duk_ret_t ILibDuktape_RSA_Verify(duk_context *ctx)
@@ -393,13 +413,28 @@ duk_ret_t ILibDuktape_RSA_Verify(duk_context *ctx)
 
 	struct util_cert *cert = (struct util_cert*)Duktape_GetBufferProperty(ctx, 1, ILibDuktape_TLS_util_cert);
 #ifdef OLDSSL
-	RSA *r = EVP_PKEY_get1_RSA(X509_get_pubkey(cert->x509));
+	EVP_PKEY *pkey = X509_get_pubkey(cert->x509);
 #else
-	RSA *r = EVP_PKEY_get1_RSA(X509_get0_pubkey(cert->x509));
+	EVP_PKEY *pkey = X509_get0_pubkey(cert->x509);
 #endif
-	int vstatus = RSA_verify(duk_require_int(ctx, 0), (unsigned char*)buffer, (unsigned int)bufferLen, (unsigned char*)sig, (unsigned int)sigLen, r);
+
+	EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+	if (mdctx == NULL) { duk_push_boolean(ctx, 0); return(1); }
+
+	const EVP_MD *md;
+	int nid = duk_require_int(ctx, 0);
+	if (nid == NID_sha256) md = EVP_sha256();
+	else if (nid == NID_sha384) md = EVP_sha384();
+	else if (nid == NID_sha512) md = EVP_sha512();
+	else { EVP_MD_CTX_free(mdctx); duk_push_boolean(ctx, 0); return(1); }
+
+	int vstatus = 0;
+	if (EVP_DigestVerifyInit(mdctx, NULL, md, NULL, pkey) > 0)
+	{
+		vstatus = EVP_DigestVerify(mdctx, (const unsigned char*)sig, sigLen, (const unsigned char*)buffer, bufferLen);
+	}
+	EVP_MD_CTX_free(mdctx);
 	duk_push_boolean(ctx, vstatus == 1);
-	RSA_free(r);
 	return(1);
 }
 void ILibDuktape_RSA_PUSH(duk_context *ctx, void *chain)
@@ -425,9 +460,14 @@ duk_ret_t ILibDuktape_SHA256_syncHash(duk_context *ctx)
 	duk_get_prop_string(ctx, -1, ILibDuktape_SHA256_PTR);
 	data = (ILibDuktape_SHA256_Data*)Duktape_GetBuffer(ctx, -1, NULL);
 
-	SHA256_Init(&(data->shctx));
-	SHA256_Update(&(data->shctx), buffer, bufferLen);
-	SHA256_Final((unsigned char*)data->buffer, &(data->shctx));
+	EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+	if (mdctx != NULL)
+	{
+		EVP_DigestInit_ex(mdctx, EVP_sha256(), NULL);
+		EVP_DigestUpdate(mdctx, buffer, bufferLen);
+		EVP_DigestFinal_ex(mdctx, (unsigned char*)data->buffer, NULL);
+		EVP_MD_CTX_free(mdctx);
+	}
 
 	duk_push_external_buffer(ctx);
 	duk_config_buffer(ctx, -1, data->buffer, UTIL_SHA256_HASHSIZE);
@@ -445,9 +485,14 @@ duk_ret_t ILibDuktape_SHA384_syncHash(duk_context *ctx)
 	duk_get_prop_string(ctx, -1, ILibDuktape_SHA512_PTR);
 	data = (ILibDuktape_SHA512_Data*)Duktape_GetBuffer(ctx, -1, NULL);
 
-	SHA384_Init(&(data->shctx));
-	SHA384_Update(&(data->shctx), buffer, bufferLen);
-	SHA384_Final((unsigned char*)data->buffer, &(data->shctx));
+	EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+	if (mdctx != NULL)
+	{
+		EVP_DigestInit_ex(mdctx, EVP_sha384(), NULL);
+		EVP_DigestUpdate(mdctx, buffer, bufferLen);
+		EVP_DigestFinal_ex(mdctx, (unsigned char*)data->buffer, NULL);
+		EVP_MD_CTX_free(mdctx);
+	}
 
 	duk_push_external_buffer(ctx);
 	duk_config_buffer(ctx, -1, data->buffer, UTIL_SHA384_HASHSIZE);
@@ -460,13 +505,18 @@ ILibTransport_DoneState ILibDuktape_MD5_Write(struct ILibDuktape_WritableStream 
 {
 	ILibDuktape_MD5_Data *data = (ILibDuktape_MD5_Data*)user;
 
-	MD5_Update(&(data->mctx), buffer, bufferLen);
+	if (data->mctx != NULL) EVP_DigestUpdate(data->mctx, buffer, bufferLen);
 	return(ILibTransport_DoneState_COMPLETE);
 }
 void ILibDuktape_MD5_End(struct ILibDuktape_WritableStream *stream, void *user)
 {
 	ILibDuktape_MD5_Data *data = (ILibDuktape_MD5_Data*)user;
-	MD5_Final((unsigned char*)data->buffer, &(data->mctx));
+	if (data->mctx != NULL)
+	{
+		EVP_DigestFinal_ex(data->mctx, (unsigned char*)data->buffer, NULL);
+		EVP_MD_CTX_free(data->mctx);
+		data->mctx = NULL;
+	}
 
 	duk_push_external_buffer(data->ctx);													// [extBuffer]
 	duk_config_buffer(data->ctx, -1, data->buffer, UTIL_MD5_HASHSIZE);
@@ -488,9 +538,14 @@ duk_ret_t ILibDuktape_MD5_syncHash(duk_context *ctx)
 	duk_get_prop_string(ctx, -1, ILibDuktape_MD5_PTR);
 	data = (ILibDuktape_MD5_Data*)Duktape_GetBuffer(ctx, -1, NULL);
 
-	MD5_Init(&(data->mctx));
-	MD5_Update(&(data->mctx), buffer, bufferLen);
-	MD5_Final((unsigned char*)data->buffer, &(data->mctx));
+	EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+	if (mdctx != NULL)
+	{
+		EVP_DigestInit_ex(mdctx, EVP_md5(), NULL);
+		EVP_DigestUpdate(mdctx, buffer, bufferLen);
+		EVP_DigestFinal_ex(mdctx, (unsigned char*)data->buffer, NULL);
+		EVP_MD_CTX_free(mdctx);
+	}
 
 	duk_push_external_buffer(ctx);
 	duk_config_buffer(ctx, -1, data->buffer, UTIL_MD5_HASHSIZE);
@@ -516,7 +571,8 @@ duk_ret_t ILibDuktape_MD5_Create(duk_context *ctx)
 
 	data->ctx = ctx;
 	data->object = duk_get_heapptr(ctx, -1);
-	MD5_Init(&(data->mctx));
+	data->mctx = EVP_MD_CTX_new();
+	if (data->mctx != NULL) EVP_DigestInit_ex(data->mctx, EVP_md5(), NULL);
 
 	ILibDuktape_WritableStream_Init(ctx, ILibDuktape_MD5_Write, ILibDuktape_MD5_End, data);
 	return(1);
@@ -540,7 +596,8 @@ duk_ret_t ILibDuktape_SHA256_Create(duk_context *ctx)
 
 	data->ctx = ctx;
 	data->object = duk_get_heapptr(ctx, -1);
-	SHA256_Init(&(data->shctx));
+	data->shctx = EVP_MD_CTX_new();
+	if (data->shctx != NULL) EVP_DigestInit_ex(data->shctx, EVP_sha256(), NULL);
 
 	ILibDuktape_WritableStream_Init(ctx, ILibDuktape_SHA256_Write, ILibDuktape_SHA256_End, data);
 
@@ -550,13 +607,18 @@ ILibTransport_DoneState ILibDuktape_SHA512_Write(struct ILibDuktape_WritableStre
 {
 	ILibDuktape_SHA512_Data *data = (ILibDuktape_SHA512_Data*)user;
 
-	SHA512_Update(&(data->shctx), buffer, bufferLen);
+	if (data->shctx != NULL) EVP_DigestUpdate(data->shctx, buffer, bufferLen);
 	return(ILibTransport_DoneState_COMPLETE);
 }
 void ILibDuktape_SHA512_End(struct ILibDuktape_WritableStream *stream, void *user)
 {
 	ILibDuktape_SHA512_Data *data = (ILibDuktape_SHA512_Data*)user;
-	SHA512_Final((unsigned char*)data->buffer, &(data->shctx));
+	if (data->shctx != NULL)
+	{
+		EVP_DigestFinal_ex(data->shctx, (unsigned char*)data->buffer, NULL);
+		EVP_MD_CTX_free(data->shctx);
+		data->shctx = NULL;
+	}
 
 	duk_push_external_buffer(data->ctx);														// [extBuffer]
 	duk_config_buffer(data->ctx, -1, data->buffer, UTIL_SHA512_HASHSIZE);
@@ -575,9 +637,14 @@ duk_ret_t ILibDuktape_SHA512_syncHash(duk_context *ctx)
 	duk_get_prop_string(ctx, -1, ILibDuktape_SHA512_PTR);
 	data = (ILibDuktape_SHA512_Data*)Duktape_GetBuffer(ctx, -1, NULL);
 
-	SHA512_Init(&(data->shctx));
-	SHA512_Update(&(data->shctx), buffer, bufferLen);
-	SHA512_Final((unsigned char*)data->buffer, &(data->shctx));
+	EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+	if (mdctx != NULL)
+	{
+		EVP_DigestInit_ex(mdctx, EVP_sha512(), NULL);
+		EVP_DigestUpdate(mdctx, buffer, bufferLen);
+		EVP_DigestFinal_ex(mdctx, (unsigned char*)data->buffer, NULL);
+		EVP_MD_CTX_free(mdctx);
+	}
 
 	duk_push_external_buffer(ctx);
 	duk_config_buffer(ctx, -1, data->buffer, UTIL_SHA512_HASHSIZE);
@@ -604,7 +671,8 @@ duk_ret_t ILibDuktape_SHA512_Create(duk_context *ctx)
 
 	data->ctx = ctx;
 	data->object = duk_get_heapptr(ctx, -1);
-	SHA512_Init(&(data->shctx));
+	data->shctx = EVP_MD_CTX_new();
+	if (data->shctx != NULL) EVP_DigestInit_ex(data->shctx, EVP_sha512(), NULL);
 
 	ILibDuktape_WritableStream_Init(ctx, ILibDuktape_SHA512_Write, ILibDuktape_SHA512_End, data);
 
@@ -629,7 +697,8 @@ duk_ret_t ILibDuktape_SHA384_Create(duk_context *ctx)
 
 	data->ctx = ctx;
 	data->object = duk_get_heapptr(ctx, -1);
-	SHA384_Init(&(data->shctx));
+	data->shctx = EVP_MD_CTX_new();
+	if (data->shctx != NULL) EVP_DigestInit_ex(data->shctx, EVP_sha384(), NULL);
 
 	ILibDuktape_WritableStream_Init(ctx, ILibDuktape_SHA384_Write, ILibDuktape_SHA384_End, data);
 
@@ -639,13 +708,18 @@ ILibTransport_DoneState ILibDuktape_SHA1_Write(struct ILibDuktape_WritableStream
 {
 	ILibDuktape_SHA1_Data *data = (ILibDuktape_SHA1_Data*)user;
 
-	SHA1_Update(&(data->sctx), buffer, bufferLen);
+	if (data->sctx != NULL) EVP_DigestUpdate(data->sctx, buffer, bufferLen);
 	return(ILibTransport_DoneState_COMPLETE);
 }
 void ILibDuktape_SHA1_End(struct ILibDuktape_WritableStream *stream, void *user)
 {
 	ILibDuktape_SHA1_Data *data = (ILibDuktape_SHA1_Data*)user;
-	SHA1_Final((unsigned char*)data->buffer, &(data->sctx));
+	if (data->sctx != NULL)
+	{
+		EVP_DigestFinal_ex(data->sctx, (unsigned char*)data->buffer, NULL);
+		EVP_MD_CTX_free(data->sctx);
+		data->sctx = NULL;
+	}
 
 	duk_push_external_buffer(data->ctx);													// [extBuffer]
 	duk_config_buffer(data->ctx, -1, data->buffer, UTIL_SHA1_HASHSIZE);
@@ -667,9 +741,14 @@ duk_ret_t ILibDuktape_SHA1_syncHash(duk_context *ctx)
 	duk_get_prop_string(ctx, -1, ILibDuktape_SHA1_PTR);
 	data = (ILibDuktape_SHA1_Data*)Duktape_GetBuffer(ctx, -1, NULL);
 
-	SHA1_Init(&(data->sctx));
-	SHA1_Update(&(data->sctx), buffer, bufferLen);
-	SHA1_Final((unsigned char*)data->buffer, &(data->sctx));
+	EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+	if (mdctx != NULL)
+	{
+		EVP_DigestInit_ex(mdctx, EVP_sha1(), NULL);
+		EVP_DigestUpdate(mdctx, buffer, bufferLen);
+		EVP_DigestFinal_ex(mdctx, (unsigned char*)data->buffer, NULL);
+		EVP_MD_CTX_free(mdctx);
+	}
 
 	duk_push_external_buffer(ctx);
 	duk_config_buffer(ctx, -1, data->buffer, UTIL_SHA1_HASHSIZE);
@@ -694,7 +773,8 @@ duk_ret_t ILibDuktape_SHA1_Create(duk_context *ctx)
 
 	data->ctx = ctx;
 	data->object = duk_get_heapptr(ctx, -1);
-	SHA1_Init(&(data->sctx));
+	data->sctx = EVP_MD_CTX_new();
+	if (data->sctx != NULL) EVP_DigestInit_ex(data->sctx, EVP_sha1(), NULL);
 
 	ILibDuktape_WritableStream_Init(ctx, ILibDuktape_SHA1_Write, ILibDuktape_SHA1_End, data);
 	return(1);
