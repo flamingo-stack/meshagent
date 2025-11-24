@@ -2394,7 +2394,7 @@ char* MeshAgent_MakeAbsolutePathEx(char *basePath, char *localPath, int escapeBa
 	size_t basePathLen = strnlen_s(basePath, sizeof(ILibScratchPad2) - 4);
 	size_t len;
 
-	if (agent != NULL && agent->configPathUsesCWD != 0)
+	if (agent != NULL && agent->appBundleMode != 0)
 	{
 #ifdef WIN32
 		int i = ILibString_LastIndexOf(basePath, basePathLen, "\\", 1) + 1;
@@ -6530,20 +6530,20 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 	{
 		if ((_piX = ILibString_IndexOf(param[_pX], (int)strnlen_s(param[_pX], sizeof(ILibScratchPad)), "=", 1)) > 2 && strncmp(param[_pX], "--", 2) == 0)
 		{
-			if (_piX - 2 == 13 && strncmp(param[_pX] + 2, "configUsesCWD", 13) == 0 && strncmp(param[_pX] + _piX + 1, "1", 1) == 0)
+			if (_piX - 2 == 9 && strncmp(param[_pX] + 2, "appBundle", 9) == 0 && strncmp(param[_pX] + _piX + 1, "1", 1) == 0)
 			{
-				// Config files use working path, instead of binary path
-				agentHost->configPathUsesCWD = 1;
+				// App bundle mode: config files use working path, instead of binary path
+				agentHost->appBundleMode = 1;
 				break;
 			}
 		}
 	}
 
-	// Automatically enable configPathUsesCWD when running from a bundle
+	// Automatically enable app bundle mode when running from a bundle
 	// This ensures .db and .log files are created at the bundle parent, not inside the bundle
-	if (agentHost->configPathUsesCWD == 0 && is_running_from_bundle())
+	if (agentHost->appBundleMode == 0 && is_running_from_bundle())
 	{
-		agentHost->configPathUsesCWD = 1;
+		agentHost->appBundleMode = 1;
 	}
 
 	// Check if launched from Finder (via Info.plist LSEnvironment variable)

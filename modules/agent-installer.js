@@ -1169,8 +1169,8 @@ function createLaunchDaemon(serviceName, companyName, installPath, serviceId, in
             options.target = 'meshagent';
             // For bundle installations, do NOT copy binary to installPath - binary should stay inside bundle
             options.skipBinaryCopy = true;
-            // Add --configUsesCWD so agent looks for config files in WorkingDirectory
-            options.parameters.push('--configUsesCWD=1');
+            // Add --appBundle so agent looks for config files in WorkingDirectory (bundle parent)
+            options.parameters.push('--appBundle=1');
         } else {
             // For standalone installations, let service-manager copy the binary if needed
             servicePath = installPath + 'meshagent';
