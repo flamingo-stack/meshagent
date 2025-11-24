@@ -1,0 +1,159 @@
+name: Test MeshAgent macOS Universal Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build from (default: OpenSSL_Pipeline_3.5.4_Upgrade_v2)'
+        required: false
+        default: 'OpenSSL_Pipeline_3.5.4_Upgrade_v2'
+
+jobs:
+  test-build-universal:
+    runs-on: macos-15
+    name: Build macOS Universal Binary
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || 'OpenSSL_Pipeline_3.5.4_Upgrade_v2' }}
+
+      - name: Verify macOS version and architecture
+        run: |
+          echo "macOS version:"
+          sw_vers
+          echo ""
+          echo "Architecture:"
+          uname -m
+          echo ""
+          echo "Xcode version:"
+          xcodebuild -version || echo "Xcode not found"
+
+      - name: Build macOS Universal Binary
+        run: |
+          echo "Building macOS Universal Binary (Intel x86-64 + Apple Silicon ARM64)..."
+          make macos ARCHID=universal
+
+      - name: Verify universal binary
+        id: verify-build
+        run: |
+          BINARY="build/meshagent_macos-universal"
+
+          if [ -f "$BINARY" ]; then
+            echo "✓ Universal binary found: $BINARY"
+            ls -lh "$BINARY"
+            echo ""
+
+            echo "Checking architectures in universal binary..."
+            lipo -info "$BINARY"
+            echo ""
+
+            echo "Detailed architecture info..."
+            file "$BINARY"
+            echo ""
+
+            # Verify it contains both architectures
+            if lipo -info "$BINARY" | grep -q "x86_64" && lipo -info "$BINARY" | grep -q "arm64"; then
+              echo "✓ Universal binary contains both x86_64 and arm64 architectures"
+            else
+              echo "✗ Universal binary is missing one or both architectures"
+              exit 1
+            fi
+
+            echo "archname=macos-universal" >> $GITHUB_OUTPUT
+          else
+            echo "✗ Universal binary not found: $BINARY"
+            echo "Looking for any meshagent binaries:"
+            find build -name "meshagent_*" -type f 2>/dev/null || echo "No binaries found in build/"
+            exit 1
+          fi
+
+      - name: Verify component binaries
+        run: |
+          echo "Checking for intermediate architecture-specific binaries..."
+
+          X86_BINARY="build/meshagent_macos-x86-64"
+          ARM_BINARY="build/meshagent_macos-arm-64"
+
+          if [ -f "$X86_BINARY" ]; then
+            echo "✓ x86-64 binary found: $X86_BINARY"
+            ls -lh "$X86_BINARY"
+            lipo -info "$X86_BINARY"
+          else
+            echo "✗ x86-64 binary not found (expected during universal build process)"
+          fi
+
+          echo ""
+
+          if [ -f "$ARM_BINARY" ]; then
+            echo "✓ ARM64 binary found: $ARM_BINARY"
+            ls -lh "$ARM_BINARY"
+            lipo -info "$ARM_BINARY"
+          else
+            echo "✗ ARM64 binary not found (expected during universal build process)"
+          fi
+
+      - name: Verify OpenSSL version
+        run: |
+          BINARY="build/meshagent_macos-universal"
+          EXPECTED_SSL="3.5.4"
+
+          if [ -f "$BINARY" ]; then
+            echo "Checking OpenSSL version in $BINARY"
+            echo "Expected: OpenSSL $EXPECTED_SSL"
+
+            # Search for OpenSSL version string
+            if strings "$BINARY" | grep -i "openssl.*$EXPECTED_SSL"; then
+              echo "✓ Correct OpenSSL version ($EXPECTED_SSL) found in binary"
+            else
+              echo "✗ Expected OpenSSL $EXPECTED_SSL not found"
+              echo "OpenSSL strings found in binary:"
+              strings "$BINARY" | grep -i openssl || echo "No OpenSSL strings found"
+              exit 1
+            fi
+          else
+            echo "Binary not found, skipping OpenSSL version check"
+          fi
+
+      - name: Verify deployment targets
+        run: |
+          X86_BINARY="build/meshagent_macos-x86-64"
+          ARM_BINARY="build/meshagent_macos-arm-64"
+
+          echo "Checking deployment targets for architecture-specific binaries..."
+          echo ""
+
+          if [ -f "$X86_BINARY" ]; then
+            echo "=== x86-64 Binary Deployment Target ==="
+            echo "Expected: macOS 10.13"
+            otool -l "$X86_BINARY" | grep -A 3 LC_VERSION_MIN_MACOSX || echo "No LC_VERSION_MIN_MACOSX (checking LC_BUILD_VERSION...)"
+            otool -l "$X86_BINARY" | grep -A 5 LC_BUILD_VERSION | head -10 || echo "No LC_BUILD_VERSION"
+            echo ""
+          fi
+
+          if [ -f "$ARM_BINARY" ]; then
+            echo "=== ARM64 Binary Deployment Target ==="
+            echo "Expected: macOS 11.0"
+            otool -l "$ARM_BINARY" | grep -A 3 LC_VERSION_MIN_MACOSX || echo "No LC_VERSION_MIN_MACOSX (checking LC_BUILD_VERSION...)"
+            otool -l "$ARM_BINARY" | grep -A 5 LC_BUILD_VERSION | head -10 || echo "No LC_BUILD_VERSION"
+            echo ""
+          fi
+
+      - name: Upload universal binary artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: meshagent_${{ steps.verify-build.outputs.archname }}
+          path: build/meshagent_macos-universal
+          retention-days: 7
+
+      - name: Upload component binaries
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: meshagent_macos-components
+          path: |
+            build/meshagent_macos-x86-64
+            build/meshagent_macos-arm-64
+          retention-days: 7

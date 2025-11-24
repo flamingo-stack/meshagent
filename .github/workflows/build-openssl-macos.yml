@@ -1,0 +1,164 @@
+name: Build OpenSSL macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      openssl_version:
+        description: 'OpenSSL version to build'
+        required: false
+        default: '3.5.4'
+
+jobs:
+  build-macos:
+    strategy:
+      matrix:
+        arch:
+          # x86_64 build - target macOS 10.13
+          - { runner: 'macos-15-intel', name: 'x86_64', openssl: 'darwin64-x86_64-cc', archname: 'macos-x86-64', min_version: '10.13' }
+
+          # ARM64 build - target macOS 11
+          - { runner: 'macos-15', name: 'arm64', openssl: 'darwin64-arm64-cc', archname: 'macos-arm-64', min_version: '11.0' }
+      fail-fast: false
+
+    runs-on: ${{ matrix.arch.runner }}
+
+    name: Build ${{ matrix.arch.name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download OpenSSL source
+        run: |
+          VERSION="${{ github.event.inputs.openssl_version || '3.5.4' }}"
+          BUILD_DIR="openssl-build-macos-${{ matrix.arch.name }}"
+          curl -L "https://github.com/openssl/openssl/releases/download/openssl-$VERSION/openssl-$VERSION.tar.gz" -o openssl.tar.gz
+          mkdir -p "$BUILD_DIR"
+          tar -xzf openssl.tar.gz -C "$BUILD_DIR" --strip-components=1
+          rm openssl.tar.gz
+
+      - name: Configure OpenSSL
+        working-directory: openssl-build-macos-${{ matrix.arch.name }}
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.arch.min_version }}
+        run: |
+          export MACOSX_DEPLOYMENT_TARGET=${{ matrix.arch.min_version }}
+          ./Configure ${{ matrix.arch.openssl }} \
+            -mmacosx-version-min=${{ matrix.arch.min_version }} \
+            no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic \
+            no-threads no-dso no-shared no-asm no-rc5 no-idea \
+            no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast \
+            no-md2 no-mdc2 \
+            --release
+          echo "Configured OpenSSL with MACOSX_DEPLOYMENT_TARGET=${{ matrix.arch.min_version }}"
+
+      - name: Build OpenSSL
+        working-directory: openssl-build-macos-${{ matrix.arch.name }}
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.arch.min_version }}
+        run: |
+          export MACOSX_DEPLOYMENT_TARGET=${{ matrix.arch.min_version }}
+          make -j$(sysctl -n hw.ncpu) build_libs
+          echo "Built OpenSSL with MACOSX_DEPLOYMENT_TARGET=${{ matrix.arch.min_version }}"
+
+      - name: Copy libraries to output directory
+        run: |
+          # Create output directory structure
+          mkdir -p openssl/libstatic/macos/${{ matrix.arch.archname }}
+
+          # Copy libraries
+          cp openssl-build-macos-${{ matrix.arch.name }}/libcrypto.a "openssl/libstatic/macos/${{ matrix.arch.archname }}/libcrypto.a"
+          cp openssl-build-macos-${{ matrix.arch.name }}/libssl.a "openssl/libstatic/macos/${{ matrix.arch.archname }}/libssl.a"
+
+      - name: Verify build
+        run: |
+          ls -lh openssl/libstatic/macos/${{ matrix.arch.archname }}/
+          file openssl/libstatic/macos/${{ matrix.arch.archname }}/*.a || true
+
+          echo "Checking deployment target of libcrypto.a..."
+          otool -l openssl/libstatic/macos/${{ matrix.arch.archname }}/libcrypto.a | grep -A 3 LC_VERSION_MIN_MACOSX || echo "No LC_VERSION_MIN_MACOSX found (might be using LC_BUILD_VERSION)"
+          otool -l openssl/libstatic/macos/${{ matrix.arch.archname }}/libcrypto.a | grep -A 5 LC_BUILD_VERSION || echo "No LC_BUILD_VERSION found"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openssl-macos-${{ matrix.arch.name }}
+          path: openssl/libstatic/macos/${{ matrix.arch.archname }}/*.a
+          retention-days: 30
+
+  combine-artifacts:
+    needs: build-macos
+    runs-on: ubuntu-latest
+    name: Combine all macOS builds
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Combine into single structure
+        run: |
+          mkdir -p openssl-macos-libs/macos-x86-64
+          mkdir -p openssl-macos-libs/macos-arm-64
+
+          # Copy all libraries to their respective architecture folders
+          cp artifacts/openssl-macos-x86_64/*.a openssl-macos-libs/macos-x86-64/ || true
+          cp artifacts/openssl-macos-arm64/*.a openssl-macos-libs/macos-arm-64/ || true
+
+          # Display results
+          echo "=== Build Results ==="
+          find openssl-macos-libs -type f -exec ls -lh {} \;
+
+      - name: Upload combined artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openssl-3.5.4-macos-all
+          path: openssl-macos-libs/
+          retention-days: 90
+
+      - name: Create build report
+        run: |
+          cat > BUILD_REPORT.md << 'EOF'
+          # OpenSSL 3.5.4 macOS Build Report
+
+          ## Build Date
+          $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
+          ## Architectures Built
+          - **x86_64** (Intel)
+          - **ARM64** (Apple Silicon)
+
+          ## Libraries Created
+
+          ### x86_64
+          $(ls -lh openssl-macos-libs/macos-x86-64/*.a 2>/dev/null || echo "No files")
+
+          ### ARM64
+          $(ls -lh openssl-macos-libs/macos-arm-64/*.a 2>/dev/null || echo "No files")
+
+          ## Build Configuration
+          All builds use identical OpenSSL configure options:
+          ```
+          no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic
+          no-threads no-dso no-shared no-asm no-rc5 no-idea
+          no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast
+          no-md2 no-mdc2
+          ```
+
+          ## Compiler
+          - Xcode Command Line Tools (Clang)
+          - x86_64: darwin64-x86_64-cc target with -mmacosx-version-min=10.13
+          - ARM64: darwin64-arm64-cc target with -mmacosx-version-min=11.0
+
+          ## GitHub Actions Workflow
+          Built using: `.github/workflows/build-openssl-macos.yml`
+
+          EOF
+
+      - name: Upload build report
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-report
+          path: BUILD_REPORT.md
+          retention-days: 90
