@@ -706,7 +706,6 @@ int __fastcall util_mkCertEx(struct util_cert *rootcert, struct util_cert* cert,
 	X509 *x = NULL;
 	X509_EXTENSION *ex = NULL;
 	EVP_PKEY *pk = NULL;
-	RSA *rsa = NULL;
 	X509_NAME *cname = NULL;
 	X509 **x509p = NULL;
 	EVP_PKEY **pkeyp = NULL;
