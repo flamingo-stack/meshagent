@@ -75,6 +75,11 @@ int gRemoteMouseRenderDefault = 0;
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
+#include <libproc.h>
+#include <SystemConfiguration/SystemConfiguration.h>
+#include "MacOS/bundle_detection.h"
+#include "MacOS/mac_tcc_detection.h"
+#include "MacOS/TCC_UI/mac_permissions_window.h"
 #endif
 
 
@@ -140,6 +145,16 @@ typedef struct RemoteDesktop_Ptrs
 	ILibDuktape_DuplexStream *stream;
 }RemoteDesktop_Ptrs;
 
+#ifdef __APPLE__
+// TCC Pipe Monitor - Async handler for reading results from -tccCheck child process
+typedef struct TCCPipeMonitor
+{
+	void *chain;                      // ILibChain for event loop
+	ILibSimpleDataStore masterDb;     // Database for saving preference
+	int pipe_fd;                      // File descriptor for reading from child
+	int active;                       // 1 if monitoring, 0 if closed
+}TCCPipeMonitor;
+#endif
 
 typedef struct ScriptContainerSettings
 {
@@ -445,6 +460,100 @@ size_t MeshAgent_Linux_ReadMemFile(char *path, char **buffer)
 	}
 	return(i);
 }
+
+#ifdef __APPLE__
+// ============================================================================
+// TCC Pipe Monitor - Async event loop handlers for reading -tccCheck results
+// ============================================================================
+
+// PreSelect: Add pipe fd to readset for monitoring
+void TCCPipeMonitor_PreSelect(void* object, fd_set *readset, fd_set *writeset, fd_set *errorset, int* blocktime)
+{
+	TCCPipeMonitor *monitor = (TCCPipeMonitor*)((ILibChain_Link*)object)->ExtraMemoryPtr;
+	if (monitor->active && monitor->pipe_fd >= 0)
+	{
+		FD_SET(monitor->pipe_fd, readset);
+	}
+}
+
+// PostSelect: Check if pipe has data, read it, and update database
+void TCCPipeMonitor_PostSelect(void* object, int slct, fd_set *readset, fd_set *writeset, fd_set *errorset)
+{
+	TCCPipeMonitor *monitor = (TCCPipeMonitor*)((ILibChain_Link*)object)->ExtraMemoryPtr;
+
+	if (monitor->active && monitor->pipe_fd >= 0 && FD_ISSET(monitor->pipe_fd, readset))
+	{
+		unsigned char result_byte;
+		ssize_t bytes_read = read(monitor->pipe_fd, &result_byte, 1);
+
+		if (bytes_read == 1)
+		{
+			// If result is 1, user clicked "Do not remind me again"
+			if (result_byte == 1)
+			{
+				ILibSimpleDataStore_Put(monitor->masterDb, "tccPermissionsUIDisabled", "1");
+			}
+
+			// Close pipe and mark inactive
+			close(monitor->pipe_fd);
+			monitor->pipe_fd = -1;
+			monitor->active = 0;
+		}
+		else if (bytes_read == 0)
+		{
+			// EOF - child closed pipe without writing (shouldn't happen)
+			ILIBMESSAGE("[TCC-PIPE] WARNING: Child closed pipe without sending result");
+			close(monitor->pipe_fd);
+			monitor->pipe_fd = -1;
+			monitor->active = 0;
+		}
+		else if (bytes_read < 0)
+		{
+			// Error reading
+			ILIBMESSAGE2("[TCC-PIPE] ERROR reading from pipe, errno:", errno);
+			close(monitor->pipe_fd);
+			monitor->pipe_fd = -1;
+			monitor->active = 0;
+		}
+	}
+}
+
+// Destroy: Cleanup when chain is destroyed
+void TCCPipeMonitor_Destroy(void* object)
+{
+	TCCPipeMonitor *monitor = (TCCPipeMonitor*)((ILibChain_Link*)object)->ExtraMemoryPtr;
+	if (monitor->pipe_fd >= 0)
+	{
+		close(monitor->pipe_fd);
+		monitor->pipe_fd = -1;
+	}
+	monitor->active = 0;
+}
+
+// Create and initialize TCC pipe monitor
+void* TCCPipeMonitor_Create(void *chain, ILibSimpleDataStore masterDb, int pipe_fd)
+{
+	ILibChain_Link *link = ILibChain_Link_Allocate(sizeof(ILibChain_Link), sizeof(TCCPipeMonitor));
+	TCCPipeMonitor *monitor = (TCCPipeMonitor*)link->ExtraMemoryPtr;
+
+	// Initialize monitor structure
+	monitor->chain = chain;
+	monitor->masterDb = masterDb;
+	monitor->pipe_fd = pipe_fd;
+	monitor->active = 1;
+
+	// Set up event loop handlers
+	link->PreSelectHandler = TCCPipeMonitor_PreSelect;
+	link->PostSelectHandler = TCCPipeMonitor_PostSelect;
+	link->DestroyHandler = TCCPipeMonitor_Destroy;
+	link->MetaData = "TCC Pipe Monitor";
+
+	// Add to chain
+	ILibChain_SafeAdd(chain, link);
+
+	return link;
+}
+#endif
 
 int MeshAgent_Helper_CommandLine(char **commands, char **result, int *resultLen)
 {
@@ -822,6 +931,7 @@ duk_ret_t ILibDuktape_MeshAgent_SendCommand(duk_context *ctx)
 	}
 	return 1;
 }
+
 
 void ILibDuktape_MeshAgent_Ready(ILibDuktape_EventEmitter *sender, char *eventName, void *hookedCallback)
 {
@@ -1435,9 +1545,29 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 		// Always use domain socket, regardless of console_uid
 		// LaunchAgent handles both LoginWindow (console_uid=0) and Aqua (console_uid!=0) via LimitLoadToSessionType
 
-		char msg[128];
-		sprintf_s(msg, sizeof(msg), "Establishing domain socket connection for KVM (console_uid=%d)", console_uid);
-		MeshAgent_sendConsoleText(ctx, msg);
+		// Spawn TCC check before establishing KVM connection (non-blocking)
+		// The -tccCheck process will check permissions and decide whether to show UI
+		int should_spawn = 1;  // Default: spawn TCC check
+
+		// Check if user previously selected "Do not remind me again"
+		int len = ILibSimpleDataStore_Get(agent->masterDb, "tccPermissionsUIDisabled", ILibScratchPad, sizeof(ILibScratchPad));
+		if (len > 0 && len < sizeof(ILibScratchPad))
+		{
+			ILibScratchPad[len] = 0;  // Null-terminate
+			if (strcmp(ILibScratchPad, "1") == 0)
+			{
+				should_spawn = 0;
+			}
+		}
+
+		if (should_spawn)
+		{
+			int tcc_pipe_fd = show_tcc_permissions_window_async(agent->exePath, agent->pipeManager, console_uid);
+			if (tcc_pipe_fd >= 0) {
+				// Create async monitor to read result from pipe
+				TCCPipeMonitor_Create(agent->chain, agent->masterDb, tcc_pipe_fd);
+			}
+		}
 
 		// Get the connected FD from kvm_relay_setup (daemon accepts connection from -kvm1)
 		int client_fd = (int)(intptr_t)kvm_relay_setup(agent->exePath, agent->pipeManager, ILibDuktape_MeshAgent_RemoteDesktop_KVM_WriteSink, ptrs, console_uid, agent->companyName, agent->meshServiceName, agent->serviceID);
@@ -2264,7 +2394,7 @@ char* MeshAgent_MakeAbsolutePathEx(char *basePath, char *localPath, int escapeBa
 	size_t basePathLen = strnlen_s(basePath, sizeof(ILibScratchPad2) - 4);
 	size_t len;
 
-	if (agent != NULL && agent->configPathUsesCWD != 0)
+	if (agent != NULL && agent->appBundleMode != 0)
 	{
 #ifdef WIN32
 		int i = ILibString_LastIndexOf(basePath, basePathLen, "\\", 1) + 1;
@@ -2300,8 +2430,6 @@ char* MeshAgent_MakeAbsolutePathEx(char *basePath, char *localPath, int escapeBa
 #endif
 		sprintf_s(ILibScratchPad2 + i, sizeof(ILibScratchPad2) - i, "%s", localPath);
 	}
-
-	//printf("MeshAgent_MakeAbsolutePathEx[%s,%s] = %s\n", basePath, localPath, ILibScratchPad2);
 
 	if (escapeBackSlash != 0)
 	{
@@ -4656,8 +4784,12 @@ MeshAgentHostContainer* MeshAgent_Create(MeshCommand_AuthInfo_CapabilitiesMask c
 {
 
 #if defined(_LINKVM) && defined(__APPLE__)
-    //Before anything, check for permissions (macos requirement)
-    kvm_check_permission();
+    // DISABLED: TCC permission prompting now handled by -tccCheck child process with custom UI
+    // The old approach (kvm_check_permission) showed jarring system prompts at startup.
+    // New approach: Daemon spawns -tccCheck which shows a nice custom window with all three
+    // permissions (Accessibility, FDA, Screen Recording) explained in one place, with direct
+    // "Open Settings" buttons. Users can also dismiss it permanently.
+    // kvm_check_permission();
 #endif
 
 
@@ -4978,7 +5110,10 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 	}
 
 	// We are a Mesh Agent
-	if (agentHost->masterDb == NULL) { agentHost->masterDb = ILibSimpleDataStore_Create(MeshAgent_MakeAbsolutePath(agentHost->exePath, ".db")); }
+	if (agentHost->masterDb == NULL) {
+		char* dbPath = MeshAgent_MakeAbsolutePath(agentHost->exePath, ".db");
+		agentHost->masterDb = ILibSimpleDataStore_Create(dbPath);
+	}
 
 	int ixr = 0;
 	int installFlag = 0;
@@ -5044,13 +5179,62 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 			{
 				if ((importSettings(agentHost, "mesh_linumshx") == 0) && (importSettings(agentHost, "mesh_limshx") == 0)) // Do this because the old agent would generate this bad file name on linux.
 				{
+#ifndef __APPLE__
 					// Let's check to see if an .msh was embedded into our binary
+					// Note: Disabled for macOS due to code signing issues with bundles
 					checkForEmbeddedMSH(agentHost);
 					importSettings(agentHost, MeshAgent_MakeAbsolutePath(agentHost->exePath, ".msh"));
+#endif
 				}
 			}
 		}
 	}
+
+#ifdef __APPLE__
+	// Spawn TCC check at startup (only if not in install/fetch mode)
+	// The -tccCheck process will check permissions and decide whether to show UI
+	if (fetchstate == 0 && installFlag == 0)
+	{
+		// Check "do not remind" preference before spawning
+		// Only skip TCC check if the value is specifically "1"
+		int should_spawn = 1;  // Default: spawn TCC check
+
+		// Check if user previously selected "Do not remind me again"
+		int len = ILibSimpleDataStore_Get(agentHost->masterDb, "tccPermissionsUIDisabled", ILibScratchPad, sizeof(ILibScratchPad));
+		if (len > 0 && len < sizeof(ILibScratchPad))
+		{
+			ILibScratchPad[len] = 0;  // Null-terminate
+			if (strcmp(ILibScratchPad, "1") == 0)
+			{
+				should_spawn = 0;
+			}
+		}
+
+		if (should_spawn)
+		{
+			// Get console UID using native macOS API (works before JavaScript initialized)
+			int console_uid = 0;
+			SCDynamicStoreRef store = SCDynamicStoreCreate(NULL, CFSTR("MeshAgentTCC"), NULL, NULL);
+			if (store != NULL)
+			{
+				uid_t uid = 0;
+				CFStringRef userName = SCDynamicStoreCopyConsoleUser(store, &uid, NULL);
+				if (userName != NULL)
+				{
+					console_uid = (int)uid;
+					CFRelease(userName);
+				}
+				CFRelease(store);
+			}
+
+			int tcc_pipe_fd = show_tcc_permissions_window_async(agentHost->exePath, agentHost->pipeManager, console_uid);
+			if (tcc_pipe_fd >= 0) {
+				// Create async monitor to read result from pipe
+				TCCPipeMonitor_Create(agentHost->chain, agentHost->masterDb, tcc_pipe_fd);
+			}
+		}
+	}
+#endif
 
 	if(ILibSimpleDataStore_Get(agentHost->masterDb, "maxLogSize", NULL, 0) != 0)
 	{
@@ -6114,7 +6298,7 @@ void MeshAgent_ScriptMode(MeshAgentHostContainer *agentHost, int argc, char **ar
 
 	agentHost->meshCoreCtx = ILibDuktape_ScriptContainer_InitializeJavaScriptEngineEx(secFlags, execTimeout, agentHost->chain, scriptArgs, connectAgent != 0 ? agentHost->masterDb : NULL, agentHost->exePath, agentHost->pipeManager, connectAgent == 0 ? MeshAgent_RunScriptOnly_Finalizer : NULL, agentHost);
 	ILibDuktape_SetNativeUncaughtExceptionHandler(agentHost->meshCoreCtx, MeshAgent_ScriptMode_UncaughtExceptionSink, agentHost);
-		
+
 	if (connectAgent != 0) 
 	{ 
 		ILibDuktape_MeshAgent_Init(agentHost->meshCoreCtx, agentHost->chain, agentHost); 
@@ -6302,7 +6486,7 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 		WideCharToMultiByte(CP_UTF8, 0, (LPCWCH)tmpExePath, -1, (LPSTR)exePath, (int)ILibMemory_Size(exePath), NULL, NULL);
 #elif defined(__APPLE__)
 		if (_NSGetExecutablePath(exePath, &len) != 0) ILIBCRITICALEXIT(247);
-	
+
 		agentHost->exePath = exePath;
 #elif defined(NACL)
 #else
@@ -6320,6 +6504,24 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 #endif
 	}
 
+#ifdef __APPLE__
+	// Check for installation/upgrade commands that don't require configuration validation
+	int skipConfigValidation = 0;
+	for (int i = 1; i < paramLen; i++)
+	{
+		if (strcmp(param[i], "-install") == 0 ||
+			strcmp(param[i], "-uninstall") == 0 ||
+			strcmp(param[i], "-upgrade") == 0 ||
+			strcmp(param[i], "-finstall") == 0 ||
+			strcmp(param[i], "-funinstall") == 0 ||
+			strcmp(param[i], "-fullinstall") == 0 ||
+			strcmp(param[i], "-fulluninstall") == 0)
+		{
+			skipConfigValidation = 1;
+			break;
+		}
+	}
+
 	// Perform a self SHA384 Hash
 	GenerateSHA384FileHash(agentHost->exePath, agentHost->agentHash);
 
@@ -6328,17 +6530,34 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 	{
 		if ((_piX = ILibString_IndexOf(param[_pX], (int)strnlen_s(param[_pX], sizeof(ILibScratchPad)), "=", 1)) > 2 && strncmp(param[_pX], "--", 2) == 0)
 		{
-			if (_piX - 2 == 13 && strncmp(param[_pX] + 2, "configUsesCWD", 13) == 0 && strncmp(param[_pX] + _piX + 1, "1", 1) == 0)
+			if (_piX - 2 == 9 && strncmp(param[_pX] + 2, "appBundle", 9) == 0 && strncmp(param[_pX] + _piX + 1, "1", 1) == 0)
 			{
-				// Config files use working path, instead of binary path
-				agentHost->configPathUsesCWD = 1;
+				// App bundle mode: config files use working path, instead of binary path
+				agentHost->appBundleMode = 1;
 				break;
 			}
 		}
 	}
 
+	// Automatically enable app bundle mode when running from a bundle
+	// This ensures .db and .log files are created at the bundle parent, not inside the bundle
+	if (agentHost->appBundleMode == 0 && is_running_from_bundle())
+	{
+		agentHost->appBundleMode = 1;
+	}
 
-	ILibCriticalLogFilename = ILibString_Copy(MeshAgent_MakeAbsolutePath(agentHost->exePath, ".log"), 0);
+	// Check if launched from Finder (via Info.plist LSEnvironment variable)
+	if (getenv("LAUNCHED_FROM_FINDER") != NULL && !skipConfigValidation)
+	{
+		fprintf(stderr, "\nMeshAgent must be installed as a system service.\n");
+		fprintf(stderr, "Please run: sudo %s -install\n\n", agentHost->exePath);
+		return 0;
+	}
+
+	char* logPath = MeshAgent_MakeAbsolutePath(agentHost->exePath, ".log");
+	ILibCriticalLogFilename = ILibString_Copy(logPath, 0);
+#endif // __APPLE__
+
 #ifndef MICROSTACK_NOTLS
 	util_openssl_init();
 #endif

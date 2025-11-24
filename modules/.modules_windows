@@ -33,6 +33,7 @@ identifiers.js
 interactive.js
 kvm-helper.js
 lme_heci.js
+logger.js
 meshcmd.js
 message-box.js
 monitor-border.js

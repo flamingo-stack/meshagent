@@ -31,7 +31,9 @@ MACOS_ONLY_POLYFILLS="yes"          # Generate polyfills from modules_macos only
 CODE_UTILS_BUILD="no"               # Code-utils build: KVM=0, minimal module set (8 modules vs 50) for polyfill generation
 SKIP_BUILD="no"                     # Skip build step (use existing binary)
 SKIP_SIGN="no"						# Skip signing step
-SKIP_NOTARY="no"                    # Skip notarization step
+CODE_SIGN="bundle"					# bundle/binary its one or the other NOT both default bundle
+SKIP_NOTARY="no"					# Skip notarization step
+SKIP_STAPLE="no"                    # Skip notarization stapling step
 SKIP_GIT_PULL="yes"                 # Skip git pull before building
 MSH_EXEC="no"                       # Execute the meshagent as root at the end of the build process with MSH-* inputs
 MSH_COMMAND=""                      # meshagent command: install, fullinstall, upgrade, uninstall, fulluninstall
@@ -74,8 +76,16 @@ while [[ $# -gt 0 ]]; do
             SKIP_SIGN="yes"
             shift
             ;;
+        --code-sign)
+            CODE_SIGN="$2"
+            shift 2
+            ;;
         --skip-notary)
             SKIP_NOTARY="yes"
+            shift
+            ;;
+        --skip-staple)
+            SKIP_STAPLE="yes"
             shift
             ;;
         --git-pull)
@@ -123,7 +133,11 @@ while [[ $# -gt 0 ]]; do
             echo "  --code-utils                  Code-utils build: KVM=0, minimal modules (8 vs 50) for polyfill gen"
             echo "  --skip-build                  Skip build step, use existing binary"
             echo "  --skip-sign                   Skip signing step"
+            echo "  --code-sign <bundle|binary>   What to sign: 'bundle' (default) or 'binary' (NOT both)"
+            echo "                                  bundle = Sign .app bundle (recommended for distribution)"
+            echo "                                  binary = Sign standalone binary only"
             echo "  --skip-notary                 Skip notarization step"
+            echo "  --skip-staple                 Skip stapling step (notarize but don't staple ticket)"
             echo "  --git-pull                    Pull latest changes before building"
             echo ""
             echo "MeshAgent Execution Options:"
@@ -214,6 +228,16 @@ if [ -n "$MSH_COMMAND" ]; then
     fi
 fi
 
+# Validate CODE_SIGN option
+if [[ "$CODE_SIGN" != "bundle" && "$CODE_SIGN" != "binary" ]]; then
+    echo "Error: Invalid CODE_SIGN value '$CODE_SIGN'"
+    echo "Must be either 'bundle' or 'binary'"
+    echo ""
+    echo "  bundle = Sign .app bundle (recommended for distribution)"
+    echo "  binary = Sign standalone binary only (NOT both)"
+    exit 1
+fi
+
 # Validate signing certificate if signing is enabled
 if [ "$SKIP_SIGN" = "no" ]; then
     if [ -z "$MACOS_SIGN_CERT" ]; then
@@ -240,14 +264,14 @@ if [ "$SKIP_SIGN" = "no" ]; then
         exit 1
     fi
 
-    # Verify the certificate exists in keychain
-    if ! security find-identity -v -p codesigning | grep -q "$MACOS_SIGN_CERT"; then
+    # Verify the certificate exists in keychain (run as user to access user's keychain)
+    if ! sudo -u $SUDO_USER security find-identity -v -p codesigning | grep -q "$MACOS_SIGN_CERT"; then
         echo "Error: Certificate not found in keychain"
         echo ""
         echo "Certificate specified: $MACOS_SIGN_CERT"
         echo ""
         echo "Available certificates:"
-        security find-identity -v -p codesigning
+        sudo -u $SUDO_USER security find-identity -v -p codesigning
         echo ""
         echo "Please verify the certificate name matches exactly."
         exit 1
@@ -293,7 +317,7 @@ if [ "$SKIP_SIGN" = "no" ] || [ "$SKIP_NOTARY" = "no" ]; then
 fi
 
 #==============================================================================
-# DETERMINE BINARY PATH AND BUILD ARCHID
+# DETERMINE BINARY PATH, BUNDLE PATH, AND BUILD ARCHID
 #==============================================================================
 
 # Determine binary name prefix based on build type
@@ -305,14 +329,17 @@ fi
 
 if [ "$ARCHID" = "16" ]; then
     BINARY_PATH="build/output/${BINARY_PREFIX}_osx-x86-64"
+    BUNDLE_PATH="build/output/osx-x86-64-app/MeshAgent.app"
     ARCH_DESC="Intel x86-64"
     BUILD_ARCHID="16"
 elif [ "$ARCHID" = "29" ]; then
     BINARY_PATH="build/output/${BINARY_PREFIX}_osx-arm-64"
+    BUNDLE_PATH="build/output/osx-arm-64-app/MeshAgent.app"
     ARCH_DESC="Apple Silicon ARM64"
     BUILD_ARCHID="29"
 elif [ "$ARCHID" = "10005" ]; then
     BINARY_PATH="build/output/${BINARY_PREFIX}_osx-universal-64"
+    BUNDLE_PATH="build/output/osx-universal-64-app/MeshAgent.app"
     ARCH_DESC="Universal (Intel + ARM)"
     BUILD_ARCHID="10005"  # Universal binary ARCHID
 fi
@@ -342,7 +369,13 @@ if [ "$SKIP_POLYFILLS" = "no" ]; then
 fi
 echo "Skip Build:       $SKIP_BUILD"
 echo "Skip Sign:        $SKIP_SIGN"
+if [ "$SKIP_SIGN" = "no" ]; then
+    echo "  → Sign Target:  $CODE_SIGN"
+fi
 echo "Skip Notary:      $SKIP_NOTARY"
+if [ "$SKIP_NOTARY" = "no" ]; then
+    echo "  → Skip Staple:  $SKIP_STAPLE"
+fi
 echo "Skip Git Pull:    $SKIP_GIT_PULL"
 echo ""
 if [ "$MSH_EXEC" = "yes" ] && [ -n "$MSH_COMMAND" ]; then
@@ -437,7 +470,7 @@ if [ "$SKIP_POLYFILLS" = "no" ]; then
         echo "  Syncing macOS modules from ./modules to ./modules_macos..."
 
         # Create modules_macos directory if it doesn't exist
-        mkdir -p "./modules_macos"
+        sudo -u $SUDO_USER mkdir -p "./modules_macos"
 
         # Remove any .js files in modules_macos that are NOT in the .modules_macos list
         deleted_count=0
@@ -449,7 +482,7 @@ if [ "$SKIP_POLYFILLS" = "no" ]; then
                 # Check if this module is in the authorized list
                 if ! grep -Fxq "$module_name" "$MODULES_LIST"; then
                     echo "    Removing unauthorized module: $module_name"
-                    rm -f "$existing_file"
+                    sudo -u $SUDO_USER rm -f "$existing_file"
                     ((deleted_count++))
                 fi
             done
@@ -472,7 +505,7 @@ if [ "$SKIP_POLYFILLS" = "no" ]; then
 
             if [ -f "$source_file" ]; then
                 # Copy module (byte-perfect copy)
-                cp "$source_file" "$dest_file"
+                sudo -u $SUDO_USER cp "$source_file" "$dest_file"
                 ((module_count++))
             else
                 echo "    WARNING: Module not found: $module"
@@ -523,20 +556,20 @@ if [ "$SKIP_BUILD" = "no" ]; then
         echo "  Renaming binaries to include 'code-utils'..."
         if [ "$BUILD_ARCHID" = "10005" ]; then
             # Universal binary - rename all three
-            [ -f "build/output/meshagent_osx-universal-64" ] && mv "build/output/meshagent_osx-universal-64" "build/output/meshagent_code-utils_osx-universal-64"
-            [ -f "build/output/meshagent_osx-x86-64" ] && mv "build/output/meshagent_osx-x86-64" "build/output/meshagent_code-utils_osx-x86-64"
-            [ -f "build/output/meshagent_osx-arm-64" ] && mv "build/output/meshagent_osx-arm-64" "build/output/meshagent_code-utils_osx-arm-64"
-            [ -f "build/output/DEBUG/meshagent_osx-universal-64" ] && mv "build/output/DEBUG/meshagent_osx-universal-64" "build/output/DEBUG/meshagent_code-utils_osx-universal-64"
-            [ -f "build/output/DEBUG/meshagent_osx-x86-64" ] && mv "build/output/DEBUG/meshagent_osx-x86-64" "build/output/DEBUG/meshagent_code-utils_osx-x86-64"
-            [ -f "build/output/DEBUG/meshagent_osx-arm-64" ] && mv "build/output/DEBUG/meshagent_osx-arm-64" "build/output/DEBUG/meshagent_code-utils_osx-arm-64"
+            [ -f "build/output/meshagent_osx-universal-64" ] && sudo -u $SUDO_USER mv "build/output/meshagent_osx-universal-64" "build/output/meshagent_code-utils_osx-universal-64"
+            [ -f "build/output/meshagent_osx-x86-64" ] && sudo -u $SUDO_USER mv "build/output/meshagent_osx-x86-64" "build/output/meshagent_code-utils_osx-x86-64"
+            [ -f "build/output/meshagent_osx-arm-64" ] && sudo -u $SUDO_USER mv "build/output/meshagent_osx-arm-64" "build/output/meshagent_code-utils_osx-arm-64"
+            [ -f "build/output/DEBUG/meshagent_osx-universal-64" ] && sudo -u $SUDO_USER mv "build/output/DEBUG/meshagent_osx-universal-64" "build/output/DEBUG/meshagent_code-utils_osx-universal-64"
+            [ -f "build/output/DEBUG/meshagent_osx-x86-64" ] && sudo -u $SUDO_USER mv "build/output/DEBUG/meshagent_osx-x86-64" "build/output/DEBUG/meshagent_code-utils_osx-x86-64"
+            [ -f "build/output/DEBUG/meshagent_osx-arm-64" ] && sudo -u $SUDO_USER mv "build/output/DEBUG/meshagent_osx-arm-64" "build/output/DEBUG/meshagent_code-utils_osx-arm-64"
         elif [ "$BUILD_ARCHID" = "16" ]; then
             # Intel only
-            [ -f "build/output/meshagent_osx-x86-64" ] && mv "build/output/meshagent_osx-x86-64" "build/output/meshagent_code-utils_osx-x86-64"
-            [ -f "build/output/DEBUG/meshagent_osx-x86-64" ] && mv "build/output/DEBUG/meshagent_osx-x86-64" "build/output/DEBUG/meshagent_code-utils_osx-x86-64"
+            [ -f "build/output/meshagent_osx-x86-64" ] && sudo -u $SUDO_USER mv "build/output/meshagent_osx-x86-64" "build/output/meshagent_code-utils_osx-x86-64"
+            [ -f "build/output/DEBUG/meshagent_osx-x86-64" ] && sudo -u $SUDO_USER mv "build/output/DEBUG/meshagent_osx-x86-64" "build/output/DEBUG/meshagent_code-utils_osx-x86-64"
         elif [ "$BUILD_ARCHID" = "29" ]; then
             # ARM only
-            [ -f "build/output/meshagent_osx-arm-64" ] && mv "build/output/meshagent_osx-arm-64" "build/output/meshagent_code-utils_osx-arm-64"
-            [ -f "build/output/DEBUG/meshagent_osx-arm-64" ] && mv "build/output/DEBUG/meshagent_osx-arm-64" "build/output/DEBUG/meshagent_code-utils_osx-arm-64"
+            [ -f "build/output/meshagent_osx-arm-64" ] && sudo -u $SUDO_USER mv "build/output/meshagent_osx-arm-64" "build/output/meshagent_code-utils_osx-arm-64"
+            [ -f "build/output/DEBUG/meshagent_osx-arm-64" ] && sudo -u $SUDO_USER mv "build/output/DEBUG/meshagent_osx-arm-64" "build/output/DEBUG/meshagent_code-utils_osx-arm-64"
         fi
     else
         sudo -u $SUDO_USER make macos ARCHID=$BUILD_ARCHID
@@ -548,20 +581,20 @@ if [ "$SKIP_BUILD" = "no" ]; then
 else
     echo "[2/6] Build - SKIPPED"
 
-    # If MSH_EXEC is set and build is skipped, verify binary exists
+    # If MSH_EXEC is set and build is skipped, verify bundle exists
     if [ "$MSH_EXEC" = "yes" ] && [ -n "$MSH_COMMAND" ]; then
-        if [ ! -f "$BINARY_PATH" ]; then
+        if [ ! -d "$BUNDLE_PATH" ]; then
             echo ""
-            echo "ERROR: Binary not found at $BINARY_PATH"
-            echo "Cannot run command '$MSH_COMMAND' without a binary."
+            echo "ERROR: Bundle not found at $BUNDLE_PATH"
+            echo "Cannot run command '$MSH_COMMAND' without a bundle."
             echo ""
             echo "Solutions:"
-            echo "  1. Remove --skip-build to build the binary"
-            echo "  2. Build the binary first: make macos ARCHID=$BUILD_ARCHID"
-            echo "  3. Ensure the binary exists at: $BINARY_PATH"
+            echo "  1. Remove --skip-build to build the bundle"
+            echo "  2. Build the bundle first: make macos ARCHID=$BUILD_ARCHID"
+            echo "  3. Ensure the bundle exists at: $BUNDLE_PATH"
             exit 1
         fi
-        echo "  ✓ Binary exists at $BINARY_PATH"
+        echo "  ✓ Bundle exists at $BUNDLE_PATH"
     fi
     echo ""
 fi
@@ -571,14 +604,73 @@ fi
 #==============================================================================
 
 if [ "$SKIP_SIGN" = "no" ]; then
-    echo "[3/6] Signing binary..."
-    echo "[$(date '+%H:%M:%S')] Signing started"
-    # Run signing as the actual user (not root) to access user's keychain
-    # Pass the specific binary path to sign and preserve MACOS_SIGN_CERT
-    sudo -u $SUDO_USER MACOS_SIGN_CERT="$MACOS_SIGN_CERT" ./build/tools/macos_build/macos-sign.sh "$BINARY_PATH"
-    echo "[$(date '+%H:%M:%S')] Signing complete"
-    echo "✓ Signing complete"
-    echo ""
+    if [ "$CODE_SIGN" = "bundle" ]; then
+        echo "[3/6] Signing application bundle..."
+        echo "[$(date '+%H:%M:%S')] Signing started"
+
+        # Verify bundle exists
+        if [ ! -d "$BUNDLE_PATH" ]; then
+            echo "Error: Bundle not found at $BUNDLE_PATH"
+            echo "The build step should have created this bundle."
+            exit 1
+        fi
+
+        echo "  Target: Bundle"
+        echo "  Path:   $BUNDLE_PATH"
+
+        # Run signing as the actual user (not root) to access user's keychain
+        # Sign the .app bundle (recommended for distribution)
+        sudo -u $SUDO_USER MACOS_SIGN_CERT="$MACOS_SIGN_CERT" ./build/tools/macos_build/sign-app-bundle.sh "$BUNDLE_PATH"
+        echo "[$(date '+%H:%M:%S')] Bundle signing complete"
+        echo "✓ Bundle signing complete"
+
+        # For universal builds (ARCHID=10005), also sign and split the universal binary
+        if [ "$BUILD_ARCHID" = "10005" ]; then
+            echo ""
+            echo "  Signing universal binary: $BINARY_PATH"
+            sudo -u $SUDO_USER MACOS_SIGN_CERT="$MACOS_SIGN_CERT" ./build/tools/macos_build/macos-sign.sh "$BINARY_PATH"
+            echo "  ✓ Universal binary signed"
+
+            echo ""
+            echo "  Splitting universal binary into architectures..."
+            # Extract ARM64 slice
+            if sudo -u $SUDO_USER lipo "$BINARY_PATH" -extract arm64 -output "${BINARY_PATH/universal/arm}" 2>/dev/null; then
+                echo "    ✓ ARM64 binary created: ${BINARY_PATH/universal/arm}"
+            else
+                echo "    ⚠ Failed to extract ARM64 binary"
+            fi
+
+            # Extract x86_64 slice
+            if sudo -u $SUDO_USER lipo "$BINARY_PATH" -extract x86_64 -output "${BINARY_PATH/universal/x86}" 2>/dev/null; then
+                echo "    ✓ x86_64 binary created: ${BINARY_PATH/universal/x86}"
+            else
+                echo "    ⚠ Failed to extract x86_64 binary"
+            fi
+        fi
+        echo ""
+        echo "[$(date '+%H:%M:%S')] Signing complete"
+        echo ""
+    elif [ "$CODE_SIGN" = "binary" ]; then
+        echo "[3/6] Signing standalone binary..."
+        echo "[$(date '+%H:%M:%S')] Signing started"
+
+        # Verify binary exists
+        if [ ! -f "$BINARY_PATH" ]; then
+            echo "Error: Binary not found at $BINARY_PATH"
+            echo "The build step should have created this binary."
+            exit 1
+        fi
+
+        echo "  Target: Binary"
+        echo "  Path:   $BINARY_PATH"
+
+        # Run signing as the actual user (not root) to access user's keychain
+        # Sign the standalone binary (NOT the bundle)
+        sudo -u $SUDO_USER MACOS_SIGN_CERT="$MACOS_SIGN_CERT" ./build/tools/macos_build/macos-sign.sh "$BINARY_PATH"
+        echo "[$(date '+%H:%M:%S')] Signing complete"
+        echo "✓ Binary signing complete"
+        echo ""
+    fi
 else
     echo "[3/6] Signing - SKIPPED"
     echo ""
@@ -589,14 +681,87 @@ fi
 #==============================================================================
 
 if [ "$SKIP_NOTARY" = "no" ]; then
-    echo "[4/6] Notarizing binary..."
-    echo "[$(date '+%H:%M:%S')] Notarization started"
-    # Run notarization as the actual user (not root) to access user's keychain
-    # Pass the specific binary path to notarize
-    sudo -u $SUDO_USER ./build/tools/macos_build/macos-notarize.sh "$BINARY_PATH"
-    echo "[$(date '+%H:%M:%S')] Notarization complete"
-    echo "✓ Notarization complete"
-    echo ""
+    if [ "$CODE_SIGN" = "bundle" ]; then
+        echo "[4/6] Notarizing and stapling application bundle..."
+        echo "[$(date '+%H:%M:%S')] Notarization started"
+
+        # Verify bundle exists
+        if [ ! -d "$BUNDLE_PATH" ]; then
+            echo "Error: Bundle not found at $BUNDLE_PATH"
+            echo "The build step should have created this bundle."
+            exit 1
+        fi
+
+        # Verify bundle is signed (required for notarization) - run as user
+        if ! sudo -u $SUDO_USER codesign --verify --deep --strict "$BUNDLE_PATH" 2>/dev/null; then
+            echo "Error: Bundle must be signed before notarization"
+            echo "Please enable signing or sign the bundle first."
+            exit 1
+        fi
+
+        echo "  Target: Bundle"
+        echo "  Path:   $BUNDLE_PATH"
+
+        # Run notarization as the actual user (not root) to access user's keychain
+        # Notarize the .app bundle (includes signing verification, submission, and optional stapling)
+        sudo -u $SUDO_USER SKIP_STAPLE="$SKIP_STAPLE" ./build/tools/macos_build/notarize-app-bundle.sh "$BUNDLE_PATH"
+
+        if [ "$SKIP_STAPLE" = "yes" ]; then
+            echo "[$(date '+%H:%M:%S')] Bundle notarization complete (stapling skipped)"
+            echo "✓ Bundle notarization complete (not stapled)"
+        else
+            echo "[$(date '+%H:%M:%S')] Bundle notarization and stapling complete"
+            echo "✓ Bundle notarization and stapling complete"
+        fi
+
+        # For universal builds (ARCHID=10005), also notarize the universal binary
+        if [ "$BUILD_ARCHID" = "10005" ]; then
+            echo ""
+            echo "  Notarizing universal binary: $BINARY_PATH"
+
+            # Verify binary is signed (required for notarization) - run as user
+            if ! sudo -u $SUDO_USER codesign --verify --strict "$BINARY_PATH" 2>/dev/null; then
+                echo "  Error: Universal binary must be signed before notarization"
+                exit 1
+            fi
+
+            # Notarize the universal binary
+            sudo -u $SUDO_USER ./build/tools/macos_build/macos-notarize.sh "$BINARY_PATH"
+            echo "  ✓ Universal binary notarized"
+            echo ""
+            echo "Note: Standalone binaries cannot be stapled. The notarization is stored in Apple's servers."
+        fi
+        echo ""
+    elif [ "$CODE_SIGN" = "binary" ]; then
+        echo "[4/6] Notarizing standalone binary..."
+        echo "[$(date '+%H:%M:%S')] Notarization started"
+
+        # Verify binary exists
+        if [ ! -f "$BINARY_PATH" ]; then
+            echo "Error: Binary not found at $BINARY_PATH"
+            echo "The build step should have created this binary."
+            exit 1
+        fi
+
+        # Verify binary is signed (required for notarization) - run as user
+        if ! sudo -u $SUDO_USER codesign --verify --strict "$BINARY_PATH" 2>/dev/null; then
+            echo "Error: Binary must be signed before notarization"
+            echo "Please enable signing or sign the binary first."
+            exit 1
+        fi
+
+        echo "  Target: Binary"
+        echo "  Path:   $BINARY_PATH"
+
+        # Run notarization as the actual user (not root) to access user's keychain
+        # Notarize the standalone binary (does NOT include stapling - binaries cannot be stapled)
+        sudo -u $SUDO_USER ./build/tools/macos_build/macos-notarize.sh "$BINARY_PATH"
+        echo "[$(date '+%H:%M:%S')] Notarization complete"
+        echo "✓ Binary notarization complete"
+        echo ""
+        echo "Note: Standalone binaries cannot be stapled. The notarization is stored in Apple's servers."
+        echo ""
+    fi
 else
     echo "[4/6] Notarization - SKIPPED"
     echo ""
@@ -610,10 +775,20 @@ if [ "$MSH_EXEC" = "yes" ] && [ -n "$MSH_COMMAND" ]; then
     echo "[5/6] Executing meshagent command..."
     echo "[$(date '+%H:%M:%S')] Command execution started"
     echo "  Command: -$MSH_COMMAND"
-    echo "  Binary:  $BINARY_PATH"
+
+    # Use the bundle binary for execution (signed/notarized if those steps were run)
+    EXEC_BINARY="$BUNDLE_PATH/Contents/MacOS/meshagent"
+
+    if [ ! -f "$EXEC_BINARY" ]; then
+        echo "Error: Binary not found at $EXEC_BINARY"
+        echo "Bundle may not have been created properly."
+        exit 1
+    fi
+
+    echo "  Binary:  $EXEC_BINARY"
 
     # Build command array - only include parameters that were explicitly set
-    CMD_ARRAY=("./$BINARY_PATH" "-$MSH_COMMAND")
+    CMD_ARRAY=("$EXEC_BINARY" "-$MSH_COMMAND")
 
     # MSH_INSTALLPATH: empty string = skip, "-EMPTY-" = pass empty string, anything else = pass value
     if [ -n "$MSH_INSTALLPATH" ]; then
@@ -674,7 +849,8 @@ echo "=========================================="
 echo "Script Complete!"
 echo "=========================================="
 echo "Architecture:     $ARCH_DESC"
-echo "Binary:           $BINARY_PATH"
+echo "Bundle:           $BUNDLE_PATH"
+echo "Binary:           $BUNDLE_PATH/Contents/MacOS/meshagent"
 
 if [ "$MSH_EXEC" = "yes" ] && [ -n "$MSH_COMMAND" ]; then
     echo "Command:          -$MSH_COMMAND"
@@ -690,10 +866,15 @@ if [ "$MSH_EXEC" = "yes" ] && [ -n "$MSH_COMMAND" ]; then
     echo "To view logs:"
     echo "  sudo log stream --predicate 'process == \"meshagent\"' --level debug"
 else
-    echo "Command:          (none - binary built only)"
+    echo "Command:          (none - bundle built only)"
     echo ""
-    echo "Binary available at: $BINARY_PATH"
-    echo "To install, run with --msh-command option"
+    echo "Application bundle: $BUNDLE_PATH"
+    echo ""
+    echo "To launch:"
+    echo "  open $BUNDLE_PATH"
+    echo ""
+    echo "To install with command:"
+    echo "  sudo $0 --skip-build --msh-command install --msh-installPath /opt/meshagent"
 fi
 
 echo ""
@@ -708,10 +889,10 @@ if read -t 15 -n 1 -s key; then
     # User pressed a key before timeout
     if [ -z "$key" ]; then
         # Enter key was pressed (empty string)
-        OUTPUT_DIR="$(cd "$(dirname "$BINARY_PATH")" && pwd)"
+        OUTPUT_DIR="$(cd "$(dirname "$BUNDLE_PATH")" && pwd)"
         echo ""
         echo "Opening $OUTPUT_DIR..."
-        open "$OUTPUT_DIR"
+        sudo -u $SUDO_USER open "$OUTPUT_DIR"
     fi
 else
     # Timeout occurred (15 seconds elapsed with no input)

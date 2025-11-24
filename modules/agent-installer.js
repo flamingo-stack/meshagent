@@ -107,12 +107,99 @@ try
 catch(x)
 { }
 
-// Helper function to sanitize service identifiers
-// Matches the sanitization logic in service-manager.js for consistent naming
-function sanitizeIdentifier(str) {
-    if (!str) return null;
-    // Replace spaces with hyphens, remove all non-alphanumeric except hyphens/underscores, convert to lowercase
-    return str.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase();
+// Import macOS platform helpers (only on macOS)
+var macOSHelpers = process.platform === 'darwin' ? require('./macOSHelpers') : null;
+
+// Import security permissions module
+var securityPermissions = require('./security-permissions');
+
+// Case-insensitive file lookup
+// Returns the actual filename if found, or null if not found
+function findFileCaseInsensitive(directory, targetFilename) {
+    var fs = require('fs');
+
+    try {
+        var files = fs.readdirSync(directory);
+        var targetLower = targetFilename.toLowerCase();
+
+        for (var i = 0; i < files.length; i++) {
+            if (files[i].toLowerCase() === targetLower) {
+                return directory + '/' + files[i];
+            }
+        }
+    } catch (e) {
+        // Directory doesn't exist or not readable
+    }
+
+    return null;
+}
+
+// Find any .app bundle in a directory that contains a meshagent binary
+// Returns the bundle name (e.g., "MeshAgent.app") or null if not found
+// This allows support for custom bundle names instead of hard-coding "MeshAgent.app"
+function findBundleInDirectory(installPath) {
+    var fs = require('fs');
+
+    try {
+        var files = fs.readdirSync(installPath);
+        for (var i = 0; i < files.length; i++) {
+            if (files[i].endsWith('.app')) {
+                // Check if this bundle contains a meshagent binary
+                var binaryPath = installPath + files[i] + '/Contents/MacOS/meshagent';
+                if (fs.existsSync(binaryPath)) {
+                    return files[i];
+                }
+            }
+        }
+    } catch (e) {
+        // Directory doesn't exist or not readable
+    }
+
+    return null;
+}
+
+// Helper function to detect if running from app bundle or standalone binary
+function detectSourceType() {
+    var execPath = process.execPath;
+
+
+    // Check if running from .app bundle using shared helper
+    if (macOSHelpers && macOSHelpers.isRunningFromBundle(execPath)) {
+        var isBundle = macOSHelpers.isRunningFromBundle(execPath);
+
+        // Extract bundle path (everything up to and including .app)
+        var bundlePath = macOSHelpers.getBundlePathFromBinaryPath(execPath);
+
+        return {
+            type: 'bundle',
+            bundlePath: bundlePath,
+            binaryPath: execPath
+        };
+    } else {
+        // Running from standalone binary
+        return {
+            type: 'standalone',
+            binaryPath: execPath
+        };
+    }
+}
+
+// Helper function to detect what type of installation exists at a path
+function detectInstallationType(installPath) {
+    var fs = require('fs');
+
+    // Check for bundle installation using dynamic discovery
+    if (findBundleInDirectory(installPath)) {
+        return 'bundle';
+    }
+
+    // Check for standalone binary installation
+    if (fs.existsSync(installPath + 'meshagent')) {
+        return 'standalone';
+    }
+
+    // Nothing installed
+    return null;
 }
 
 // This function performs some checks on the parameter structure, to make sure the minimum set of requried elements are present
@@ -269,38 +356,29 @@ function findInstallation(installPath, serviceName, companyName) {
     // If explicit path provided
     if (installPath) {
         installPath = normalizeInstallPath(installPath);
+        // Check for bundle first using dynamic discovery, then standalone binary
+        var bundleName = findBundleInDirectory(installPath);
+        if (bundleName) {
+            return installPath;
+        }
         if (require('fs').existsSync(installPath + 'meshagent')) {
             return installPath;
         }
-        console.log('ERROR: No binary found at: ' + installPath);
+        // Not found - return null (caller will log appropriately based on context)
         return null;
     }
 
     // Try to find service by name
     if (serviceName || companyName) {
         try {
-            var sanitizedServiceName = sanitizeIdentifier(serviceName || 'meshagent');
-            var sanitizedCompanyName = sanitizeIdentifier(companyName);
-            var serviceId;
-
-            if (sanitizedCompanyName) {
-                if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-                    serviceId = 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-                } else {
-                    serviceId = 'meshagent.' + sanitizedCompanyName;
-                }
-            } else if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-                serviceId = 'meshagent.' + sanitizedServiceName;
-            } else {
-                serviceId = 'meshagent';
-            }
+            var serviceId = macOSHelpers.buildServiceId(serviceName || 'meshagent', companyName);
 
             var svc = require('service-manager').manager.getService(serviceId);
             var path = svc.appWorkingDirectory();
             svc.close();
             return path;
         } catch (e) {
-            console.log('ERROR: Service not found: ' + (serviceName || 'meshagent'));
+            // Service not found - return null (caller will log appropriately)
             return null;
         }
     }
@@ -311,7 +389,7 @@ function findInstallation(installPath, serviceName, companyName) {
     var selfMshPath = selfDir + 'meshagent.msh';
 
     if (require('fs').existsSync(selfMshPath)) {
-        console.log('Detected self-upgrade scenario (found .msh alongside running binary)');
+        // Self-upgrade detected - return path (caller will log)
         return selfDir;
     }
 
@@ -321,8 +399,7 @@ function findInstallation(installPath, serviceName, companyName) {
         return defaultPath;
     }
 
-    console.log('ERROR: No installation found at default location: ' + defaultPath);
-    console.log('Please specify --installPath, --serviceName, or --companyName');
+    // Not found anywhere - return null (caller will log appropriately)
     return null;
 }
 
@@ -386,6 +463,14 @@ function getProgramPathFromPlist(plistPath) {
 // Helper to find and clean up all plists pointing to the same binary
 function cleanupOrphanedPlists(installPath) {
     var binaryPath = installPath + 'meshagent';
+    var bundleBinaryPath = null;
+
+    // Dynamically discover bundle name instead of hard-coding
+    var bundleName = findBundleInDirectory(installPath);
+    if (bundleName) {
+        bundleBinaryPath = installPath + bundleName + '/Contents/MacOS/meshagent';
+    }
+
     var cleaned = [];
 
     // Check LaunchDaemons
@@ -397,8 +482,20 @@ function cleanupOrphanedPlists(installPath) {
                 var plistPath = daemonDir + '/' + files[i];
                 var plistBinary = getProgramPathFromPlist(plistPath);
 
-                if (plistBinary === binaryPath) {
-                    // This plist points to our binary - unload and delete it
+                // Check if plist points to our installation:
+                // 1. Exact match for standalone binary
+                // 2. Exact match for current bundle binary
+                // 3. Any bundle in the install directory (e.g., /opt/tacticalmesh/*.app/Contents/MacOS/meshagent)
+                var matchesInstallPath = false;
+                if (plistBinary === binaryPath || plistBinary === bundleBinaryPath) {
+                    matchesInstallPath = true;
+                } else if (plistBinary && plistBinary.indexOf(installPath) === 0 && plistBinary.indexOf('.app/Contents/MacOS/meshagent') > 0) {
+                    // Plist points to a bundle in our install directory
+                    matchesInstallPath = true;
+                }
+
+                if (matchesInstallPath) {
+                    // This plist points to our installation - unload and delete it
                     try {
                         var serviceName = files[i].replace('.plist', '');
                         var svc = require('service-manager').manager.getService(serviceName);
@@ -430,8 +527,16 @@ function cleanupOrphanedPlists(installPath) {
                 var plistPath = agentDir + '/' + files[i];
                 var plistBinary = getProgramPathFromPlist(plistPath);
 
-                if (plistBinary === binaryPath) {
-                    // This plist points to our binary - unload and delete it
+                // Check if plist points to our installation (same logic as LaunchDaemons)
+                var matchesInstallPath = false;
+                if (plistBinary === binaryPath || plistBinary === bundleBinaryPath) {
+                    matchesInstallPath = true;
+                } else if (plistBinary && plistBinary.indexOf(installPath) === 0 && plistBinary.indexOf('.app/Contents/MacOS/meshagent') > 0) {
+                    matchesInstallPath = true;
+                }
+
+                if (matchesInstallPath) {
+                    // This plist points to our installation - unload and delete it
                     try {
                         var serviceName = files[i].replace('.plist', '');
                         var launchAgent = require('service-manager').manager.getLaunchAgent(serviceName);
@@ -498,11 +603,20 @@ function findInstallationByPlist() {
 
                     // Check if this plist points to a meshagent binary
                     if (binaryPath && binaryPath.indexOf('meshagent') !== -1) {
-                        // Extract directory from binary path
-                        // e.g., "/opt/tacticalmesh/meshagent" -> "/opt/tacticalmesh/"
-                        var parts = binaryPath.split('/');
-                        parts.pop();  // Remove 'meshagent' filename
-                        var installPath = parts.join('/') + '/';
+                        // Extract directory from binary path using shared helpers
+                        // For bundles: "/opt/mesh/MeshAgent.app/Contents/MacOS/meshagent" -> "/opt/mesh/"
+                        // For standalone: "/opt/mesh/meshagent" -> "/opt/mesh/"
+                        var installPath;
+                        var bundleParent = macOSHelpers.getBundleParentDirectory(binaryPath);
+                        if (bundleParent) {
+                            // Bundle installation - return parent of .app
+                            installPath = bundleParent;
+                        } else {
+                            // Standalone installation
+                            var parts = binaryPath.split('/');
+                            parts.pop();  // Remove 'meshagent' filename
+                            installPath = parts.join('/') + '/';
+                        }
                         return installPath;
                     }
                 }
@@ -515,13 +629,64 @@ function findInstallationByPlist() {
     return null;
 }
 
+// Helper to recursively remove a directory and all its contents
+function removeDirectoryRecursive(dirPath) {
+    var fs = require('fs');
+
+    if (!fs.existsSync(dirPath)) {
+        return;
+    }
+
+    var files = fs.readdirSync(dirPath);
+    for (var i = 0; i < files.length; i++) {
+        var filePath = dirPath + '/' + files[i];
+        var stat = fs.statSync(filePath);
+
+        if (stat.isDirectory()) {
+            // Recursively remove subdirectory
+            removeDirectoryRecursive(filePath);
+        } else {
+            // Remove file
+            fs.unlinkSync(filePath);
+        }
+    }
+
+    // Remove the now-empty directory
+    fs.rmdirSync(dirPath);
+}
+
 // Helper to delete installation files from a directory
 // Used when uninstalling without service manager access
 function deleteInstallationFiles(installPath, deleteData) {
     var fs = require('fs');
+    var child_process = require('child_process');
+    var logger = require('./logger');
     var deletedFiles = [];
 
-    process.stdout.write('   Removing installation files from: ' + installPath + '\n');
+    logger.info('Removing installation files from: ' + installPath);
+
+    // Check if there's a bundle in this directory
+    var bundleRemoved = false;
+    try {
+        var files = fs.readdirSync(installPath);
+        for (var i = 0; i < files.length; i++) {
+            if (files[i].endsWith('.app')) {
+                // Found a bundle - remove it completely
+                var bundlePath = installPath + files[i];
+                logger.info('Removing bundle: ' + bundlePath);
+                try {
+                    child_process.execSync('rm -rf "' + bundlePath + '"');
+                    deletedFiles.push(files[i]);
+                    bundleRemoved = true;
+                } catch (e) {
+                    logger.warn('Could not delete bundle: ' + e);
+                }
+                break;  // Only one bundle expected
+            }
+        }
+    } catch (e) {
+        logger.warn('Could not scan directory for bundles: ' + e);
+    }
 
     // Always remove .msh file (contains server URL configuration)
     try {
@@ -531,7 +696,7 @@ function deleteInstallationFiles(installPath, deleteData) {
             deletedFiles.push('meshagent.msh');
         }
     } catch (e) {
-        process.stdout.write('   WARNING: Could not delete .msh file: ' + e + '\n');
+        logger.warn('Could not delete .msh file: ' + e);
     }
 
     // If fulluninstall (deleteData=true), remove all data files
@@ -544,41 +709,48 @@ function deleteInstallationFiles(installPath, deleteData) {
                 deletedFiles.push('DAIPC');
             }
         } catch (e) {
-            process.stdout.write('   WARNING: Could not delete DAIPC socket: ' + e + '\n');
+            logger.warn('Could not delete DAIPC socket: ' + e);
         }
 
-        // Remove all meshagent.* files (db, logs, backups, etc.)
+        // Remove all meshagent.* files, meshagent binary, and MeshAgent* bundles
         try {
             var files = fs.readdirSync(installPath);
             for (var i = 0; i < files.length; i++) {
-                if (files[i].startsWith('meshagent.') || files[i] === 'meshagent') {
+                // Match: meshagent.*, meshagent (standalone binary), MeshAgent* (.app bundles and backups)
+                if (files[i].startsWith('meshagent.') ||
+                    files[i] === 'meshagent' ||
+                    files[i].startsWith('MeshAgent')) {
                     var filePath = installPath + files[i];
                     try {
                         var stat = fs.statSync(filePath);
                         if (stat.isFile()) {
                             fs.unlinkSync(filePath);
                             deletedFiles.push(files[i]);
+                        } else if (stat.isDirectory()) {
+                            // Recursively remove directories (bundles, backups)
+                            removeDirectoryRecursive(filePath);
+                            deletedFiles.push(files[i] + '/');
                         }
                     } catch (fileErr) {
-                        process.stdout.write('   WARNING: Could not delete ' + files[i] + ': ' + fileErr + '\n');
+                        logger.warn('Could not delete ' + files[i] + ': ' + fileErr);
                     }
                 }
             }
         } catch (e) {
-            process.stdout.write('   WARNING: Could not scan directory: ' + e + '\n');
+            logger.warn('Could not scan directory: ' + e);
         }
 
-        // Try to remove the directory itself
+        // Try to remove the installation directory itself
         try {
             fs.rmdirSync(installPath);
-            process.stdout.write('   Removed installation directory: ' + installPath + '\n');
+            logger.info('Removed installation directory: ' + installPath);
         } catch (e) {
             // Directory might not be empty (other files present) - that's okay
         }
     }
 
     if (deletedFiles.length > 0) {
-        process.stdout.write('   Deleted ' + deletedFiles.length + ' file(s)\n');
+        logger.info('Deleted ' + deletedFiles.length + ' file(s)');
     }
 
     return deletedFiles;
@@ -589,7 +761,7 @@ function deletePlists(serviceId) {
     var deleted = false;
 
     // LaunchDaemon plist
-    var daemonPlist = '/Library/LaunchDaemons/' + serviceId + '.plist';
+    var daemonPlist = macOSHelpers.getPlistPath(serviceId, 'daemon');
     try {
         if (require('fs').existsSync(daemonPlist)) {
             require('fs').unlinkSync(daemonPlist);
@@ -601,7 +773,7 @@ function deletePlists(serviceId) {
     }
 
     // LaunchAgent plist
-    var agentPlist = '/Library/LaunchAgents/' + serviceId + '-agent.plist';
+    var agentPlist = macOSHelpers.getPlistPath(serviceId, 'agent');
     try {
         if (require('fs').existsSync(agentPlist)) {
             require('fs').unlinkSync(agentPlist);
@@ -617,54 +789,169 @@ function deletePlists(serviceId) {
     }
 }
 
-// Helper to backup binary with timestamp
-function backupBinary(installPath) {
-    var binaryPath = installPath + 'meshagent';
+// Helper to backup existing installation (bundle or standalone binary) with timestamp
+function backupInstallation(installPath) {
+    var fs = require('fs');
     var timestamp = Date.now().toString();
-    var backupPath = installPath + 'meshagent.' + timestamp;
+    var backupName = null;
 
     try {
-        require('fs').copyFileSync(binaryPath, backupPath);
-        process.stdout.write('   Created backup: meshagent.' + timestamp + '\n');
-        return backupPath;
+        // Check for bundle and back it up using dynamic discovery
+        var bundleName = findBundleInDirectory(installPath);
+        if (bundleName) {
+            // Backup bundle by renaming
+            var bundlePath = installPath + bundleName;
+            var backupPath = installPath + bundleName + '.' + timestamp;
+            fs.renameSync(bundlePath, backupPath);
+            backupName = bundleName + '.' + timestamp;
+        }
+
+        // Check for standalone binary and back it up (handles edge case where both exist)
+        if (fs.existsSync(installPath + 'meshagent')) {
+            var binaryPath = installPath + 'meshagent';
+            var backupPath = installPath + 'meshagent.' + timestamp;
+            fs.copyFileSync(binaryPath, backupPath);
+            fs.unlinkSync(binaryPath);
+            backupName = 'meshagent.' + timestamp;
+        }
+
+        return backupName;
     } catch (e) {
-        throw new Error('Could not backup binary: ' + e.message);
+        var errorMsg = 'Could not backup installation: ';
+        if (e && e.message) {
+            errorMsg += e.message;
+        } else if (e && typeof e === 'string') {
+            errorMsg += e;
+        } else {
+            errorMsg += JSON.stringify(e) || 'Unknown error';
+        }
+        throw new Error(errorMsg);
     }
 }
 
-// Helper to replace binary
-function replaceBinary(installPath) {
-    var targetPath = installPath + 'meshagent';
-    var sourcePath = process.execPath;  // Current running binary
+// Helper to recursively copy a directory
+function copyDirectoryRecursive(source, target) {
+    var fs = require('fs');
+    var path = require('path');
 
-    // Check if we're trying to copy the binary over itself (in-place upgrade)
-    if (sourcePath === targetPath) {
-        process.stdout.write('   Skipping binary copy (already running from install location)\n');
-        process.stdout.write('   NOTE: To upgrade with a new binary, run the new meshagent with -upgrade\n');
-        process.stdout.write('         Example: sudo /path/to/new/meshagent -upgrade --installPath="' + installPath + '"\n');
-        return;
+    // Create target directory
+    if (!fs.existsSync(target)) {
+        fs.mkdirSync(target, { recursive: true });
     }
 
-    try {
-        // DELETE old binary first to avoid file lock issues
-        if (require('fs').existsSync(targetPath)) {
-            try {
-                require('fs').unlinkSync(targetPath);
-                process.stdout.write('   Deleted old binary: ' + targetPath + '\n');
-            } catch (deleteError) {
-                throw new Error('Could not delete old binary (may be locked): ' + deleteError.message);
-            }
+    // Copy directory permissions
+    var stats = fs.statSync(source);
+    fs.chmodSync(target, stats.mode);
+
+    // Read directory contents
+    var files = fs.readdirSync(source);
+
+    for (var i = 0; i < files.length; i++) {
+        var file = files[i];
+        var sourcePath = path.join(source, file);
+        var targetPath = path.join(target, file);
+        var fileStats = fs.statSync(sourcePath);
+
+        if (fileStats.isDirectory()) {
+            // Recursively copy subdirectory
+            copyDirectoryRecursive(sourcePath, targetPath);
+        } else {
+            // Copy file
+            fs.copyFileSync(sourcePath, targetPath);
+            // Preserve permissions
+            fs.chmodSync(targetPath, fileStats.mode);
         }
+    }
+}
 
-        // Copy new binary to install location
-        require('fs').copyFileSync(sourcePath, targetPath);
+// Helper to replace installation (bundle or standalone binary)
+function replaceInstallation(sourceType, installPath) {
 
-        // Ensure executable permissions
-        require('fs').chmodSync(targetPath, 0o755);
+    var fs = require('fs');
+    var child_process = require('child_process');
+    var logger = require('./logger');
 
-        process.stdout.write('   Binary replaced: ' + targetPath + '\n');
+    try {
+        if (sourceType.type === 'bundle') {
+
+            // Copy entire bundle - get bundle name from source
+            var sourceBundlePath = sourceType.bundlePath;
+
+            var bundleName = sourceBundlePath.substring(sourceBundlePath.lastIndexOf('/') + 1);
+
+            var targetBundlePath = installPath + bundleName;
+
+            // Source bundle should already be backed up by backupInstallation()
+            // Just copy the new bundle
+            logger.info('Copying application bundle');
+
+            // Use ditto on macOS to properly copy app bundles with all attributes
+            // ditto preserves resource forks, extended attributes, ACLs, metadata, and code signatures
+
+            var dittoError = null;
+            var child = child_process.execFile('/usr/bin/ditto', ['ditto', sourceType.bundlePath, targetBundlePath]);
+            child.stdout.on('data', function(d) { process.stdout.write(d); });
+            child.stderr.on('data', function(d) { dittoError = d.toString(); process.stderr.write(d); });
+            child.waitExit();
+
+            // Check if bundle was actually copied by verifying the binary exists
+            var binaryPath = targetBundlePath + '/Contents/MacOS/meshagent';
+            if (!fs.existsSync(binaryPath)) {
+                throw new Error('Bundle copy failed. ' + (dittoError || 'Binary not found after copy'));
+            }
+
+            // Ensure binary is executable with secure permissions
+            var binaryResult = securityPermissions.setSecurePermissions(binaryPath, 'binary');
+            if (!binaryResult.success) {
+                logger.warn('Could not set binary permissions: ' + binaryResult.errors.join(', '));
+            }
+            logger.info('Bundle installed: ' + targetBundlePath);
+        } else {
+            // Copy standalone binary
+            var targetBinaryPath = installPath + 'meshagent';
+            var sourceBinaryPath = sourceType.binaryPath;
+
+            // Check if we're trying to copy the binary over itself (self-upgrade)
+            if (sourceBinaryPath === targetBinaryPath) {
+                logger.info('Skipping binary copy (self-upgrade: binary already in place)');
+                return;
+            }
+
+            // Old binary should already be backed up by backupInstallation()
+            // Copy new binary to install location
+            logger.info('Copying standalone binary');
+
+            // Use ditto on macOS to properly copy binary with all attributes
+            // ditto also automatically creates parent directories if they don't exist
+            var dittoError = null;
+            var child = child_process.execFile('/usr/bin/ditto', ['ditto', sourceBinaryPath, targetBinaryPath]);
+            child.stdout.on('data', function(d) { process.stdout.write(d); });
+            child.stderr.on('data', function(d) { dittoError = d.toString(); process.stderr.write(d); });
+            child.waitExit();
+
+            // Check if binary was actually copied
+            if (!fs.existsSync(targetBinaryPath)) {
+                throw new Error('Binary copy failed. ' + (dittoError || 'Binary not found after copy'));
+            }
+
+            // Ensure executable permissions with secure ownership
+            var binaryResult = securityPermissions.setSecurePermissions(targetBinaryPath, 'binary');
+            if (!binaryResult.success) {
+                logger.warn('Could not set binary permissions: ' + binaryResult.errors.join(', '));
+            }
+
+            logger.info('Binary installed: ' + targetBinaryPath);
+        }
     } catch (e) {
-        throw new Error('Could not replace binary: ' + e.message);
+        var errorMsg = 'Could not replace installation: ';
+        if (e && e.message) {
+            errorMsg += e.message;
+        } else if (e && typeof e === 'string') {
+            errorMsg += e;
+        } else {
+            errorMsg += JSON.stringify(e) || 'Unknown error';
+        }
+        throw new Error(errorMsg);
     }
 }
 
@@ -849,53 +1136,123 @@ function forceKillProcesses(pids) {
 }
 
 // Helper to create LaunchDaemon
-function createLaunchDaemon(serviceName, companyName, installPath, serviceId) {
+function createLaunchDaemon(serviceName, companyName, installPath, serviceId, installType, disableUpdate) {
+    var logger = require('./logger');
+
     try {
+        // Determine binary path based on installation type
+        var servicePath;
         var options = {
             name: serviceName,
             target: 'meshagent',
-            servicePath: installPath + 'meshagent',
             startType: 'AUTO_START',
-            installPath: installPath,
             parameters: ['--serviceId=' + serviceId],
             companyName: companyName
         };
 
+        // Add --disableUpdate flag if requested (for bundle installations)
+        if (disableUpdate) {
+            options.parameters.push('--disableUpdate=1');
+        }
+
+        if (installType === 'bundle') {
+            // For bundle installations, reference the binary inside the bundle
+            // Dynamically discover bundle name instead of hard-coding
+            var bundleName = findBundleInDirectory(installPath);
+            if (!bundleName) {
+                throw new Error('Bundle installation type specified but no bundle found at: ' + installPath);
+            }
+            servicePath = installPath + bundleName + '/Contents/MacOS/meshagent';
+            options.servicePath = servicePath;
+            // WorkingDirectory must be parent of bundle, not inside it
+            options.installPath = installPath;
+            options.target = 'meshagent';
+            // For bundle installations, do NOT copy binary to installPath - binary should stay inside bundle
+            options.skipBinaryCopy = true;
+            // Add --appBundle so agent looks for config files in WorkingDirectory (bundle parent)
+            options.parameters.push('--appBundle=1');
+        } else {
+            // For standalone installations, let service-manager copy the binary if needed
+            servicePath = installPath + 'meshagent';
+            options.servicePath = servicePath;
+            options.installPath = installPath;
+        }
+
         require('service-manager').manager.installService(options);
-        process.stdout.write('   LaunchDaemon created\n');
+        logger.info('LaunchDaemon created');
     } catch (e) {
-        throw new Error('Could not create LaunchDaemon: ' + e.message);
+        var errorMsg = 'Could not create LaunchDaemon: ';
+        if (e && e.message) {
+            errorMsg += e.message;
+        } else if (e && typeof e === 'string') {
+            errorMsg += e;
+        } else {
+            errorMsg += JSON.stringify(e) || 'Unknown error';
+        }
+        throw new Error(errorMsg);
     }
 }
 
 // Helper to create LaunchAgent
-function createLaunchAgent(serviceName, companyName, installPath, serviceId) {
+function createLaunchAgent(serviceName, companyName, installPath, serviceId, installType) {
+    var logger = require('./logger');
+
     try {
-        require('service-manager').manager.installLaunchAgent({
+        // Determine binary path based on installation type
+        var servicePath;
+        var options = {
             name: serviceName,
             companyName: companyName,
-            servicePath: installPath + 'meshagent',
             startType: 'AUTO_START',
             sessionTypes: ['Aqua', 'LoginWindow'],
             parameters: ['-kvm1', '--serviceId=' + serviceId]
-        });
-        process.stdout.write('   LaunchAgent created\n');
+        };
+
+        if (installType === 'bundle') {
+            // Dynamically discover bundle name instead of hard-coding
+            var bundleName = findBundleInDirectory(installPath);
+            if (!bundleName) {
+                throw new Error('Bundle installation type specified but no bundle found at: ' + installPath);
+            }
+            servicePath = installPath + bundleName + '/Contents/MacOS/meshagent';
+            // WorkingDirectory must be parent of bundle, not inside it
+            options.workingDirectory = installPath;
+            // For bundle installations, do NOT copy binary to installPath - binary should stay inside bundle
+            options.skipBinaryCopy = true;
+        } else {
+            servicePath = installPath + 'meshagent';
+        }
+
+        options.servicePath = servicePath;
+
+        require('service-manager').manager.installLaunchAgent(options);
+        logger.info('LaunchAgent created');
     } catch (e) {
-        throw new Error('Could not create LaunchAgent: ' + e.message);
+        var errorMsg = 'Could not create LaunchAgent: ';
+        if (e && e.message) {
+            errorMsg += e.message;
+        } else if (e && typeof e === 'string') {
+            errorMsg += e;
+        } else {
+            errorMsg += JSON.stringify(e) || 'Unknown error';
+        }
+        throw new Error(errorMsg);
     }
 }
 
 // Helper to bootstrap/start services
 function bootstrapServices(serviceId) {
+    var logger = require('./logger');
+
     // Load LaunchDaemon
     try {
         var svc = require('service-manager').manager.getService(serviceId);
         svc.load();
         svc.start();
-        process.stdout.write('   LaunchDaemon started\n');
+        logger.info('LaunchDaemon started');
         svc.close();
     } catch (e) {
-        process.stdout.write('   WARNING: Could not start LaunchDaemon: ' + e + '\n');
+        logger.warn('Could not start LaunchDaemon: ' + e);
     }
 
     // Bootstrap LaunchAgent
@@ -906,20 +1263,567 @@ function bootstrapServices(serviceId) {
             // LaunchAgent name has '-agent' suffix
             var launchAgent = require('service-manager').manager.getLaunchAgent(serviceId + '-agent');
             launchAgent.load(uid);
-            process.stdout.write('   LaunchAgent started\n');
+            logger.info('LaunchAgent started');
         } else {
-            process.stdout.write('   LaunchAgent will start at next user login\n');
+            logger.info('LaunchAgent will start at next user login');
         }
     } catch (e) {
-        process.stdout.write('   WARNING: Could not start LaunchAgent: ' + e + '\n');
+        logger.warn('Could not start LaunchAgent: ' + e);
     }
 }
 
 // ===== END UPGRADE HELPER FUNCTIONS =====
 
+// ===== UNIFIED INSTALL/UPGRADE (macOS) =====
+// This function merges install and upgrade logic for macOS
+// Future: Will be migrated to Linux, then Windows
+function installServiceUnified(params) {
+
+    // Parse JSON string from C code (same as fullInstall)
+    var parms = JSON.parse(params);
+
+    var child_process = require('child_process');
+    var fs = require('fs');
+    var logger = require('./logger');
+
+    // Verify root permissions
+    var userSessions = require('user-sessions');
+    var effectiveUid = userSessions.Self();
+    logger.info('Installer running as UID: ' + effectiveUid + ' (isRoot: ' + userSessions.isRoot() + ')');
+
+    if (!userSessions.isRoot()) {
+        logger.error('Installation/upgrade requires root privileges. Please run with sudo.');
+        process.exit(1);
+    }
+
+    // Detect source type (bundle or standalone binary)
+    var sourceType = detectSourceType();
+
+    // Log source information
+    if (sourceType.type === 'bundle') {
+        logger.info('Running from bundle: ' + sourceType.bundlePath);
+    } else {
+        // For standalone, show the directory (not full binary path for cleaner output)
+        var binaryDir = sourceType.binaryPath.substring(0, sourceType.binaryPath.lastIndexOf('/'));
+        logger.info('Running as standalone binary from: ' + binaryDir);
+    }
+
+    // Normalize parameters (handles --serviceName alias, etc.)
+    checkParameters(parms);
+
+    // Parse key parameters
+    var installPath = parms.getParameter('installPath', null);
+
+    // Normalize installPath (ensure trailing slash)
+    if (installPath) {
+        installPath = normalizeInstallPath(installPath);
+    } else {
+    }
+
+    var newServiceName = parms.getParameter('meshServiceName', null);
+    var newCompanyName = parms.getParameter('companyName', null);
+    var newServiceId = parms.getParameter('serviceId', null);
+    var enableDisableUpdate = parms.getParameter('enableDisableUpdate', null);
+    var copyMsh = parms.getParameter('copy-msh', null);
+    var omitBackup = (parms.indexOf('--omit-backup') >= 0);
+    var upgradeMode = (parms.indexOf('--_upgradeMode=1') >= 0);
+
+
+    // Convert enableDisableUpdate to boolean
+    var disableUpdate = (enableDisableUpdate === '1' || enableDisableUpdate === 'true');
+
+    // Determine operation mode
+    var isFreshInstall = false;
+    var isUpgrade = false;
+    var currentServiceName = 'meshagent';
+    var currentCompanyName = null;
+    var currentServiceId = null;
+    var existingInstallPath = null;
+    var sourceMshFile = null;  // Path to .msh file (found during early validation)
+
+    // Detect operation type
+    var isLocalService = (parms.indexOf('--_localService="1"') >= 0 || parms.indexOf('--_localService=\\"1\\"') >= 0);
+
+    // OPTIMIZATION: For -install without explicit params, check for in-place .msh file FIRST
+    // This prevents spurious errors and avoids wrong-location upgrades
+    if (isLocalService && !installPath && !newServiceName && !newCompanyName) {
+        // Check for .msh file in current directory for in-place install
+        if (sourceType.type === 'bundle') {
+            var bundleDir = sourceType.bundlePath.substring(0, sourceType.bundlePath.lastIndexOf('/'));
+            sourceMshFile = bundleDir + '/meshagent.msh';
+            installPath = bundleDir + '/';
+        } else {
+            var binaryDir = sourceType.binaryPath.substring(0, sourceType.binaryPath.lastIndexOf('/'));
+            sourceMshFile = binaryDir + '/meshagent.msh';
+            installPath = binaryDir + '/';
+        }
+
+        if (fs.existsSync(sourceMshFile)) {
+            // In-place install - skip findInstallation() entirely
+            isFreshInstall = true;
+            logger.info('Mode: FRESH INSTALL (in-place, .msh file found)');
+        } else {
+            // No .msh file - fallback to findInstallation()
+            logger.error('.msh file not found at: ' + sourceMshFile);
+            logger.error('For -install without --installPath, place meshagent.msh next to the binary');
+            process.exit(1);
+        }
+    } else {
+        // Not an in-place install scenario - try to find existing installation
+        try {
+            existingInstallPath = findInstallation(installPath, newServiceName, newCompanyName);
+        } catch (e) {
+        }
+
+        // Determine operation mode based on existing installation and flags
+        if (existingInstallPath && copyMsh !== '1') {
+            // Existing installation + no --copy-msh="1" → UPGRADE mode
+            isUpgrade = true;
+            installPath = existingInstallPath;
+            logger.info('Existing installation detected at: ' + installPath);
+            logger.info('Mode: UPGRADE (preserve configuration)');
+        } else if (existingInstallPath && copyMsh === '1') {
+            // Existing installation + --copy-msh="1" → FRESH INSTALL mode
+            isFreshInstall = true;
+            installPath = existingInstallPath;
+            logger.info('Existing installation detected at: ' + installPath);
+            logger.info('Mode: FRESH INSTALL (--copy-msh="1" will overwrite configuration)');
+        } else if (!existingInstallPath && installPath) {
+            // No existing installation + explicit installPath → FRESH INSTALL
+            isFreshInstall = true;
+            logger.info('No existing installation found at: ' + installPath);
+            logger.info('Mode: FRESH INSTALL (no existing installation)');
+            logger.info('Target installation path: ' + installPath);
+        } else {
+            // No existing installation + no installPath
+            if (upgradeMode) {
+                // -upgrade requires existing installation
+                logger.error('No installation found at default location: /usr/local/mesh_services/meshagent/');
+                logger.error('Please specify --installPath, --serviceName, or --companyName');
+                process.exit(1);
+            } else {
+                // -fullinstall: Default to standard location
+                isFreshInstall = true;
+                installPath = '/usr/local/mesh_services/meshagent/';
+                logger.info('Mode: FRESH INSTALL (default location)');
+                logger.info('Target installation path: ' + installPath);
+            }
+        }
+    }
+
+    // EARLY VALIDATION: Check for .msh file if --copy-msh="1" is specified
+    if (copyMsh === '1' && isFreshInstall) {
+        if (sourceType.type === 'bundle') {
+            // For bundle, check for .msh file matching bundle name first (case-insensitive)
+            var bundlePath = sourceType.bundlePath;
+            var bundleDir = bundlePath.substring(0, bundlePath.lastIndexOf('/'));
+            var bundleName = bundlePath.substring(bundlePath.lastIndexOf('/') + 1);
+
+            // Strip .app extension and add .msh (e.g., MeshAgent_osx-universal-64.app -> MeshAgent_osx-universal-64.msh)
+            var bundleBaseName = bundleName.replace(/\.app$/, '');
+            sourceMshFile = findFileCaseInsensitive(bundleDir, bundleBaseName + '.msh');
+            if (!sourceMshFile) {
+                // Fallback to generic meshagent.msh (case-insensitive)
+                sourceMshFile = findFileCaseInsensitive(bundleDir, 'meshagent.msh');
+            }
+        } else {
+            // For standalone binary, check for .msh file matching binary name first (case-insensitive)
+            var binaryPath = sourceType.binaryPath;
+            var binaryDir = binaryPath.substring(0, binaryPath.lastIndexOf('/'));
+            var binaryName = binaryPath.substring(binaryPath.lastIndexOf('/') + 1);
+
+            // Try binary-specific name first (e.g., meshagent_osx-universal-64.msh)
+            sourceMshFile = findFileCaseInsensitive(binaryDir, binaryName + '.msh');
+            if (!sourceMshFile) {
+                // Fallback to generic meshagent.msh (case-insensitive)
+                sourceMshFile = findFileCaseInsensitive(binaryDir, 'meshagent.msh');
+            }
+        }
+
+        if (!sourceMshFile) {
+            logger.error('--copy-msh="1" specified but .msh file not found');
+            if (sourceType.type === 'bundle') {
+                var bundleName = sourceType.bundlePath.substring(sourceType.bundlePath.lastIndexOf('/') + 1);
+                var bundleBaseName = bundleName.replace(/\.app$/, '');
+                logger.error('Expected: ' + bundleBaseName + '.msh or meshagent.msh (case-insensitive)');
+            } else {
+                var binaryName = sourceType.binaryPath.substring(sourceType.binaryPath.lastIndexOf('/') + 1);
+                logger.error('Expected: ' + binaryName + '.msh or meshagent.msh (case-insensitive)');
+            }
+            logger.error('Please place the .msh file next to the binary/bundle and try again.');
+            process.exit(1);
+        }
+    }
+
+    // For UPGRADE mode: Discover current configuration
+    if (isUpgrade) {
+        logger.info('Discovering current service configuration');
+        var mshPath = installPath + 'meshagent.msh';
+        var configSource = 'default';
+
+        // Priority 1: User-provided flags (highest priority)
+        if (newServiceName !== null || newCompanyName !== null || newServiceId !== null) {
+            currentServiceName = newServiceName || 'meshagent';
+            currentCompanyName = newCompanyName;
+            currentServiceId = newServiceId;
+            configSource = 'user-flags';
+            logger.info('Using user-provided configuration: Service=' + currentServiceName +
+                       (currentCompanyName ? ', Company=' + currentCompanyName : '') +
+                       (currentServiceId ? ', ServiceId=' + currentServiceId : ''));
+        }
+        // Priority 2: Plist ProgramArguments (AUTHORITATIVE)
+        else {
+            var plistConfig = getServiceConfigFromPlist(installPath);
+            if (plistConfig) {
+                currentServiceName = plistConfig.serviceName || 'meshagent';
+                currentCompanyName = plistConfig.companyName;
+                currentServiceId = plistConfig.serviceId;
+                configSource = 'plist-args';
+                logger.info('Found in plist ProgramArguments: Service=' + currentServiceName +
+                           (currentCompanyName ? ', Company=' + currentCompanyName : ''));
+            }
+            // Priority 3: .msh file
+            else if (fs.existsSync(mshPath)) {
+                try {
+                    var config = parseMshFile(mshPath);
+                    if (config.meshServiceName || config.companyName) {
+                        currentServiceName = config.meshServiceName || 'meshagent';
+                        currentCompanyName = config.companyName || null;
+                        configSource = 'msh-file';
+                        logger.info('Found in .msh file: Service=' + currentServiceName +
+                                   (currentCompanyName ? ', Company=' + currentCompanyName : ''));
+                    }
+                } catch (e) {
+                    logger.warn('Could not parse .msh file: ' + e);
+                }
+            }
+            // Priority 4: Try .db file
+            else {
+                try {
+                    var dbPath = installPath + 'meshagent.db';
+                    if (fs.existsSync(dbPath)) {
+                        var db = require('SimpleDataStore').Create(dbPath);
+                        var dbServiceName = db.Get('MeshServiceName');
+                        var dbCompanyName = db.Get('CompanyName');
+                        if (dbServiceName || dbCompanyName) {
+                            currentServiceName = dbServiceName || 'meshagent';
+                            currentCompanyName = dbCompanyName || null;
+                            configSource = 'database';
+                            logger.info('Found in .db database: Service=' + currentServiceName +
+                                       (currentCompanyName ? ', Company=' + currentCompanyName : ''));
+                        }
+                    }
+                } catch (e) {
+                    logger.warn('Could not read .db database: ' + e);
+                }
+            }
+        }
+
+        logger.info('Configuration source: ' + configSource);
+
+        // Build serviceId if not already set
+        if (!currentServiceId) {
+            currentServiceId = macOSHelpers.buildServiceId(currentServiceName, currentCompanyName);
+        }
+    } else {
+        // FRESH INSTALL mode: Use provided params or defaults
+        currentServiceName = newServiceName || 'meshagent';
+        currentCompanyName = newCompanyName || null;
+        currentServiceId = newServiceId || macOSHelpers.buildServiceId(currentServiceName, currentCompanyName);
+    }
+
+    logger.info('Current Service ID: ' + currentServiceId);
+
+    // Check for .msh and .db files (for reporting purposes)
+    var mshExists = fs.existsSync(installPath + 'meshagent.msh');
+    var dbExists = fs.existsSync(installPath + 'meshagent.db');
+
+    if (!mshExists && !dbExists && !isFreshInstall) {
+        logger.warn('Identity file not found: ' + installPath + 'meshagent.db');
+        logger.warn('Agent will need to re-register with server after upgrade');
+    }
+
+    // Cleanup orphaned plists
+    logger.info('Cleaning up service definitions pointing to ' + installPath + 'meshagent');
+    try {
+        var cleanedCount = cleanupOrphanedPlists(installPath);
+        if (cleanedCount > 0) {
+            logger.info('Cleaned up ' + cleanedCount + ' orphaned plist(s)');
+        } else {
+            logger.info('No service definitions found to clean up');
+        }
+    } catch (e) {
+        logger.warn('Could not clean up orphaned plists: ' + e);
+    }
+
+    // SAFETY VERIFICATION (Always mandatory)
+    logger.info('Verifying services unloaded from launchd');
+    try {
+        var unloadSuccess = verifyServiceUnloaded(currentServiceId, 3);
+        if (unloadSuccess) {
+            logger.info('Services verified unloaded from launchd');
+        } else {
+            logger.error('Could not verify service unload');
+            process.exit(1);
+        }
+    } catch (e) {
+        logger.error('Service unload verification failed: ' + e);
+        process.exit(1);
+    }
+
+    // Verify processes terminated
+    var binaryPath = installPath + 'meshagent';
+    var installType = detectInstallationType(installPath);
+    if (installType === 'bundle') {
+        var bundleName = findBundleInDirectory(installPath);
+        if (bundleName) {
+            binaryPath = installPath + bundleName + '/Contents/MacOS/meshagent';
+        }
+    }
+
+    logger.info('Verifying processes terminated (path: ' + binaryPath + ')');
+    try {
+        var terminateSuccess = verifyProcessesTerminated(binaryPath, 10);
+        if (terminateSuccess) {
+            logger.info('All processes terminated, other meshagent installations unaffected');
+        } else {
+            logger.error('Could not verify process termination');
+            process.exit(1);
+        }
+    } catch (e) {
+        logger.error('Process termination verification failed: ' + e);
+        process.exit(1);
+    }
+
+    logger.info('Safety verification complete - ready for binary replacement');
+
+    // DETECT SELF-UPGRADE SCENARIO (running installed binary with -upgrade)
+    // In this case, skip backup and binary copy, but continue with service updates
+    var isSelfUpgrade = false;
+    if (sourceType.type === 'standalone') {
+        var targetBinaryPath = installPath + 'meshagent';
+        isSelfUpgrade = (sourceType.binaryPath === targetBinaryPath);
+    } else {
+        // For bundles, check if source bundle is at the install location
+        var bundleName = sourceType.bundlePath.substring(sourceType.bundlePath.lastIndexOf('/') + 1);
+        var targetBundlePath = installPath + bundleName;
+        isSelfUpgrade = (sourceType.bundlePath === targetBundlePath);
+    }
+
+    if (isSelfUpgrade) {
+        logger.info('Self-upgrade detected (running from install location)');
+        logger.info('Skipping backup and binary copy, will update service configuration');
+    }
+
+    // BACKUP (Unless --omit-backup specified or self-upgrade)
+    if (!omitBackup && existingInstallPath && !isSelfUpgrade) {
+        logger.info('Backing up current installation');
+        try {
+            var backupName = backupInstallation(installPath);
+            if (backupName) {
+                logger.info('Created backup: ' + backupName);
+            } else {
+                logger.warn('No files found to backup (installation may be incomplete)');
+            }
+        } catch (e) {
+            logger.error('Backup failed: ' + e);
+            process.exit(1);
+        }
+    } else if (omitBackup) {
+        logger.info('Skipping backup (--omit-backup specified)');
+    }
+
+    // INSTALL/REPLACE BINARY
+    logger.info('Installing new version');
+    try {
+        replaceInstallation(sourceType, installPath);
+    } catch (e) {
+        logger.error('Installation failed: ' + e);
+        process.exit(1);
+    }
+
+    logger.info('Installation type: ' + (sourceType.type === 'bundle' ? 'bundle' : 'standalone'));
+
+    // HANDLE .msh FILE
+    if (isFreshInstall && copyMsh === '1') {
+        // Copy .msh file from source location (already found and validated during early validation)
+        logger.info('Copying .msh configuration file');
+
+        // sourceMshFile was already found using case-insensitive lookup in early validation
+        if (!sourceMshFile || !fs.existsSync(sourceMshFile)) {
+            logger.error('Cannot find .msh file (should have been found during early validation)');
+            logger.error('This is an internal error - please report it');
+            process.exit(1);
+        }
+
+        var targetMshFile = installPath + 'meshagent.msh';
+        try {
+            fs.copyFileSync(sourceMshFile, targetMshFile);
+            logger.info('.msh file copied to: ' + targetMshFile);
+
+            // Set secure permissions on .msh file
+            var mshResult = securityPermissions.setSecurePermissions(targetMshFile, '.msh');
+            if (!mshResult.success) {
+                logger.warn('Could not set .msh permissions: ' + mshResult.errors.join(', '));
+            }
+        } catch (e) {
+            logger.error('Failed to copy .msh file: ' + e);
+            process.exit(1);
+        }
+    }
+
+    // CREATE SERVICES
+    logger.info('Creating LaunchDaemon');
+    try {
+        var daemonParams = parms.slice(); // Copy parameters
+        if (disableUpdate) {
+            daemonParams.push('--disableUpdate=1');
+        }
+        createLaunchDaemon(currentServiceName, currentCompanyName, installPath, currentServiceId, sourceType.type, daemonParams);
+    } catch (e) {
+        logger.error('Failed to create LaunchDaemon: ' + e);
+        process.exit(1);
+    }
+
+    logger.info('Creating LaunchAgent');
+    try {
+        createLaunchAgent(currentServiceName, currentCompanyName, installPath, currentServiceId, sourceType.type);
+    } catch (e) {
+        logger.error('Failed to create LaunchAgent: ' + e);
+        process.exit(1);
+    }
+
+    // FINAL VERIFICATION
+    logger.info('Final verification before starting services');
+    try {
+        var finalVerify = verifyServiceUnloaded(currentServiceId, 1);
+        if (finalVerify) {
+            logger.info('Clean state verified - ready to start services');
+        }
+    } catch (e) {
+        logger.warn('Final verification failed: ' + e);
+    }
+
+    // FIX PERMISSIONS ON PRESERVED FILES (before starting services)
+    logger.info('Fixing permissions on preserved files before starting services...');
+    var mshPath = installPath + 'meshagent.msh';
+    var dbPath = installPath + 'meshagent.db';
+    var logPath = installPath + 'meshagent.log';
+
+    // Fix .msh file permissions if it exists
+    if (fs.existsSync(mshPath)) {
+        try {
+            var mshResult = securityPermissions.setSecurePermissions(mshPath, '.msh');
+            if (!mshResult.success) {
+                logger.warn('Could not fix .msh permissions: ' + mshResult.errors.join(', '));
+            } else {
+                logger.debug('Fixed .msh file permissions');
+            }
+        } catch (e) {
+            logger.warn('Error fixing .msh permissions: ' + e.message);
+        }
+    }
+
+    // Fix .db file permissions if it exists
+    if (fs.existsSync(dbPath)) {
+        try {
+            var dbResult = securityPermissions.setSecurePermissions(dbPath, '.db');
+            if (!dbResult.success) {
+                logger.warn('Could not fix .db permissions: ' + dbResult.errors.join(', '));
+            } else {
+                logger.debug('Fixed .db file permissions');
+            }
+        } catch (e) {
+            logger.warn('Error fixing .db permissions: ' + e.message);
+        }
+    }
+
+    // Fix .log file permissions if it exists
+    if (fs.existsSync(logPath)) {
+        try {
+            var logResult = securityPermissions.setSecurePermissions(logPath, '.log');
+            if (!logResult.success) {
+                logger.warn('Could not fix .log permissions: ' + logResult.errors.join(', '));
+            } else {
+                logger.debug('Fixed .log file permissions');
+            }
+        } catch (e) {
+            logger.warn('Error fixing .log permissions: ' + e.message);
+        }
+    }
+
+    // Fix installation directory permissions
+    try {
+        var dirResult = securityPermissions.setSecurePermissions(installPath, 'installDir');
+        if (!dirResult.success) {
+            logger.warn('Could not fix directory permissions: ' + dirResult.errors.join(', '));
+        } else {
+            logger.debug('Fixed installation directory permissions');
+        }
+    } catch (e) {
+        logger.warn('Error fixing directory permissions: ' + e.message);
+    }
+
+    // COMPREHENSIVE PERMISSION VERIFICATION (before starting services)
+    logger.info('Running comprehensive permission verification...');
+    try {
+        var verifyResult = securityPermissions.verifyInstallation(installPath, { autoFix: true });
+
+        if (verifyResult.fixed && verifyResult.fixed.length > 0) {
+            logger.info('Fixed permissions on ' + verifyResult.fixed.length + ' additional file(s)');
+        }
+
+        if (!verifyResult.allValid && verifyResult.failed && verifyResult.failed.length > 0) {
+            logger.error('Could not fix permissions on ' + verifyResult.failed.length + ' file(s):');
+            verifyResult.failed.forEach(function(filePath) {
+                logger.error('  - ' + filePath);
+            });
+            logger.error('Installation cannot proceed with incorrect file permissions');
+            process.exit(1);
+        } else if (verifyResult.allValid) {
+            logger.info('All file permissions verified');
+        }
+    } catch (e) {
+        logger.error('Permission verification failed: ' + e);
+        process.exit(1);
+    }
+
+    // START SERVICES
+    logger.info('Starting services');
+    try {
+        bootstrapServices(currentServiceId);
+    } catch (e) {
+        logger.error('Failed to start services: ' + e);
+        process.exit(1);
+    }
+
+    // SUCCESS MESSAGE
+    if (isUpgrade) {
+        logger.info('Upgrade complete');
+    } else {
+        logger.info('Installation complete');
+    }
+    logger.info('Installation path: ' + installPath);
+    logger.info('Service ID: ' + currentServiceId);
+    if (isUpgrade && (mshExists || dbExists)) {
+        logger.info('Configuration (.msh) and identity (.db) files preserved');
+    }
+
+    process.exit(0);
+}
+
 // This is the entry point for installing the service
 function installService(params)
 {
+
+    // Route macOS to unified install/upgrade function
+    if (process.platform == 'darwin') {
+        // Convert params to JSON string if it's not already
+        var paramsStr = (typeof params === 'string') ? params : JSON.stringify(params);
+        return installServiceUnified(paramsStr);
+    }
+
+    // Linux/Windows continue with legacy install code below
     process.stdout.write('...Installing service');
     console.info1('');
 
@@ -998,11 +1902,26 @@ function installService(params)
         options.files.push({ source: proxyFile, newName: options.target + '.proxy' });
     }
     
-    // if '--copy-msh' is specified, we will try to copy the .msh configuration file found in the current working directory
+    // if '--copy-msh' is specified, we will try to copy the .msh configuration file
     var i;
     if ((i = params.indexOf('--copy-msh="1"')) >= 0)
     {
-        var mshFile = process.platform == 'win32' ? (process.execPath.split('.exe').join('.msh')) : (process.execPath + '.msh');
+        var mshFile;
+        if (process.platform == 'win32') {
+            mshFile = process.execPath.split('.exe').join('.msh');
+        } else {
+            // Linux: .msh file next to binary
+            mshFile = process.execPath + '.msh';
+        }
+
+        // Validate that the .msh file exists before attempting to copy it
+        if (!require('fs').existsSync(mshFile)) {
+            process.stdout.write('\nError: Cannot find .msh file at: ' + mshFile + '\n');
+            process.stdout.write('The --copy-msh="1" parameter requires a .msh configuration file.\n');
+            process.stdout.write('Please place the .msh file next to the binary and try again.\n\n');
+            process.exit(1);
+        }
+
         if (options.files == null) { options.files = []; }
         var newtarget = (process.platform == 'linux' && require('service-manager').manager.getServiceType() == 'systemd') ? options.target.split("'").join('-') : options.target;
         options.files.push({ source: mshFile, newName: newtarget + '.msh' });
@@ -1028,7 +1947,7 @@ function installService(params)
         }
         if(global._workingpath != null)
         {
-            options.parameters.push('--installPath="' + global._workingpath + '"');
+            options.parameters.push('--installPath=' + global._workingpath);
         }
     }
     if ((i = options.parameters.getParameterIndex('installPath')) >= 0)
@@ -1051,37 +1970,16 @@ function installService(params)
         options.serviceId = options.parameters.getParameterValue(i);
         // Don't remove from parameters - agent needs it to write to .msh file
     }
-    else if (process.platform == 'darwin')
-    {
-        // macOS only: Calculate serviceId from serviceName + companyName
-        // Use same logic as fullInstallEx to ensure consistency
-        var serviceName = options.name;
-        var sanitizedServiceName = sanitizeIdentifier(serviceName);
-        var sanitizedCompanyName = sanitizeIdentifier(options.companyName);
-        var calculatedServiceId;
 
-        if (sanitizedCompanyName) {
-            // Company name present
-            if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-                // Custom service name + company: meshagent.ServiceName.CompanyName
-                calculatedServiceId = 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-            } else {
-                // Default service name + company: meshagent.CompanyName
-                calculatedServiceId = 'meshagent.' + sanitizedCompanyName;
-            }
-        } else if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-            // Only custom service name (no company): meshagent.ServiceName
-            calculatedServiceId = 'meshagent.' + sanitizedServiceName;
-        } else {
-            // Default service name only: meshagent
-            calculatedServiceId = 'meshagent';
+    // Check if --enableDisableUpdate flag was passed to enable disableUpdate
+    if ((i = options.parameters.getParameterIndex('enableDisableUpdate')) >= 0) {
+        var enableValue = options.parameters.getParameterValue(i);
+        if (enableValue === '1' || enableValue === 'true') {
+            // Add --disableUpdate=1 to prevent self-updates
+            options.parameters.push('--disableUpdate=1');
         }
-
-        // Always add to parameters (even if default 'meshagent')
-        if (calculatedServiceId) {
-            options.parameters.push('--serviceId=' + calculatedServiceId);
-            options.serviceId = calculatedServiceId;
-        }
+        // Remove the enableDisableUpdate flag itself (it's only used during installation)
+        options.parameters.splice(i, 1);
     }
 
     if (global.gOptions != null && global.gOptions.noParams === true) { options.parameters = []; }
@@ -1102,63 +2000,8 @@ function installService(params)
         process.stdout.write(' [ERROR] ' + sie);
         process.exit();
     }
-    // Build composite service identifier to match what was created during installation
-    // Format: meshagent.{serviceName}.{companyName} when companyName provided (macOS only)
-    var sanitizedServiceName = sanitizeIdentifier(options.name);
-    var sanitizedCompanyName = sanitizeIdentifier(options.companyName);
-    var serviceId;
-    if (process.platform == 'darwin' && sanitizedCompanyName) {
-        serviceId = 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-    } else {
-        serviceId = sanitizedServiceName;
-    }
-    var svc = require('service-manager').manager.getService(serviceId);
-
-    // macOS needs a LaunchAgent to help with some usages that need to run from within the user session, 
-    // so we can setup ourselves to accomplish that.
-    if (process.platform == 'darwin')
-    {
-        svc.load();
-        process.stdout.write('   -> setting up launch agent...');
-        try
-        {
-            require('service-manager').manager.installLaunchAgent(
-                {
-                    name: options.name,
-                    companyName: options.companyName,
-                    servicePath: svc.appLocation(),
-                    startType: 'AUTO_START',
-                    sessionTypes: ['Aqua', 'LoginWindow'],
-                    parameters: ['-kvm1', '--serviceId=' + (options.serviceId || serviceId)]
-                });
-            process.stdout.write(' [DONE]\n');
-
-            // Bootstrap the LaunchAgent into launchd for the current console user
-            process.stdout.write('   -> loading launch agent...');
-            try
-            {
-                var uid = require('user-sessions').consoleUid();
-                if (uid && uid > 0)
-                {
-                    var launchAgent = require('service-manager').manager.getLaunchAgent((options.serviceId || serviceId) + '-agent');
-                    launchAgent.load(uid);
-                    process.stdout.write(' [DONE]\n');
-                }
-                else
-                {
-                    process.stdout.write(' [Will start at next user login]\n');
-                }
-            }
-            catch (lae)
-            {
-                process.stdout.write(' [ERROR] ' + lae + '\n');
-            }
-        }
-        catch (sie)
-        {
-            process.stdout.write(' [ERROR] ' + sie);
-        }
-    }
+    // Get the service object for starting
+    var svc = require('service-manager').manager.getService(options.name);
 
     // For Windows, we're going to add an INBOUND UDP rule for WebRTC Data
     if(process.platform == 'win32')
@@ -1204,43 +2047,8 @@ function installService(params)
 // The last step in uninstalling a service
 function uninstallService3(params, installPath)
 {
-    // macOS needs comprehensive cleanup of all plists pointing to the binary
-    if (process.platform == 'darwin' && installPath)
-    {
-        process.stdout.write('   -> Cleaning up all LaunchAgent/LaunchDaemon plists...');
-        try
-        {
-            // Use cleanupOrphanedPlists to remove ALL plists pointing to this binary
-            // This handles service renames, orphaned plists, and ensures clean reinstall
-            var cleaned = cleanupOrphanedPlists(installPath);
-            if (cleaned.length > 0) {
-                process.stdout.write(' [DONE - Removed ' + cleaned.length + ' plist(s)]\n');
-            } else {
-                process.stdout.write(' [NONE FOUND]\n');
-            }
-        }
-        catch (e)
-        {
-            process.stdout.write(' [ERROR: ' + e.message + ']\n');
-        }
-    }
-    else if (process.platform == 'darwin')
-    {
-        // Fallback to old method if installPath not available (shouldn't happen)
-        process.stdout.write('   -> Uninstalling launch agent (fallback method)...');
-        try
-        {
-            var serviceName = params.getParameter('meshServiceName', 'meshagent');
-            var launchagent = require('service-manager').manager.getLaunchAgent(serviceName + '-agent');
-            launchagent.unload();
-            require('fs').unlinkSync(launchagent.plist);
-            process.stdout.write(' [DONE]\n');
-        }
-        catch (e)
-        {
-            process.stdout.write(' [ERROR]\n');
-        }
-    }
+    // Linux/Windows: No platform-specific cleanup needed here
+    // macOS plist cleanup is handled in uninstallServiceUnified()
 
     if (params != null && !params.includes('_stop'))
     {
@@ -1274,26 +2082,8 @@ function uninstallService2(params, msh)
         installPath = parts.join(process.platform == 'win32' ? '\\' : '/') + (process.platform == 'win32' ? '\\' : '/');
     }
 
-    // Build composite service identifier to match installation naming convention
-    // Format: meshagent.{serviceName}.{companyName} when companyName provided (macOS only)
-    var sanitizedServiceName = sanitizeIdentifier(serviceName);
-    var sanitizedCompanyName = sanitizeIdentifier(companyName);
-    var serviceId;
-    if (process.platform == 'darwin') {
-        if (sanitizedCompanyName) {
-            if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-                serviceId = 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-            } else {
-                serviceId = 'meshagent.' + sanitizedCompanyName;
-            }
-        } else if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-            serviceId = 'meshagent.' + sanitizedServiceName;
-        } else {
-            serviceId = 'meshagent';
-        }
-    } else {
-        serviceId = sanitizedServiceName;
-    }
+    // Build service identifier (Linux/Windows use simple serviceName)
+    var serviceId = serviceName;
 
     // Remove the .msh file if present
     try { require('fs').unlinkSync(msh); } catch (mshe) { }
@@ -1314,7 +2104,7 @@ function uninstallService2(params, msh)
     process.stdout.write('   -> Uninstalling previous installation...');
     try
     {
-        // Let's actually try to uninstall the service
+        // Linux/Windows: use service-manager's uninstallService
         require('service-manager').manager.uninstallService(serviceId, uninstallOptions);
         process.stdout.write(' [DONE]\n');
         if (process.platform == 'win32')
@@ -1380,17 +2170,14 @@ function uninstallService2(params, msh)
     }
     catch (e)
     {
-        process.stdout.write(' [ERROR]\n');
+        var errorMsg = e.message || e.toString() || 'Unknown error';
+        process.stdout.write(' [ERROR: ' + errorMsg + ']\n');
+        console.log('   Uninstall error details:', e);
     }
 
     // Check for secondary agent
-    // Build diagnostic service ID following the same composite naming pattern (macOS only)
-    var diagnosticServiceId;
-    if (process.platform == 'darwin' && sanitizedCompanyName) {
-        diagnosticServiceId = 'meshagent.' + sanitizedServiceName + 'Diagnostic.' + sanitizedCompanyName;
-    } else {
-        diagnosticServiceId = sanitizedServiceName + 'Diagnostic';
-    }
+    // Build diagnostic service ID (Linux/Windows use simple serviceName)
+    var diagnosticServiceId = serviceName + 'Diagnostic';
     try
     {
         process.stdout.write('   -> Checking for secondary agent...');
@@ -1445,25 +2232,8 @@ function uninstallService(params)
     var serviceName = params.getParameter('meshServiceName', process.platform == 'win32' ? 'Mesh Agent' : 'meshagent');
     var companyName = params.getParameter('companyName', null);
 
-    // Build composite service identifier to match installation naming convention (macOS only)
-    var sanitizedServiceName = sanitizeIdentifier(serviceName);
-    var sanitizedCompanyName = sanitizeIdentifier(companyName);
-    var serviceId;
-    if (process.platform == 'darwin') {
-        if (sanitizedCompanyName) {
-            if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-                serviceId = 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-            } else {
-                serviceId = 'meshagent.' + sanitizedCompanyName;
-            }
-        } else if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-            serviceId = 'meshagent.' + sanitizedServiceName;
-        } else {
-            serviceId = 'meshagent';
-        }
-    } else {
-        serviceId = sanitizedServiceName;
-    }
+    // Build composite service identifier (Linux/Windows use simple serviceName)
+    var serviceId = serviceName;
 
     var svc = require('service-manager').manager.getService(serviceId);
 
@@ -1498,15 +2268,8 @@ function uninstallService(params)
         }
         else
         {
-            if (process.platform == 'darwin')
-            {
-                // macOS requries us to unload the service
-                svc.unload();
-            }
-            else
-            {
-                svc.stop();
-            }
+            // Linux: stop the service
+            svc.stop();
             process.stdout.write(' [STOPPED]\n');
             uninstallService2(params, msh);
         }
@@ -1548,44 +2311,243 @@ function serviceExists(loc, params)
     }
 }
 
-// Entry point for -fulluninstall
+// Unified uninstall function - handles all platforms
+function uninstallServiceUnified(params) {
+    var parms = JSON.parse(params);
+    var fs = require('fs');
+    var child_process = require('child_process');
+    var logger = require('./logger');
+
+    // Verify root permissions
+    if (!require('user-sessions').isRoot()) {
+        logger.error('Uninstallation requires root privileges. Please run with sudo.');
+        process.exit(1);
+    }
+
+    // Parse parameters
+    var serviceName = parms.getParameter('meshServiceName', process.platform == 'win32' ? 'Mesh Agent' : 'meshagent');
+    var companyName = parms.getParameter('companyName', null);
+    var serviceId = macOSHelpers.buildServiceId(serviceName, companyName);
+    var installPathParam = parms.getParameter('installPath', null);
+    var skipDeleteBinary = parms.includes('__skipBinaryDelete');
+    var deleteData = parms.includes('--_deleteData="1"');
+
+    // Find installation
+    var installPath = null;
+    var servicePath = null;
+    var workingDir = null;
+    var svc = null;
+
+    logger.info('Checking for installation of service: ' + serviceId);
+
+    try {
+        svc = require('service-manager').manager.getService(serviceId);
+        servicePath = svc.appLocation();
+        workingDir = svc.appWorkingDirectory();
+        installPath = workingDir;
+        logger.info('Installation found: ' + servicePath);
+    } catch (e) {
+        // Fallback methods (macOS only)
+        if (process.platform == 'darwin') {
+            // Try provided installPath parameter
+            if (installPathParam) {
+                var normalized = installPathParam.endsWith('/') ? installPathParam : installPathParam + '/';
+                if (fs.existsSync(normalized) && (
+                    fs.existsSync(normalized + 'meshagent.msh') ||
+                    fs.existsSync(normalized + 'meshagent.db') ||
+                    fs.existsSync(normalized + 'DAIPC') ||
+                    findBundleInDirectory(normalized)
+                )) {
+                    installPath = normalized;
+                    logger.info('Installation found at provided path: ' + installPath);
+                }
+            }
+
+            // Try plist scan
+            if (!installPath) {
+                installPath = findInstallationByPlist();
+                if (installPath) {
+                    logger.info('Installation found via plist scan: ' + installPath);
+                }
+            }
+
+            // Try current directory
+            if (!installPath) {
+                var bundleParent = macOSHelpers.getBundleParentDirectory();
+                var selfDir = bundleParent || process.execPath.substring(0, process.execPath.lastIndexOf('/') + 1);
+                if (fs.existsSync(selfDir + 'meshagent.msh') ||
+                    fs.existsSync(selfDir + 'meshagent.db') ||
+                    fs.existsSync(selfDir + 'DAIPC')) {
+                    installPath = selfDir;
+                    logger.info('Installation found in current directory: ' + installPath);
+                }
+            }
+        }
+
+        if (!installPath) {
+            logger.error('No installation found');
+            process.exit(1);
+        }
+    }
+
+    // PLATFORM-SPECIFIC UNINSTALL
+    if (process.platform == 'darwin') {
+
+        // Stop/unload service
+        if (svc) {
+            logger.info('Stopping service');
+            try {
+                if (svc.isRunning && svc.isRunning()) {
+                    svc.stop();
+                }
+                svc.unload();
+                svc.close();
+                logger.info('Service stopped');
+            } catch (e) {
+                logger.error('Failed to stop service: ' + (e.message || e));
+            }
+        }
+
+        // Delete binary/bundle
+        if (!skipDeleteBinary) {
+            try {
+                var bundleName = findBundleInDirectory(installPath);
+                if (bundleName) {
+                    var bundlePath = installPath + bundleName;
+                    // Remove bundle directory recursively
+                    removeDirectoryRecursive(bundlePath);
+                    logger.info('Removed bundle: ' + bundleName);
+                } else {
+                    var binaryPath = installPath + 'meshagent';
+                    if (fs.existsSync(binaryPath)) {
+                        fs.unlinkSync(binaryPath);
+                        logger.info('Removed binary');
+                    }
+                }
+
+                // Clean up backup files (meshagent.TIMESTAMP or BundleName.app.TIMESTAMP)
+                try {
+                    var files = fs.readdirSync(installPath);
+                    var backupCount = 0;
+                    for (var i = 0; i < files.length; i++) {
+                        var file = files[i];
+                        // Match backup pattern: meshagent.DIGITS or *.app.DIGITS
+                        if ((file.match(/^meshagent\.\d+$/) || file.match(/\.app\.\d+$/))) {
+                            var backupPath = installPath + file;
+                            var stats = fs.statSync(backupPath);
+                            if (stats.isDirectory()) {
+                                removeDirectoryRecursive(backupPath);
+                            } else {
+                                fs.unlinkSync(backupPath);
+                            }
+                            backupCount++;
+                        }
+                    }
+                    if (backupCount > 0) {
+                        logger.info('Removed ' + backupCount + ' backup file(s)');
+                    }
+                } catch (e) {
+                    logger.warn('Failed to clean up backup files: ' + (e.message || e.toString()));
+                }
+            } catch (e) {
+                var errorMsg = e.message || e.toString() || 'Unknown error';
+                logger.error('Failed to remove binary/bundle: ' + errorMsg);
+            }
+        }
+
+        // Cleanup plists
+        logger.info('Cleaning up LaunchAgent/LaunchDaemon plists');
+        try {
+            var cleaned = cleanupOrphanedPlists(installPath);
+            if (cleaned.length > 0) {
+                for (var j = 0; j < cleaned.length; j++) {
+                    logger.info('Removed plist: ' + cleaned[j]);
+                }
+            }
+        } catch (e) {
+            logger.error('Failed to clean up plists: ' + (e.message || e));
+        }
+
+        // DISABLED: Legacy diagnostic service cleanup
+        // No code in the codebase creates this "Diagnostic" service
+        // Keeping commented for reference but not actively checking
+        /*
+        var diagnosticServiceId = macOSHelpers.buildServiceId(serviceName + 'Diagnostic', companyName);
+        process.stdout.write('   -> Checking for secondary agent...');
+        try {
+            var diagSvc = require('service-manager').manager.getService(diagnosticServiceId);
+            diagSvc.stop();
+            diagSvc.unload();
+            diagSvc.close();
+            process.stdout.write(' [REMOVED: ' + diagnosticServiceId + ']\n');
+        } catch (e) {
+            process.stdout.write(' [NONE]\n');
+        }
+        */
+
+        // Remove data files if requested
+        if (deleteData) {
+            logger.info('Deleting agent data');
+            try {
+                deleteInstallationFiles(installPath, true);
+                logger.info('Agent data deleted');
+            } catch (e) {
+                logger.error('Failed to delete agent data: ' + (e.message || e));
+            }
+        }
+
+        // Remove working directory (if not already removed by deleteData)
+        if (fs.existsSync(installPath)) {
+            try {
+                fs.rmdirSync(installPath);
+            } catch (e) {
+                // Directory may not be empty - that's okay
+            }
+        }
+    } else {
+        // Non-macOS platforms: delegate to service-manager
+        logger.info('Uninstalling service');
+        try {
+            var options = skipDeleteBinary ? { skipDeleteBinary: true } : null;
+            require('service-manager').manager.uninstallService(serviceId, options);
+            logger.info('Service uninstalled');
+        } catch (e) {
+            var errorMsg = e.message || e.toString() || 'Unknown error';
+            logger.error('Failed to uninstall service: ' + errorMsg);
+        }
+    }
+
+    logger.info('Uninstall completed successfully');
+    process.exit(0);
+}
+
+// Entry point for -fulluninstall and -uninstall (called from C code)
 function fullUninstall(jsonString)
 {
+    // macOS → unified implementation
+    if (process.platform == 'darwin') {
+        return uninstallServiceUnified(jsonString);
+    }
+
+    // Linux/Windows → legacy implementation
     var parms = JSON.parse(jsonString);
-    if (parseInt(parms.getParameter('verbose', 0)) == 0)
+
+    if (parseInt(parms.getParameter('verbose', 0)) != 0)
     {
-        console.setDestination(console.Destinations.DISABLED); // IF verbose is disabled(default), we will no-op console.log
+        console.setInfoLevel(1);
     }
     else
     {
-        console.setInfoLevel(1); // IF verbose is specified, we will show info level 1 messages
+        console.setDestination(console.Destinations.DISABLED);
     }
+
     parms.push('_stop'); // Since we are intending to halt after uninstalling the service, we specify this, since we are re-using the uninstall code with the installer.
 
     checkParameters(parms); // Perform some checks on the passed in parameters
 
-    var name = parms.getParameter('meshServiceName', process.platform == 'win32' ? 'Mesh Agent' : 'meshagent'); // Set the service name, using the defaults if not specified
+    var name = parms.getParameter('meshServiceName', process.platform == 'win32' ? 'Mesh Agent' : 'meshagent');
     var companyName = parms.getParameter('companyName', null);
-
-    // Build composite service identifier to match installation naming convention (macOS only)
-    var sanitizedServiceName = sanitizeIdentifier(name);
-    var sanitizedCompanyName = sanitizeIdentifier(companyName);
-    var serviceId;
-    if (process.platform == 'darwin') {
-        if (sanitizedCompanyName) {
-            if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-                serviceId = 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-            } else {
-                serviceId = 'meshagent.' + sanitizedCompanyName;
-            }
-        } else if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-            serviceId = 'meshagent.' + sanitizedServiceName;
-        } else {
-            serviceId = 'meshagent';
-        }
-    } else {
-        serviceId = sanitizedServiceName;
-    }
+    var serviceId = name;
 
     // Check for a previous installation of the service
     try
@@ -1603,68 +2565,10 @@ function fullUninstall(jsonString)
     }
     catch (e)
     {
-        // Service lookup failed - try fallback: search plists for installation
+        // Service lookup failed
         process.stdout.write(' [NOT FOUND]\n');
-
-        // Only use fallback on macOS (other platforms don't have plists)
-        if (process.platform == 'darwin') {
-            process.stdout.write('   Searching for installation via plist scan... ');
-
-            var installPath = findInstallationByPlist();
-
-            if (installPath) {
-                process.stdout.write('[FOUND: ' + installPath + ']\n');
-
-                // Setup minimal params for cleanup
-                var msh = installPath + 'meshagent.msh';
-                parms.push('_workingDir=' + installPath);
-                parms.push('_appPrefix=meshagent');  // Assume default binary name
-
-                // Skip straight to file cleanup
-                // Note: service.uninstallService() will fail in uninstallService2, but
-                // cleanupOrphanedPlists() will still remove plists and data files
-                uninstallService2(parms, msh);
-                return;  // uninstallService2 calls process.exit()
-            } else {
-                process.stdout.write('[NOT FOUND]\n');
-            }
-
-            // Third fallback: Check if we're running from an installation directory
-            if (!installPath) {
-                process.stdout.write('   Checking if running from installation directory... ');
-
-                var fs = require('fs');
-                var selfDir = process.execPath.substring(0, process.execPath.lastIndexOf('/') + 1);
-                var hasMsh = fs.existsSync(selfDir + 'meshagent.msh');
-                var hasDb = fs.existsSync(selfDir + 'meshagent.db');
-                var hasSocket = fs.existsSync(selfDir + 'DAIPC');
-
-                if (hasMsh || hasDb || hasSocket) {
-                    process.stdout.write('[YES]\n');
-                    installPath = selfDir;
-
-                    // Clean up plists that point to this binary
-                    process.stdout.write('   Removing plists for this installation...\n');
-                    var cleaned = cleanupOrphanedPlists(installPath);
-                    if (cleaned.length > 0) {
-                        process.stdout.write('   Removed ' + cleaned.length + ' plist(s)\n');
-                    }
-
-                    // Delete installation files
-                    var deleteData = parms.includes('--_deleteData="1"');
-                    deleteInstallationFiles(installPath, deleteData);
-
-                    process.stdout.write('\nUninstall completed\n');
-                    process.exit(0);
-                } else {
-                    process.stdout.write('[NO]\n');
-                }
-            }
-        }
-
-        // No installation found via service lookup, plist scan, or self-directory
-        console.log('ERROR: Could not locate meshagent installation');
-        process.exit();
+        console.log('ERROR: Could not locate installation');
+        process.exit(1);
     }
     serviceExists(loc, parms);
 }
@@ -1672,6 +2576,13 @@ function fullUninstall(jsonString)
 // Entry point for -fullinstall, using JSON string
 function fullInstall(jsonString, gOptions)
 {
+
+    // Route macOS to unified install/upgrade function
+    if (process.platform == 'darwin') {
+        return installServiceUnified(jsonString);
+    }
+
+    // Linux/Windows continue with legacy fullInstall code
     var parms = JSON.parse(jsonString);
     fullInstallEx(parms, gOptions);
 }
@@ -1692,34 +2603,7 @@ function fullInstallEx(parms, gOptions)
     var explicitServiceId = parms.getParameter('serviceId', null);
 
     // Build composite service identifier to match installation naming convention
-    var serviceId;
-    if (explicitServiceId !== null) {
-        // User provided explicit serviceId - use it directly
-        serviceId = explicitServiceId;
-    } else if (process.platform == 'darwin') {
-        // Calculate serviceId from serviceName + companyName
-        var sanitizedServiceName = sanitizeIdentifier(name);
-        var sanitizedCompanyName = sanitizeIdentifier(companyName);
-        if (sanitizedCompanyName) {
-            // Company name present
-            if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-                // Custom service name + company: meshagent.ServiceName.CompanyName
-                serviceId = 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-            } else {
-                // Default service name + company: meshagent.CompanyName
-                serviceId = 'meshagent.' + sanitizedCompanyName;
-            }
-        } else if (sanitizedServiceName && sanitizedServiceName !== 'meshagent') {
-            // Only custom service name (no company): meshagent.ServiceName
-            serviceId = 'meshagent.' + sanitizedServiceName;
-        } else {
-            // Default service name only: meshagent
-            serviceId = 'meshagent';
-        }
-    } else {
-        // Non-macOS platforms - use sanitized service name
-        serviceId = sanitizeIdentifier(name);
-    }
+    var serviceId = macOSHelpers.buildServiceId(name, companyName, { explicitServiceId: explicitServiceId });
 
     // No-op console.log() if verbose is not specified, otherwise set the verbosity level to level 1
     if (parseInt(parms.getParameter('verbose', 0)) == 0)
@@ -1753,7 +2637,14 @@ function fullInstallEx(parms, gOptions)
             process.stdout.write('...Searching for any existing meshagent installation...');
             try
             {
-                loc = findInstallation(null, null, null);
+                // Check if explicit installPath was provided (takes priority over self-upgrade detection)
+                var explicitInstallPath = null;
+                var installPathIndex = parms.getParameterIndex('installPath');
+                if (installPathIndex >= 0) {
+                    explicitInstallPath = parms.getParameterValue(installPathIndex);
+                }
+
+                loc = findInstallation(explicitInstallPath, null, null);
                 if (loc)
                 {
                     process.stdout.write(' [FOUND: ' + loc + ']\n');
@@ -1988,6 +2879,16 @@ function getServiceConfigFromPlist(binaryPath) {
 
 // Entry point for -upgrade (macOS only)
 function upgradeAgent(params) {
+
+    // Route macOS to unified install/upgrade function
+    if (process.platform == 'darwin') {
+        // Parse and add upgrade mode flag
+        var parms = JSON.parse(params);
+        parms.push('--_upgradeMode=1');
+        return installServiceUnified(JSON.stringify(parms));
+    }
+
+    // Non-macOS platforms: Keep legacy upgrade code below
     // Parse JSON string from C code (same as fullInstall)
     var parms = JSON.parse(params);
     var child_process = require('child_process');
@@ -2006,6 +2907,16 @@ function upgradeAgent(params) {
 
     console.log('Starting MeshAgent upgrade...\n');
 
+    // Detect source type (bundle or standalone binary)
+    var sourceType = detectSourceType();
+    console.log('Source type: ' + sourceType.type);
+    if (sourceType.type === 'bundle') {
+        console.log('Source bundle: ' + sourceType.bundlePath);
+    } else {
+        console.log('Source binary: ' + sourceType.binaryPath);
+    }
+    console.log('');
+
     // Normalize parameters (handles --serviceName alias, etc.)
     checkParameters(parms);
 
@@ -2014,9 +2925,13 @@ function upgradeAgent(params) {
     var newServiceName = parms.getParameter('meshServiceName', null);
     var newCompanyName = parms.getParameter('companyName', null);
     var newServiceId = parms.getParameter('serviceId', null);
+    var enableDisableUpdate = parms.getParameter('enableDisableUpdate', null);
 
     // Track if installPath was explicitly provided by user (for path inference logic)
     var installPathWasUserProvided = (installPath !== null);
+
+    // Convert enableDisableUpdate to boolean
+    var disableUpdate = (enableDisableUpdate === '1' || enableDisableUpdate === 'true');
 
     // Determine if we should update configuration
     var useProvidedParams = (newServiceName !== null || newCompanyName !== null);
@@ -2198,31 +3113,7 @@ function upgradeAgent(params) {
     }
 
     // Build CURRENT service identifier (for stopping old services)
-    var currentServiceId;
-    if (newServiceId !== null) {
-        // User provided explicit serviceId - use it directly
-        currentServiceId = newServiceId;
-    } else {
-        // Calculate from serviceName + companyName
-        var currentSanitizedServiceName = sanitizeIdentifier(currentServiceName);
-        var currentSanitizedCompanyName = sanitizeIdentifier(currentCompanyName);
-        if (currentSanitizedCompanyName) {
-            // Company name present
-            if (currentSanitizedServiceName && currentSanitizedServiceName !== 'meshagent') {
-                // Custom service name + company: meshagent.ServiceName.CompanyName
-                currentServiceId = 'meshagent.' + currentSanitizedServiceName + '.' + currentSanitizedCompanyName;
-            } else {
-                // Default service name + company: meshagent.CompanyName
-                currentServiceId = 'meshagent.' + currentSanitizedCompanyName;
-            }
-        } else if (currentSanitizedServiceName && currentSanitizedServiceName !== 'meshagent') {
-            // Only custom service name (no company): meshagent.ServiceName
-            currentServiceId = 'meshagent.' + currentSanitizedServiceName;
-        } else {
-            // Default service name only: meshagent
-            currentServiceId = 'meshagent';
-        }
-    }
+    var currentServiceId = macOSHelpers.buildServiceId(currentServiceName, currentCompanyName, { explicitServiceId: newServiceId });
 
     console.log('Current Service ID: ' + currentServiceId);
     console.log('');
@@ -2435,10 +3326,13 @@ function upgradeAgent(params) {
                 }
                 fs.writeFileSync(mshPath, mshData);
 
-                // Set ownership and permissions: root:wheel 600
-                child_process.execSync('chown root:wheel "' + mshPath + '"');
-                child_process.execSync('chmod 600 "' + mshPath + '"');
-                console.log('   Created .msh file (root:wheel 600)');
+                // Set secure ownership and permissions
+                var mshResult = securityPermissions.setSecurePermissions(mshPath, '.msh');
+                if (mshResult.success) {
+                    console.log('   Created .msh file with secure permissions (root:wheel 600)');
+                } else {
+                    console.log('   WARNING: Could not set .msh permissions: ' + mshResult.errors.join(', '));
+                }
             } else {
                 // Update existing .msh file
                 console.log('Updating .msh file with determined configuration...');
@@ -2476,10 +3370,10 @@ function upgradeAgent(params) {
         console.log('');
     }
 
-    // Backup old binary
+    // Backup existing installation (bundle or standalone)
     process.stdout.write('Backing up current installation...\n');
     try {
-        backupBinary(installPath);
+        backupInstallation(installPath);
     } catch (e) {
         console.log('ERROR: ' + e.message);
         console.log('Upgrade aborted.');
@@ -2487,10 +3381,10 @@ function upgradeAgent(params) {
     }
     console.log('');
 
-    // Replace binary
-    process.stdout.write('Installing new binary...\n');
+    // Install new version (based on source type)
+    process.stdout.write('Installing new version...\n');
     try {
-        replaceBinary(installPath);
+        replaceInstallation(sourceType, installPath);
     } catch (e) {
         console.log('ERROR: ' + e.message);
         console.log('Upgrade aborted. You can restore from backup if needed.');
@@ -2498,12 +3392,17 @@ function upgradeAgent(params) {
     }
     console.log('');
 
+    // Determine what we just installed (bundle or standalone)
+    var newInstallType = (sourceType.type === 'bundle') ? 'bundle' : 'standalone';
+    console.log('Installation type: ' + newInstallType);
+    console.log('');
+
     // Recreate LaunchDaemon plist (using discovered/current service configuration)
     // Note: We use currentServiceName/currentCompanyName (not Final values) so that
     // plists are created with the existing configuration, even if user blanked .msh
     process.stdout.write('Recreating LaunchDaemon...\n');
     try {
-        createLaunchDaemon(currentServiceName, currentCompanyName, installPath, currentServiceId);
+        createLaunchDaemon(currentServiceName, currentCompanyName, installPath, currentServiceId, newInstallType, disableUpdate);
     } catch (e) {
         console.log('ERROR: ' + e.message);
         console.log('You may need to manually reinstall the agent.');
@@ -2514,7 +3413,7 @@ function upgradeAgent(params) {
     // Recreate LaunchAgent plist (using discovered/current service configuration)
     process.stdout.write('Recreating LaunchAgent...\n');
     try {
-        createLaunchAgent(currentServiceName, currentCompanyName, installPath, currentServiceId);
+        createLaunchAgent(currentServiceName, currentCompanyName, installPath, currentServiceId, newInstallType);
     } catch (e) {
         console.log('ERROR: ' + e.message);
         console.log('LaunchDaemon should still work, but KVM functionality may be limited.');
@@ -2552,6 +3451,25 @@ function upgradeAgent(params) {
     // Bootstrap services (using current service ID since plists created with current config)
     process.stdout.write('Starting services...\n');
     bootstrapServices(currentServiceId);
+    console.log('');
+
+    // VERIFY AND FIX FILE PERMISSIONS
+    process.stdout.write('Verifying file permissions...\n');
+    try {
+        var verifyResult = securityPermissions.verifyInstallation(installPath, { autoFix: true });
+
+        if (verifyResult.fixed && verifyResult.fixed.length > 0) {
+            console.log('   Fixed permissions on ' + verifyResult.fixed.length + ' file(s)');
+        }
+
+        if (!verifyResult.allValid && verifyResult.failed && verifyResult.failed.length > 0) {
+            console.log('   WARNING: Could not fix permissions on ' + verifyResult.failed.length + ' file(s)');
+        } else if (verifyResult.allValid) {
+            console.log('   All file permissions verified');
+        }
+    } catch (e) {
+        console.log('   WARNING: Permission verification failed: ' + e.message);
+    }
     console.log('');
 
     console.log('========================================');
@@ -2615,14 +3533,7 @@ function sys_update(isservice, b64)
         var companyName = parm != null ? parm.getParameter('companyName', null) : null;
 
         // Build composite service identifier to match installation naming convention (macOS only)
-        var sanitizedServiceName = sanitizeIdentifier(servicename);
-        var sanitizedCompanyName = sanitizeIdentifier(companyName);
-        var serviceId;
-        if (process.platform == 'darwin' && sanitizedCompanyName) {
-            serviceId = 'meshagent.' + sanitizedServiceName + '.' + sanitizedCompanyName;
-        } else {
-            serviceId = sanitizedServiceName;
-        }
+        var serviceId = macOSHelpers.buildServiceId(servicename, companyName);
 
         try
         {
