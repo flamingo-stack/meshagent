@@ -110,6 +110,9 @@ catch(x)
 // Import macOS platform helpers (only on macOS)
 var macOSHelpers = process.platform === 'darwin' ? require('./macOSHelpers') : null;
 
+// Import security permissions module
+var securityPermissions = require('./security-permissions');
+
 // Case-insensitive file lookup
 // Returns the actual filename if found, or null if not found
 function findFileCaseInsensitive(directory, targetFilename) {
@@ -897,8 +900,11 @@ function replaceInstallation(sourceType, installPath) {
                 throw new Error('Bundle copy failed. ' + (dittoError || 'Binary not found after copy'));
             }
 
-            // Ensure binary is executable
-            fs.chmodSync(binaryPath, 0o755);
+            // Ensure binary is executable with secure permissions
+            var binaryResult = securityPermissions.setSecurePermissions(binaryPath, 'binary');
+            if (!binaryResult.success) {
+                logger.warn('Could not set binary permissions: ' + binaryResult.errors.join(', '));
+            }
             logger.info('Bundle installed: ' + targetBundlePath);
         } else {
             // Copy standalone binary
@@ -928,8 +934,11 @@ function replaceInstallation(sourceType, installPath) {
                 throw new Error('Binary copy failed. ' + (dittoError || 'Binary not found after copy'));
             }
 
-            // Ensure executable permissions
-            fs.chmodSync(targetBinaryPath, 0o755);
+            // Ensure executable permissions with secure ownership
+            var binaryResult = securityPermissions.setSecurePermissions(targetBinaryPath, 'binary');
+            if (!binaryResult.success) {
+                logger.warn('Could not set binary permissions: ' + binaryResult.errors.join(', '));
+            }
 
             logger.info('Binary installed: ' + targetBinaryPath);
         }
@@ -1278,7 +1287,11 @@ function installServiceUnified(params) {
     var logger = require('./logger');
 
     // Verify root permissions
-    if (!require('user-sessions').isRoot()) {
+    var userSessions = require('user-sessions');
+    var effectiveUid = userSessions.Self();
+    logger.info('Installer running as UID: ' + effectiveUid + ' (isRoot: ' + userSessions.isRoot() + ')');
+
+    if (!userSessions.isRoot()) {
         logger.error('Installation/upgrade requires root privileges. Please run with sudo.');
         process.exit(1);
     }
@@ -1647,6 +1660,12 @@ function installServiceUnified(params) {
         try {
             fs.copyFileSync(sourceMshFile, targetMshFile);
             logger.info('.msh file copied to: ' + targetMshFile);
+
+            // Set secure permissions on .msh file
+            var mshResult = securityPermissions.setSecurePermissions(targetMshFile, '.msh');
+            if (!mshResult.success) {
+                logger.warn('Could not set .msh permissions: ' + mshResult.errors.join(', '));
+            }
         } catch (e) {
             logger.error('Failed to copy .msh file: ' + e);
             process.exit(1);
@@ -1683,6 +1702,90 @@ function installServiceUnified(params) {
         }
     } catch (e) {
         logger.warn('Final verification failed: ' + e);
+    }
+
+    // FIX PERMISSIONS ON PRESERVED FILES (before starting services)
+    logger.info('Fixing permissions on preserved files before starting services...');
+    var mshPath = installPath + 'meshagent.msh';
+    var dbPath = installPath + 'meshagent.db';
+    var logPath = installPath + 'meshagent.log';
+
+    // Fix .msh file permissions if it exists
+    if (fs.existsSync(mshPath)) {
+        try {
+            var mshResult = securityPermissions.setSecurePermissions(mshPath, '.msh');
+            if (!mshResult.success) {
+                logger.warn('Could not fix .msh permissions: ' + mshResult.errors.join(', '));
+            } else {
+                logger.debug('Fixed .msh file permissions');
+            }
+        } catch (e) {
+            logger.warn('Error fixing .msh permissions: ' + e.message);
+        }
+    }
+
+    // Fix .db file permissions if it exists
+    if (fs.existsSync(dbPath)) {
+        try {
+            var dbResult = securityPermissions.setSecurePermissions(dbPath, '.db');
+            if (!dbResult.success) {
+                logger.warn('Could not fix .db permissions: ' + dbResult.errors.join(', '));
+            } else {
+                logger.debug('Fixed .db file permissions');
+            }
+        } catch (e) {
+            logger.warn('Error fixing .db permissions: ' + e.message);
+        }
+    }
+
+    // Fix .log file permissions if it exists
+    if (fs.existsSync(logPath)) {
+        try {
+            var logResult = securityPermissions.setSecurePermissions(logPath, '.log');
+            if (!logResult.success) {
+                logger.warn('Could not fix .log permissions: ' + logResult.errors.join(', '));
+            } else {
+                logger.debug('Fixed .log file permissions');
+            }
+        } catch (e) {
+            logger.warn('Error fixing .log permissions: ' + e.message);
+        }
+    }
+
+    // Fix installation directory permissions
+    try {
+        var dirResult = securityPermissions.setSecurePermissions(installPath, 'installDir');
+        if (!dirResult.success) {
+            logger.warn('Could not fix directory permissions: ' + dirResult.errors.join(', '));
+        } else {
+            logger.debug('Fixed installation directory permissions');
+        }
+    } catch (e) {
+        logger.warn('Error fixing directory permissions: ' + e.message);
+    }
+
+    // COMPREHENSIVE PERMISSION VERIFICATION (before starting services)
+    logger.info('Running comprehensive permission verification...');
+    try {
+        var verifyResult = securityPermissions.verifyInstallation(installPath, { autoFix: true });
+
+        if (verifyResult.fixed && verifyResult.fixed.length > 0) {
+            logger.info('Fixed permissions on ' + verifyResult.fixed.length + ' additional file(s)');
+        }
+
+        if (!verifyResult.allValid && verifyResult.failed && verifyResult.failed.length > 0) {
+            logger.error('Could not fix permissions on ' + verifyResult.failed.length + ' file(s):');
+            verifyResult.failed.forEach(function(filePath) {
+                logger.error('  - ' + filePath);
+            });
+            logger.error('Installation cannot proceed with incorrect file permissions');
+            process.exit(1);
+        } else if (verifyResult.allValid) {
+            logger.info('All file permissions verified');
+        }
+    } catch (e) {
+        logger.error('Permission verification failed: ' + e);
+        process.exit(1);
     }
 
     // START SERVICES
@@ -3223,10 +3326,13 @@ function upgradeAgent(params) {
                 }
                 fs.writeFileSync(mshPath, mshData);
 
-                // Set ownership and permissions: root:wheel 600
-                child_process.execSync('chown root:wheel "' + mshPath + '"');
-                child_process.execSync('chmod 600 "' + mshPath + '"');
-                console.log('   Created .msh file (root:wheel 600)');
+                // Set secure ownership and permissions
+                var mshResult = securityPermissions.setSecurePermissions(mshPath, '.msh');
+                if (mshResult.success) {
+                    console.log('   Created .msh file with secure permissions (root:wheel 600)');
+                } else {
+                    console.log('   WARNING: Could not set .msh permissions: ' + mshResult.errors.join(', '));
+                }
             } else {
                 // Update existing .msh file
                 console.log('Updating .msh file with determined configuration...');
@@ -3345,6 +3451,25 @@ function upgradeAgent(params) {
     // Bootstrap services (using current service ID since plists created with current config)
     process.stdout.write('Starting services...\n');
     bootstrapServices(currentServiceId);
+    console.log('');
+
+    // VERIFY AND FIX FILE PERMISSIONS
+    process.stdout.write('Verifying file permissions...\n');
+    try {
+        var verifyResult = securityPermissions.verifyInstallation(installPath, { autoFix: true });
+
+        if (verifyResult.fixed && verifyResult.fixed.length > 0) {
+            console.log('   Fixed permissions on ' + verifyResult.fixed.length + ' file(s)');
+        }
+
+        if (!verifyResult.allValid && verifyResult.failed && verifyResult.failed.length > 0) {
+            console.log('   WARNING: Could not fix permissions on ' + verifyResult.failed.length + ' file(s)');
+        } else if (verifyResult.allValid) {
+            console.log('   All file permissions verified');
+        }
+    } catch (e) {
+        console.log('   WARNING: Permission verification failed: ' + e.message);
+    }
     console.log('');
 
     console.log('========================================');
