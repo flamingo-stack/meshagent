@@ -1558,12 +1558,24 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 
 		// Spawn TCC check before establishing KVM connection (non-blocking)
 		// The -tccCheck process will check permissions and decide whether to show UI
-		// Check "do not remind" preference before spawning
-		// Only skip TCC check if the value is specifically "1"
-		// DISABLED: Automatic TCC check spawn has been disabled for remote connections too
-		// TCC UI now only shows when user explicitly holds SHIFT while double-clicking from Finder
-		int should_spawn = 0;  // Never auto-spawn
-		ILIBMESSAGE("[TCC-REMOTE] Automatic TCC check disabled - use SHIFT+double-click to check TCC permissions");
+		int should_spawn = 1;  // Default: spawn TCC check
+
+		// Check if user previously selected "Do not remind me again"
+		int len = ILibSimpleDataStore_Get(agent->masterDb, "tccPermissionsUIDisabled", ILibScratchPad, sizeof(ILibScratchPad));
+		if (len > 0 && len < sizeof(ILibScratchPad))
+		{
+			ILibScratchPad[len] = 0;  // Null-terminate
+			if (strcmp(ILibScratchPad, "1") == 0)
+			{
+				should_spawn = 0;
+				ILIBMESSAGE("[TCC-REMOTE] TCC check disabled by user preference (tccPermissionsUIDisabled=1)");
+			}
+		}
+
+		if (should_spawn)
+		{
+			ILIBMESSAGE("[TCC-REMOTE] Spawning TCC permissions check for remote connection");
+		}
 
 		if (should_spawn)
 		{
@@ -5209,12 +5221,24 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 	{
 		// Check "do not remind" preference before spawning
 		// Only skip TCC check if the value is specifically "1"
-		char value_buf[16];
-		// DISABLED: Automatic TCC check spawn has been disabled
-		// TCC UI now only shows when user explicitly holds SHIFT while double-clicking from Finder
-		// This prevents TCC UI from interfering with install/upgrade operations
-		int should_spawn = 0;  // Never auto-spawn
-		ILIBMESSAGE("[TCC-STARTUP] Automatic TCC check disabled - use SHIFT+double-click to check TCC permissions");
+		int should_spawn = 1;  // Default: spawn TCC check
+
+		// Check if user previously selected "Do not remind me again"
+		int len = ILibSimpleDataStore_Get(agentHost->masterDb, "tccPermissionsUIDisabled", ILibScratchPad, sizeof(ILibScratchPad));
+		if (len > 0 && len < sizeof(ILibScratchPad))
+		{
+			ILibScratchPad[len] = 0;  // Null-terminate
+			if (strcmp(ILibScratchPad, "1") == 0)
+			{
+				should_spawn = 0;
+				ILIBMESSAGE("[TCC-STARTUP] TCC check disabled by user preference (tccPermissionsUIDisabled=1)");
+			}
+		}
+
+		if (should_spawn)
+		{
+			ILIBMESSAGE("[TCC-STARTUP] Spawning TCC permissions check");
+		}
 
 		if (should_spawn)
 		{
