@@ -81,6 +81,7 @@ struct tileInfo_t **g_tileInfo = NULL;
 int g_remotepause = 0;
 int g_pause = 0;
 int g_shutdown = 0;
+int g_cleanup_in_progress = 0;  // Guard against double cleanup
 int g_resetipc = 0;
 int kvm_clientProcessId = 0;
 int g_restartcount = 0;
@@ -365,6 +366,9 @@ int kvm_server_inputdata(char* block, int blocklen)
 		}
 		case MNG_KVM_REFRESH: // Refresh
 		{
+			fprintf(stderr, "[KVM-CHILD] REFRESH received, g_shutdown=%d\n", g_shutdown);
+			fflush(stderr);
+
 			kvm_send_resolution();
 
 			int row, col;
@@ -381,11 +385,15 @@ int kvm_server_inputdata(char* block, int blocklen)
 					g_tileInfo[row][col].flag = 0;
 				}
 			}
+			fprintf(stderr, "[KVM-CHILD] REFRESH processed, tiles reset\n");
+			fflush(stderr);
 			break;
 		}
 		case MNG_KVM_PAUSE: // Pause
 		{
 			if (size != 5) break;
+			fprintf(stderr, "[KVM-CHILD] PAUSE received, value=%d\n", block[4]);
+			fflush(stderr);
 			g_remotepause = block[4];
 			break;
 		}
@@ -514,6 +522,10 @@ void* kvm_server_mainloop(void* param)
 	int written = 0;
 	struct sockaddr_un serveraddr;
 
+	// Register SIGTERM handler for graceful shutdown
+	// Critical for macOS - without this, SIGKILL corrupts TCC screen recording permission
+	signal(SIGTERM, ExitSink);
+
 	if (param == NULL)
 	{
 		// This is doing I/O via StdIn/StdOut
@@ -566,8 +578,6 @@ void* kvm_server_mainloop(void* param)
 		written = write(STDOUT_FILENO, "LISTENING ON DOMAIN SOCKET\n", 27);
 		fsync(STDOUT_FILENO);
 
-		signal(SIGTERM, ExitSink);
-
 		if ((KVM_AGENT_FD = accept(KVM_Listener_FD, NULL, NULL)) < 0)
 		{
 			written = write(STDOUT_FILENO, "ACCEPT ERROR ON DOMAIN SOCKET", 29);
@@ -589,8 +599,9 @@ void* kvm_server_mainloop(void* param)
 
 
 	g_shutdown = 0;
+	fprintf(stderr, "[KVM-CHILD] Starting mainloop, g_shutdown=%d, KVM_AGENT_FD=%d\n", g_shutdown, KVM_AGENT_FD);
+	fflush(stderr);
 	pthread_create(&kvmthread, NULL, kvm_mainloopinput, param);
-
 
 	if (KVM_AGENT_FD != -1)
 	{
@@ -646,7 +657,6 @@ void* kvm_server_mainloop(void* param)
 		}
 		ILibQueue_UnLock(g_messageQ);
 
-
 		for (r = 0; r < TILE_HEIGHT_COUNT; r++) 
 		{
 			for (c = 0; c < TILE_WIDTH_COUNT; c++) 
@@ -683,10 +693,18 @@ void* kvm_server_mainloop(void* param)
 		}
 
 		//senddebug(screen_num);
+		static int g_captureCount = 0;
+		g_captureCount++;
+		if (g_captureCount % 100 == 1) {
+			fprintf(stderr, "[KVM-CHILD] Capturing screen #%d, g_shutdown=%d\n", g_captureCount, g_shutdown);
+			fflush(stderr);
+		}
 		CGImageRef image = CGDisplayCreateImage(screen_num);
 		//senddebug(99);
-		if (image == NULL) 
+		if (image == NULL)
 		{
+			fprintf(stderr, "[KVM-CHILD] CGDisplayCreateImage returned NULL! screen_num=%d, setting g_shutdown=1\n", screen_num);
+			fflush(stderr);
 			g_shutdown = 1;
 			senddebug(0);
 		}
@@ -708,7 +726,7 @@ void* kvm_server_mainloop(void* param)
 					height = TILE_HEIGHT * y;
 					width = TILE_WIDTH * x;
 					if (!g_shutdown && (g_pause)) { usleep(100000); g_pause = 0; } //HACK: Change this
-					
+
 					if (g_shutdown) { x = TILE_WIDTH_COUNT; y = TILE_HEIGHT_COUNT; break; }
 					
 					if (g_tileInfo[y][x].flag == TILE_SENT || g_tileInfo[y][x].flag == TILE_DONT_SEND) {
@@ -725,12 +743,16 @@ void* kvm_server_mainloop(void* param)
 						written = KVM_SEND(buf, tilesize);
 
 						//KvmDebugLog("Wrote %d bytes to master in kvm_server_mainloop\n", written);
-						if (written == -1) 
-						{ 
-							/*ILIBMESSAGE("KVMBREAK-K2\r\n");*/ 
+						if (written == -1)
+						{
+							fprintf(stderr, "[KVM-CHILD] KVM_SEND failed! errno=%d, KVM_AGENT_FD=%d\n", errno, KVM_AGENT_FD);
+							fflush(stderr);
+							/*ILIBMESSAGE("KVMBREAK-K2\r\n");*/
 							if(KVM_AGENT_FD == -1)
 							{
 								// This is a User Session, so if the connection fails, we exit out... We can be spawned again later
+								fprintf(stderr, "[KVM-CHILD] Setting g_shutdown=1 due to KVM_SEND failure\n");
+								fflush(stderr);
 								g_shutdown = 1; height = SCREEN_HEIGHT; width = SCREEN_WIDTH; break;
 							}
 						}
@@ -787,13 +809,31 @@ void kvm_relay_ExitHandler(ILibProcessPipe_Process sender, int exitCode, void* u
 	UNREFERENCED_PARAMETER(sender);
 	UNREFERENCED_PARAMETER(exitCode);
 	UNREFERENCED_PARAMETER(user);
+
+	fprintf(stderr, "[KVM] kvm_relay_ExitHandler() called, exitCode=%d, gChildProcess=%p\n", exitCode, (void*)gChildProcess);
+	fflush(stderr);
+
+	// Child process has exited, mark it as NULL to prevent double-free
+	gChildProcess = NULL;
+	fprintf(stderr, "[KVM] kvm_relay_ExitHandler() completed, gChildProcess set to NULL\n");
+	fflush(stderr);
 }
+static int g_stdoutCallCount = 0;
 void kvm_relay_StdOutHandler(ILibProcessPipe_Process sender, char *buffer, size_t bufferLen, size_t* bytesConsumed, void* user)
 {
 	unsigned short size = 0;
 	UNREFERENCED_PARAMETER(sender);
 	ILibKVM_WriteHandler writeHandler = (ILibKVM_WriteHandler)((void**)user)[0];
 	void *reserved = ((void**)user)[1];
+
+	g_stdoutCallCount++;
+	// Log every 100th call to avoid spamming
+	if (g_stdoutCallCount % 100 == 1)
+	{
+		fprintf(stderr, "[KVM] StdOutHandler called #%d, bufferLen=%zu, user=%p, writeHandler=%p\n",
+			g_stdoutCallCount, bufferLen, user, (void*)writeHandler);
+		fflush(stderr);
+	}
 
 	if (bufferLen > 4)
 	{
@@ -828,15 +868,15 @@ void kvm_relay_StdOutHandler(ILibProcessPipe_Process sender, char *buffer, size_
 }
 void kvm_relay_StdErrHandler(ILibProcessPipe_Process sender, char *buffer, size_t bufferLen, size_t* bytesConsumed, void* user)
 {
-	//KVMDebugLog *log = (KVMDebugLog*)buffer;
+	UNREFERENCED_PARAMETER(sender);
+	UNREFERENCED_PARAMETER(user);
 
-	//UNREFERENCED_PARAMETER(sender);
-	//UNREFERENCED_PARAMETER(user);
-
-	//if (bufferLen < sizeof(KVMDebugLog) || bufferLen < log->length) { *bytesConsumed = 0;  return; }
-	//*bytesConsumed = log->length;
-	////ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), (ILibRemoteLogging_Modules)log->logType, (ILibRemoteLogging_Flags)log->logFlags, "%s", log->logData);
-	//ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Microstack_Generic, (ILibRemoteLogging_Flags)log->logFlags, "%s", log->logData);
+	// Forward child's stderr to parent's stderr for debugging
+	if (bufferLen > 0)
+	{
+		fwrite(buffer, 1, bufferLen, stderr);
+		fflush(stderr);
+	}
 	*bytesConsumed = bufferLen;
 }
 
@@ -844,7 +884,11 @@ void kvm_relay_StdErrHandler(ILibProcessPipe_Process sender, char *buffer, size_
 // Setup the KVM session. Return 1 if ok, 0 if it could not be setup.
 void* kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler writeHandler, void *reserved, int uid)
 {
-	char * parms0[] = { "meshagent_osx64", "-kvm0", NULL };
+	// Extract binary name from exePath for argv[0] (needed for macOS TCC permission matching)
+	char *binaryName = strrchr(exePath, '/');
+	binaryName = (binaryName != NULL) ? binaryName + 1 : exePath;
+
+	char * parms0[] = { binaryName, "-kvm0", NULL };
 	void **user = (void**)ILibMemory_Allocate(4 * sizeof(void*), 0, NULL, NULL);
 	user[0] = writeHandler;
 	user[1] = reserved;
@@ -853,18 +897,70 @@ void* kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler 
 
 	if (uid != 0)
 	{
+		// Reset state BEFORE spawning child so it inherits clean state
+		g_shutdown = 0;
+		g_cleanup_in_progress = 0;
+
+		// Check if we already have a living child process - reuse it!
+		// This is critical for macOS screen recording - killing child corrupts TCC permission state
+		if (gChildProcess != NULL && g_slavekvm > 0)
+		{
+			// Check if child is still alive
+			if (kill(g_slavekvm, 0) == 0)
+			{
+				fprintf(stderr, "[KVM] kvm_relay_setup() reusing existing child process, pid=%d\n", g_slavekvm);
+				fflush(stderr);
+
+				// Update user object for the new session
+				ILibProcessPipe_Process_UpdateUserObject(gChildProcess, user);
+
+				// Resume the stdout pipe in case it was paused
+				ILibProcessPipe_Pipe stdoutPipe = ILibProcessPipe_Process_GetStdOut(gChildProcess);
+				if (stdoutPipe != NULL)
+				{
+					ILibProcessPipe_Pipe_Resume(stdoutPipe);
+					fprintf(stderr, "[KVM] kvm_relay_setup() resumed stdout pipe\n");
+					fflush(stderr);
+				}
+
+				// Send unpause command first (in case child was paused during cleanup)
+				char pauseBuffer[5];
+				((unsigned short*)pauseBuffer)[0] = (unsigned short)htons((unsigned short)MNG_KVM_PAUSE);
+				((unsigned short*)pauseBuffer)[1] = (unsigned short)htons((unsigned short)5);
+				pauseBuffer[4] = 0;  // unpause
+				kvm_relay_feeddata(pauseBuffer, 5);
+
+				// Send refresh command to restart screen capture
+				kvm_relay_reset();
+
+				fprintf(stderr, "[KVM] kvm_relay_setup() sent unpause and refresh commands to child\n");
+				fflush(stderr);
+				g_stdoutCallCount = 0; // Reset counter for reused session
+
+				return(stdoutPipe);
+			}
+			else
+			{
+				fprintf(stderr, "[KVM] kvm_relay_setup() old child process %d is dead, spawning new\n", g_slavekvm);
+				fflush(stderr);
+				gChildProcess = NULL;
+				g_slavekvm = 0;
+			}
+		}
+
 		// Spawn child kvm process into a specific user session
 		gChildProcess = ILibProcessPipe_Manager_SpawnProcessEx3(processPipeMgr, exePath, parms0, ILibProcessPipe_SpawnTypes_DEFAULT, (void*)(uint64_t)uid, 0);
 		g_slavekvm = ILibProcessPipe_Process_GetPID(gChildProcess);
-		
+
 		char tmp[255];
 		sprintf_s(tmp, sizeof(tmp), "Child KVM (pid: %d)", g_slavekvm);
 		ILibProcessPipe_Process_ResetMetadata(gChildProcess, tmp);
-		
+
 		ILibProcessPipe_Process_AddHandlers(gChildProcess, 65535, &kvm_relay_ExitHandler, &kvm_relay_StdOutHandler, &kvm_relay_StdErrHandler, NULL, user);
 
-		// Run the relay
-		g_shutdown = 0;
+		fprintf(stderr, "[KVM] kvm_relay_setup() started new session, pid=%d, binaryName=%s, exePath=%s\n", g_slavekvm, binaryName, exePath);
+		g_stdoutCallCount = 0; // Reset counter for new session
+		fflush(stderr);
 		return(ILibProcessPipe_Process_GetStdOut(gChildProcess));
 	}
 	else
@@ -898,13 +994,57 @@ void kvm_relay_reset()
 // Clean up the KVM session.
 void kvm_cleanup()
 {
-	KvmDebugLog("kvm_cleanup\n");
-	g_shutdown = 1;
-	if (gChildProcess != NULL)
+	fprintf(stderr, "[KVM] kvm_cleanup() called, g_cleanup_in_progress=%d, g_shutdown=%d, gChildProcess=%p, g_slavekvm=%d\n",
+		g_cleanup_in_progress, g_shutdown, (void*)gChildProcess, g_slavekvm);
+	fflush(stderr);
+
+	// Guard against double cleanup
+	if (g_cleanup_in_progress)
 	{
-		ILibProcessPipe_Process_SoftKill(gChildProcess);
-		gChildProcess = NULL;
+		fprintf(stderr, "[KVM] kvm_cleanup() already in progress, skipping\n");
+		fflush(stderr);
+		return;
 	}
+	g_cleanup_in_progress = 1;
+
+	// In service mode (daemon), we keep the child process alive for reuse
+	// Killing the child process corrupts macOS TCC screen recording permission state
+	// The child will be reused on next kvm_relay_setup() call
+	if (gChildProcess != NULL && g_slavekvm > 0)
+	{
+		// Check if child is still alive
+		if (kill(g_slavekvm, 0) == 0)
+		{
+			fprintf(stderr, "[KVM] kvm_cleanup() keeping child process %d alive for reuse (service mode)\n", g_slavekvm);
+			fflush(stderr);
+			// Send pause command to reduce CPU usage while idle
+			char buffer[5];
+			((unsigned short*)buffer)[0] = (unsigned short)htons((unsigned short)MNG_KVM_PAUSE);
+			((unsigned short*)buffer)[1] = (unsigned short)htons((unsigned short)5);
+			buffer[4] = 1;  // pause = 1
+			kvm_relay_feeddata(buffer, 5);
+			fprintf(stderr, "[KVM] kvm_cleanup() sent pause command to child\n");
+			fflush(stderr);
+		}
+		else
+		{
+			fprintf(stderr, "[KVM] kvm_cleanup() child process %d already dead\n", g_slavekvm);
+			fflush(stderr);
+			gChildProcess = NULL;
+			g_slavekvm = 0;
+		}
+	}
+	else
+	{
+		fprintf(stderr, "[KVM] kvm_cleanup() no child process (not in service mode or already cleaned up)\n");
+		fflush(stderr);
+	}
+
+	// Reset cleanup guard so next kvm_relay_setup can work
+	g_cleanup_in_progress = 0;
+
+	fprintf(stderr, "[KVM] kvm_cleanup() completed\n");
+	fflush(stderr);
 }
 
 

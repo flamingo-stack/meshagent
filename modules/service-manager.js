@@ -70,7 +70,7 @@ function prepareFolders(folderPath)
     }
 }
 
-function formatOpenFrameParams(parameters) {
+function formatOpenFrameParams(parameters, stripQuotes) {
     if (!parameters || parameters.length === 0) {
         return parameters;
     }
@@ -85,6 +85,10 @@ function formatOpenFrameParams(parameters) {
                 var eq = p.indexOf('=');
                 var k = p.substring(0, eq);
                 var v = p.substring(eq + 1);
+                // Strip surrounding quotes on macOS for openframe params (plist handles spaces correctly)
+                if (stripQuotes && v.startsWith('"') && v.endsWith('"')) {
+                    v = v.substring(1, v.length - 1);
+                }
                 expanded.push(k);
                 expanded.push(v);
             }
@@ -156,8 +160,8 @@ function applyOpenFrameParams(options, reg) {
         try {
             var imagePath = reg.QueryKey(reg.HKEY.LocalMachine, 'SYSTEM\\CurrentControlSet\\Services\\' + options.name, 'ImagePath');
 
-            // Use common formatting function
-            var finalParams = formatOpenFrameParams(options.parameters);
+            // Use common formatting function - don't strip quotes on Windows
+            var finalParams = formatOpenFrameParams(options.parameters, false);
 
             // For Windows, add quotes around values for registry
             var windowsParams = [];
@@ -181,8 +185,8 @@ function applyOpenFrameParams(options, reg) {
 }
 
 function applyOpenFrameParamsDarwin(parameters) {
-    // Just use the common formatting function for macOS
-    return formatOpenFrameParams(parameters);
+    // Use common formatting function - strip quotes on macOS for plist
+    return formatOpenFrameParams(parameters, true);
 }
 
 function parseServiceStatus(token)
