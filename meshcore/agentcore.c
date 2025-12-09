@@ -1132,7 +1132,7 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop_DomainIPC_EndSink(duk_context *
 		{
 			fprintf(stderr, "[KVM] IPC_EndSink() calling kvm_relay_setup()\n");
 			fflush(stderr);
-			ptrs->kvmPipe = kvm_relay_setup(agent->exePath, agent->pipeManager, ILibDuktape_MeshAgent_RemoteDesktop_KVM_WriteSink, ptrs, console_uid);
+			ptrs->kvmPipe = kvm_relay_setup(agent->exePath, agent->pipeManager, ILibDuktape_MeshAgent_RemoteDesktop_KVM_WriteSink, ptrs, console_uid, agent->openFrameMode);
 			fprintf(stderr, "[KVM] IPC_EndSink() kvm_relay_setup() returned\n");
 			fflush(stderr);
 		}
@@ -1345,7 +1345,7 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 		if (console_uid == 0)
 		{
 			MeshAgent_sendConsoleText(ctx, "Establishing IPC-x-Connection to LoginWindow for KVM");
-			char *ipc = (char*)kvm_relay_setup(agent->exePath, agent->pipeManager, ILibDuktape_MeshAgent_RemoteDesktop_KVM_WriteSink, ptrs, console_uid);
+			char *ipc = (char*)kvm_relay_setup(agent->exePath, agent->pipeManager, ILibDuktape_MeshAgent_RemoteDesktop_KVM_WriteSink, ptrs, console_uid, agent->openFrameMode);
 			duk_eval_string(ctx, "require('net');");														// [rd][net]
 			duk_get_prop_string(ctx, -1, "createConnection");												// [rd][net][createConnection]
 			duk_swap_top(ctx, -2);																			// [rd][createConnection][this]
@@ -1359,7 +1359,7 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 		}
 		else
 		{
-			ptrs->kvmPipe = kvm_relay_setup(agent->exePath, agent->pipeManager, ILibDuktape_MeshAgent_RemoteDesktop_KVM_WriteSink, ptrs, console_uid);
+			ptrs->kvmPipe = kvm_relay_setup(agent->exePath, agent->pipeManager, ILibDuktape_MeshAgent_RemoteDesktop_KVM_WriteSink, ptrs, console_uid, agent->openFrameMode);
 		}
 	#else
 		if (TSID != -1) 
@@ -5158,6 +5158,15 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 	if (agentHost->openFrameMode)
 	{
 		ILibSimpleDataStore_Cached(agentHost->masterDb, "openframe-mode", (int)sizeof("openframe-mode") - 1, "1", 1);
+	}
+	else
+	{
+		// Check if openframe-mode was previously saved in the database (service restart case)
+		if (ILibSimpleDataStore_Get(agentHost->masterDb, "openframe-mode", NULL, 0) > 0)
+		{
+			agentHost->openFrameMode = true;
+			printf("OpenFrame Mode loaded from database: %d\n", agentHost->openFrameMode);
+		}
 	}
 	if (agentHost->openFrameSecret != NULL)
 	{
