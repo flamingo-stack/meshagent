@@ -523,13 +523,12 @@ void* kvm_server_mainloop(void* param)
 	int written = 0;
 	struct sockaddr_un serveraddr;
 
-	// Register SIGTERM handler for graceful shutdown
-	// Critical for macOS - without this, SIGKILL corrupts TCC screen recording permission
-	signal(SIGTERM, ExitSink);
-
 	if (param == NULL)
 	{
 		// This is doing I/O via StdIn/StdOut
+		// Register SIGTERM handler for graceful shutdown (OpenFrame mode)
+		// Critical for macOS - without this, SIGKILL corrupts TCC screen recording permission
+		signal(SIGTERM, ExitSink);
 
 		int flags;
 		flags = fcntl(STDOUT_FILENO, F_GETFL, 0);
@@ -578,6 +577,8 @@ void* kvm_server_mainloop(void* param)
 
 		written = write(STDOUT_FILENO, "LISTENING ON DOMAIN SOCKET\n", 27);
 		fsync(STDOUT_FILENO);
+
+		signal(SIGTERM, ExitSink);
 
 		if ((KVM_AGENT_FD = accept(KVM_Listener_FD, NULL, NULL)) < 0)
 		{
@@ -814,10 +815,15 @@ void kvm_relay_ExitHandler(ILibProcessPipe_Process sender, int exitCode, void* u
 	fprintf(stderr, "[KVM] kvm_relay_ExitHandler() called, exitCode=%d, gChildProcess=%p\n", exitCode, (void*)gChildProcess);
 	fflush(stderr);
 
-	// Child process has exited, mark it as NULL to prevent double-free
-	gChildProcess = NULL;
-	fprintf(stderr, "[KVM] kvm_relay_ExitHandler() completed, gChildProcess set to NULL\n");
-	fflush(stderr);
+	if (g_openFrameMode)
+	{
+		// OpenFrame mode: Child process has exited, mark it as NULL to prevent double-free
+		gChildProcess = NULL;
+		g_slavekvm = 0;
+		fprintf(stderr, "[KVM] kvm_relay_ExitHandler() completed, gChildProcess set to NULL (openframe mode)\n");
+		fflush(stderr);
+	}
+	// Standard mode: original behavior - do nothing here
 }
 static int g_stdoutCallCount = 0;
 void kvm_relay_StdOutHandler(ILibProcessPipe_Process sender, char *buffer, size_t bufferLen, size_t* bytesConsumed, void* user)
@@ -885,9 +891,21 @@ void kvm_relay_StdErrHandler(ILibProcessPipe_Process sender, char *buffer, size_
 // Setup the KVM session. Return 1 if ok, 0 if it could not be setup.
 void* kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler writeHandler, void *reserved, int uid, int openFrameMode)
 {
-	// Extract binary name from exePath for argv[0] (needed for macOS TCC permission matching)
-	char *binaryName = strrchr(exePath, '/');
-	binaryName = (binaryName != NULL) ? binaryName + 1 : exePath;
+	// Store openFrameMode for use in kvm_cleanup()
+	g_openFrameMode = openFrameMode;
+
+	char *binaryName;
+	if (g_openFrameMode)
+	{
+		// OpenFrame mode: Extract binary name from exePath for argv[0] (needed for macOS TCC permission matching)
+		binaryName = strrchr(exePath, '/');
+		binaryName = (binaryName != NULL) ? binaryName + 1 : exePath;
+	}
+	else
+	{
+		// Standard mode: use hardcoded name
+		binaryName = "meshagent_osx64";
+	}
 
 	char * parms0[] = { binaryName, "-kvm0", NULL };
 	void **user = (void**)ILibMemory_Allocate(4 * sizeof(void*), 0, NULL, NULL);
@@ -896,60 +914,65 @@ void* kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler 
 	user[2] = processPipeMgr;
 	user[3] = exePath;
 
-	// Store openFrameMode for use in kvm_cleanup()
-	g_openFrameMode = openFrameMode;
-
 	if (uid != 0)
 	{
-		// Reset state BEFORE spawning child so it inherits clean state
-		g_shutdown = 0;
-		g_cleanup_in_progress = 0;
-
-		// OpenFrame mode: Check if we already have a living child process - reuse it!
-		// This is critical for macOS screen recording - killing child corrupts TCC permission state
-		if (g_openFrameMode && gChildProcess != NULL && g_slavekvm > 0)
+		if (g_openFrameMode)
 		{
-			// Check if child is still alive
-			if (kill(g_slavekvm, 0) == 0)
+			// OpenFrame mode: Reset state BEFORE spawning child so it inherits clean state
+			g_shutdown = 0;
+			g_cleanup_in_progress = 0;
+
+			// OpenFrame mode: Check if we already have a living child process - reuse it!
+			// This is critical for macOS screen recording - killing child corrupts TCC permission state
+			if (gChildProcess != NULL && g_slavekvm > 0)
 			{
-				fprintf(stderr, "[KVM] kvm_relay_setup() reusing existing child process, pid=%d\n", g_slavekvm);
-				fflush(stderr);
-
-				// Update user object for the new session
-				ILibProcessPipe_Process_UpdateUserObject(gChildProcess, user);
-
-				// Resume the stdout pipe in case it was paused
-				ILibProcessPipe_Pipe stdoutPipe = ILibProcessPipe_Process_GetStdOut(gChildProcess);
-				if (stdoutPipe != NULL)
+				// Check if child is still alive
+				if (kill(g_slavekvm, 0) == 0)
 				{
-					ILibProcessPipe_Pipe_Resume(stdoutPipe);
-					fprintf(stderr, "[KVM] kvm_relay_setup() resumed stdout pipe\n");
+					fprintf(stderr, "[KVM] kvm_relay_setup() reusing existing child process, pid=%d\n", g_slavekvm);
 					fflush(stderr);
+
+					// Update user object for the new session
+					ILibProcessPipe_Process_UpdateUserObject(gChildProcess, user);
+
+					// Resume the stdout pipe in case it was paused
+					ILibProcessPipe_Pipe stdoutPipe = ILibProcessPipe_Process_GetStdOut(gChildProcess);
+					if (stdoutPipe != NULL)
+					{
+						ILibProcessPipe_Pipe_Resume(stdoutPipe);
+						fprintf(stderr, "[KVM] kvm_relay_setup() resumed stdout pipe\n");
+						fflush(stderr);
+					}
+
+					// Send unpause command first (in case child was paused during cleanup)
+					char pauseBuffer[5];
+					((unsigned short*)pauseBuffer)[0] = (unsigned short)htons((unsigned short)MNG_KVM_PAUSE);
+					((unsigned short*)pauseBuffer)[1] = (unsigned short)htons((unsigned short)5);
+					pauseBuffer[4] = 0;  // unpause
+					kvm_relay_feeddata(pauseBuffer, 5);
+
+					// Send refresh command to restart screen capture
+					kvm_relay_reset();
+
+					fprintf(stderr, "[KVM] kvm_relay_setup() sent unpause and refresh commands to child\n");
+					fflush(stderr);
+					g_stdoutCallCount = 0; // Reset counter for reused session
+
+					return(stdoutPipe);
 				}
-
-				// Send unpause command first (in case child was paused during cleanup)
-				char pauseBuffer[5];
-				((unsigned short*)pauseBuffer)[0] = (unsigned short)htons((unsigned short)MNG_KVM_PAUSE);
-				((unsigned short*)pauseBuffer)[1] = (unsigned short)htons((unsigned short)5);
-				pauseBuffer[4] = 0;  // unpause
-				kvm_relay_feeddata(pauseBuffer, 5);
-
-				// Send refresh command to restart screen capture
-				kvm_relay_reset();
-
-				fprintf(stderr, "[KVM] kvm_relay_setup() sent unpause and refresh commands to child\n");
-				fflush(stderr);
-				g_stdoutCallCount = 0; // Reset counter for reused session
-
-				return(stdoutPipe);
+				else
+				{
+					fprintf(stderr, "[KVM] kvm_relay_setup() old child process %d is dead, spawning new\n", g_slavekvm);
+					fflush(stderr);
+					gChildProcess = NULL;
+					g_slavekvm = 0;
+				}
 			}
-			else
-			{
-				fprintf(stderr, "[KVM] kvm_relay_setup() old child process %d is dead, spawning new\n", g_slavekvm);
-				fflush(stderr);
-				gChildProcess = NULL;
-				g_slavekvm = 0;
-			}
+		}
+		else
+		{
+			// Standard mode: original behavior - just reset g_shutdown
+			g_shutdown = 0;
 		}
 
 		// Spawn child kvm process into a specific user session
@@ -1002,20 +1025,20 @@ void kvm_cleanup()
 		g_cleanup_in_progress, g_shutdown, (void*)gChildProcess, g_slavekvm, g_openFrameMode);
 	fflush(stderr);
 
-	// Guard against double cleanup
-	if (g_cleanup_in_progress)
+	if (g_openFrameMode)
 	{
-		fprintf(stderr, "[KVM] kvm_cleanup() already in progress, skipping\n");
-		fflush(stderr);
-		return;
-	}
-	g_cleanup_in_progress = 1;
+		// OpenFrame mode: guard against double cleanup and keep child alive for reuse
+		if (g_cleanup_in_progress)
+		{
+			fprintf(stderr, "[KVM] kvm_cleanup() already in progress, skipping\n");
+			fflush(stderr);
+			return;
+		}
+		g_cleanup_in_progress = 1;
 
-	g_shutdown = 1;
+		g_shutdown = 1;
 
-	if (gChildProcess != NULL && g_slavekvm > 0)
-	{
-		if (g_openFrameMode)
+		if (gChildProcess != NULL && g_slavekvm > 0)
 		{
 			// OpenFrame mode: keep the child process alive for reuse
 			// Killing the child process corrupts macOS TCC screen recording permission state
@@ -1043,22 +1066,26 @@ void kvm_cleanup()
 		}
 		else
 		{
-			// Standard mode: kill the child process (original behavior)
-			fprintf(stderr, "[KVM] kvm_cleanup() killing child process %d (standard mode)\n", g_slavekvm);
+			fprintf(stderr, "[KVM] kvm_cleanup() no child process to clean up\n");
 			fflush(stderr);
-			ILibProcessPipe_Process_SoftKill(gChildProcess);
-			gChildProcess = NULL;
-			g_slavekvm = 0;
 		}
+
+		// Reset cleanup guard so next kvm_relay_setup can work
+		g_cleanup_in_progress = 0;
 	}
 	else
 	{
-		fprintf(stderr, "[KVM] kvm_cleanup() no child process to clean up\n");
-		fflush(stderr);
+		// Standard mode: original behavior - kill the child process
+		KvmDebugLog("kvm_cleanup\n");
+		g_shutdown = 1;
+		if (gChildProcess != NULL)
+		{
+			fprintf(stderr, "[KVM] kvm_cleanup() killing child process (standard mode)\n");
+			fflush(stderr);
+			ILibProcessPipe_Process_SoftKill(gChildProcess);
+			gChildProcess = NULL;
+		}
 	}
-
-	// Reset cleanup guard so next kvm_relay_setup can work
-	g_cleanup_in_progress = 0;
 
 	fprintf(stderr, "[KVM] kvm_cleanup() completed\n");
 	fflush(stderr);

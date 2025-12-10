@@ -2603,15 +2603,11 @@ function terminal_promise_consent_resolved()
 }
 function tunnel_kvm_end()
 {
-    console.error('[KVM-JS] tunnel_kvm_end() called');
-    try {
-        --this.desktop.kvm.connectionCount;
-        console.error('[KVM-JS] tunnel_kvm_end() connectionCount=' + this.desktop.kvm.connectionCount);
+    --this.desktop.kvm.connectionCount;
 
-        // Remove ourself from the list of remote desktop session
-        var i = this.desktop.kvm.tunnels.indexOf(this);
-        if (i >= 0) { this.desktop.kvm.tunnels.splice(i, 1); }
-        console.error('[KVM-JS] tunnel_kvm_end() removed from tunnels list');
+    // Remove ourself from the list of remote desktop session
+    var i = this.desktop.kvm.tunnels.indexOf(this);
+    if (i >= 0) { this.desktop.kvm.tunnels.splice(i, 1); }
 
     // Send a metadata update to all desktop sessions
     var users = {};
@@ -2660,25 +2656,12 @@ function tunnel_kvm_end()
         // Display a toast message. This may not be supported on all platforms.
         // try { require('toaster').Toast('MeshCentral', 'Remote Desktop Control Ended.'); } catch (ex) { }
 
-        console.error('[KVM-JS] tunnel_kvm_end() connectionCount=0, calling kvm.end()');
-        try {
-            this.httprequest.desktop.kvm.end();
-            console.error('[KVM-JS] tunnel_kvm_end() kvm.end() returned successfully');
-        } catch (kvmEndEx) {
-            console.error('[KVM-JS] tunnel_kvm_end() kvm.end() threw exception: ' + kvmEndEx.toString());
-            console.error('[KVM-JS] Stack: ' + (kvmEndEx.stack || 'no stack'));
-        }
+        this.httprequest.desktop.kvm.end();
         if (this.httprequest.desktop.kvm.connectionBar)
         {
-            console.error('[KVM-JS] tunnel_kvm_end() closing connectionBar');
-            try {
-                this.httprequest.desktop.kvm.connectionBar.removeAllListeners('close');
-                this.httprequest.desktop.kvm.connectionBar.close();
-                this.httprequest.desktop.kvm.connectionBar = null;
-                console.error('[KVM-JS] tunnel_kvm_end() connectionBar closed');
-            } catch (barEx) {
-                console.error('[KVM-JS] tunnel_kvm_end() connectionBar close error: ' + barEx.toString());
-            }
+            this.httprequest.desktop.kvm.connectionBar.removeAllListeners('close');
+            this.httprequest.desktop.kvm.connectionBar.close();
+            this.httprequest.desktop.kvm.connectionBar = null;
         }
     } else
     {
@@ -2712,14 +2695,8 @@ function tunnel_kvm_end()
         this.httprequest.desktop.kvm.connectionBar.httprequest = null;
     }
 
-    console.error('[KVM-JS] tunnel_kvm_end() setting httprequest and desktop.tunnel to null');
     this.httprequest = null;
     this.desktop.tunnel = null;
-    console.error('[KVM-JS] tunnel_kvm_end() completed successfully');
-    } catch (ex) {
-        console.error('[KVM-JS] tunnel_kvm_end() EXCEPTION: ' + ex.toString());
-        console.error('[KVM-JS] Stack: ' + (ex.stack || 'no stack'));
-    }
 }
 
 function kvm_tunnel_consentpromise_closehandler()
