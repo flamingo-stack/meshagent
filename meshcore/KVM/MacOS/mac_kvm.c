@@ -30,11 +30,14 @@ limitations under the License.
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/stat.h>
 
 #include <string.h>
 #include <pwd.h>
 
 int KVM_Listener_FD = -1;
+int g_kvm_socket_fd = -1;      // Socket fd when using launchctl asuser mode
+void *g_kvm_socket_user = NULL; // User data for socket mode
 #define KVM_Listener_Path "/usr/local/mesh_services/meshagent/kvm"
 #if defined(_TLSLOG)
 #define TLSLOG1 printf
@@ -412,7 +415,23 @@ int kvm_server_inputdata(char* block, int blocklen)
 
 int kvm_relay_feeddata(char* buf, int len)
 {
-	ILibProcessPipe_Process_WriteStdIn(gChildProcess, buf, len, ILibTransport_MemoryOwnership_USER);
+	// If using socket mode (launchctl asuser), write to socket
+	if (g_kvm_socket_fd >= 0)
+	{
+		int written = write(g_kvm_socket_fd, buf, len);
+		if (written < 0)
+		{
+			fprintf(stderr, "[KVM] kvm_relay_feeddata socket write error: %d\n", errno);
+			fflush(stderr);
+		}
+		return written;
+	}
+
+	// Otherwise use pipe to child process
+	if (gChildProcess != NULL)
+	{
+		ILibProcessPipe_Process_WriteStdIn(gChildProcess, buf, len, ILibTransport_MemoryOwnership_USER);
+	}
 	return(len);
 }
 
@@ -701,16 +720,31 @@ void* kvm_server_mainloop(void* param)
 			fprintf(stderr, "[KVM-CHILD] Capturing screen #%d, g_shutdown=%d\n", g_captureCount, g_shutdown);
 			fflush(stderr);
 		}
+		static int g_nullRetryCount = 0;  // Retry counter for CGDisplayCreateImage failures
 		CGImageRef image = CGDisplayCreateImage(screen_num);
 		//senddebug(99);
 		if (image == NULL)
 		{
-			fprintf(stderr, "[KVM-CHILD] CGDisplayCreateImage returned NULL! screen_num=%d, setting g_shutdown=1\n", screen_num);
+			g_nullRetryCount++;
+
+			// Retry up to 30 times (30 seconds) - GUI may not be ready after reboot
+			if (g_nullRetryCount <= 30)
+			{
+				fprintf(stderr, "[KVM-CHILD] CGDisplayCreateImage returned NULL! screen_num=%d, retry %d/30, waiting 1 second...\n", screen_num, g_nullRetryCount);
+				fflush(stderr);
+				sleep(1);
+				continue;  // Retry the capture
+			}
+
+			fprintf(stderr, "[KVM-CHILD] CGDisplayCreateImage returned NULL after 30 retries! screen_num=%d, setting g_shutdown=1\n", screen_num);
 			fflush(stderr);
 			g_shutdown = 1;
 			senddebug(0);
 		}
 		else {
+			// Reset retry counter on successful capture
+			g_nullRetryCount = 0;
+
 			//senddebug(100);
 			getScreenBuffer((unsigned char **)&desktop, &desktopsize, image);
 
@@ -1021,13 +1055,13 @@ void kvm_relay_reset()
 // Clean up the KVM session.
 void kvm_cleanup()
 {
-	fprintf(stderr, "[KVM] kvm_cleanup() called, g_cleanup_in_progress=%d, g_shutdown=%d, gChildProcess=%p, g_slavekvm=%d, g_openFrameMode=%d\n",
-		g_cleanup_in_progress, g_shutdown, (void*)gChildProcess, g_slavekvm, g_openFrameMode);
+	fprintf(stderr, "[KVM] kvm_cleanup() called, g_cleanup_in_progress=%d, g_shutdown=%d, gChildProcess=%p, g_slavekvm=%d, g_openFrameMode=%d, g_kvm_socket_fd=%d\n",
+		g_cleanup_in_progress, g_shutdown, (void*)gChildProcess, g_slavekvm, g_openFrameMode, g_kvm_socket_fd);
 	fflush(stderr);
 
 	if (g_openFrameMode)
 	{
-		// OpenFrame mode: guard against double cleanup and keep child alive for reuse
+		// OpenFrame mode: guard against double cleanup
 		if (g_cleanup_in_progress)
 		{
 			fprintf(stderr, "[KVM] kvm_cleanup() already in progress, skipping\n");
@@ -1038,9 +1072,34 @@ void kvm_cleanup()
 
 		g_shutdown = 1;
 
-		if (gChildProcess != NULL && g_slavekvm > 0)
+		// Socket mode (launchctl asuser): close socket but keep child running
+		if (g_kvm_socket_fd >= 0)
 		{
-			// OpenFrame mode: keep the child process alive for reuse
+			fprintf(stderr, "[KVM] kvm_cleanup() closing socket %d (openframe socket mode)\n", g_kvm_socket_fd);
+			fflush(stderr);
+
+			// Send pause command before closing
+			char buffer[5];
+			((unsigned short*)buffer)[0] = (unsigned short)htons((unsigned short)MNG_KVM_PAUSE);
+			((unsigned short*)buffer)[1] = (unsigned short)htons((unsigned short)5);
+			buffer[4] = 1;  // pause = 1
+			write(g_kvm_socket_fd, buffer, 5);
+
+			close(g_kvm_socket_fd);
+			g_kvm_socket_fd = -1;
+
+			if (g_kvm_socket_user != NULL)
+			{
+				ILibMemory_Free(g_kvm_socket_user);
+				g_kvm_socket_user = NULL;
+			}
+
+			fprintf(stderr, "[KVM] kvm_cleanup() socket mode cleanup complete\n");
+			fflush(stderr);
+		}
+		else if (gChildProcess != NULL && g_slavekvm > 0)
+		{
+			// Pipe mode: keep the child process alive for reuse
 			// Killing the child process corrupts macOS TCC screen recording permission state
 			// The child will be reused on next kvm_relay_setup() call
 			if (kill(g_slavekvm, 0) == 0)
