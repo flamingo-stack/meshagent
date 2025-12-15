@@ -721,6 +721,29 @@ void* kvm_server_mainloop(void* param)
 			fflush(stderr);
 		}
 		static int g_nullRetryCount = 0;  // Retry counter for CGDisplayCreateImage failures
+		static int g_permissionChecked = 0;  // Flag to check permission once
+
+		// Check TCC permission status before capture attempt
+		if (g_nullRetryCount == 0 && g_permissionChecked == 0)
+		{
+			g_permissionChecked = 1;
+			if (__builtin_available(macOS 10.15, *))
+			{
+				bool hasAccess = CGPreflightScreenCaptureAccess();
+				fprintf(stderr, "[KVM-CHILD] CGPreflightScreenCaptureAccess() = %s\n", hasAccess ? "true" : "false");
+				fflush(stderr);
+
+				if (!hasAccess)
+				{
+					fprintf(stderr, "[KVM-CHILD] No screen recording permission, requesting...\n");
+					fflush(stderr);
+					bool requested = CGRequestScreenCaptureAccess();
+					fprintf(stderr, "[KVM-CHILD] CGRequestScreenCaptureAccess() = %s\n", requested ? "true" : "false");
+					fflush(stderr);
+				}
+			}
+		}
+
 		CGImageRef image = CGDisplayCreateImage(screen_num);
 		//senddebug(99);
 		if (image == NULL)
