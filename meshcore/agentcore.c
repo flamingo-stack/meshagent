@@ -2596,6 +2596,7 @@ void MeshAgent_Slave_HeapWasDestroyed(duk_context *ctx, void *user)
 {
 	MeshAgentHostContainer *agent = (MeshAgentHostContainer*)user;
 	agent->exitCode = ILibDuktape_Process_GetExitCode(ctx);
+	if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshAgent_Slave_HeapWasDestroyed: exitCode=%d, stopping chain\n", agent->exitCode); fflush(g_log_file); }
 	ILibRemoteLogging_printf(ILibChainGetLogger(agent->chain), ILibRemoteLogging_Modules_Microstack_Generic, ILibRemoteLogging_Flags_VerbosityLevel_1, "MeshAgent_Slave: Engine has exited");
 	ILibStopChain(agent->chain);
 }
@@ -2740,6 +2741,8 @@ int GenerateSHA384FileHash(char *filePath, char *fileHash)
 void MeshServer_ServerAuthenticated(ILibWebClient_StateObject WebStateObject, MeshAgentHostContainer *agent) {
 	int len = 0;
 
+	if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshServer_ServerAuthenticated called, serverAuthState=%d\n", agent->serverAuthState); fflush(g_log_file); }
+
 	// Send the mesh agent tag to the server
 	// We send the tag information independently of the meshcore because we could use this to select what meshcore to use on the server.
 	((unsigned short*)ILibScratchPad2)[0] = htons(MeshCommand_AgentTag); // MeshCommand_AgentTag (15), agent tag information
@@ -2771,9 +2774,11 @@ void MeshServer_SendJSON(MeshAgentHostContainer* agent, ILibWebClient_StateObjec
 {
 	ILibWebClient_WebSocket_Send(WebStateObject, ILibWebClient_WebSocket_DataType_TEXT, JSON, JSONLength, ILibAsyncSocket_MemoryOwnership_USER, ILibWebClient_WebSocket_FragmentFlag_Complete);
 }
-void MeshServer_SendAgentInfo(MeshAgentHostContainer* agent, ILibWebClient_StateObject WebStateObject) 
+void MeshServer_SendAgentInfo(MeshAgentHostContainer* agent, ILibWebClient_StateObject WebStateObject)
 {
+	if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshServer_SendAgentInfo called\n"); fflush(g_log_file); }
 	int hostnamelen = (int)strnlen_s(agent->hostname, sizeof(agent->hostname));
+	if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshServer_SendAgentInfo: hostnamelen=%d\n", hostnamelen); fflush(g_log_file); }
 
 	int agentNameLen = 0;
 
@@ -2787,51 +2792,44 @@ void MeshServer_SendAgentInfo(MeshAgentHostContainer* agent, ILibWebClient_State
 	info->platformType = htonl(((agent->batteryState != MeshAgentHost_BatteryInfo_NONE) && (agent->batteryState != MeshAgentHost_BatteryInfo_UNKNOWN)) ? MeshCommand_AuthInfo_PlatformType_LAPTOP : MeshCommand_AuthInfo_PlatformType_DESKTOP);
 	memcpy_s(info->MeshID, sizeof(info->MeshID), agent->meshId, sizeof(agent->meshId));
 	info->capabilities = htonl(agent->capabilities);
-	
+
 	memcpy_s(info->hostname, hostnamelen, agent->hostname, hostnamelen);
 	info->hostnameLen = htons(hostnamelen);
+	if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshServer_SendAgentInfo: info struct filled\n"); fflush(g_log_file); }
 
 	if ((agentNameLen=ILibSimpleDataStore_Get(agent->masterDb, "agentName", NULL, 0)) > 0)
 	{
+		if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshServer_SendAgentInfo: agentNameLen=%d\n", agentNameLen); fflush(g_log_file); }
 		if (agentNameLen < 255)
 		{
 			char agentName[255];
 			int jsonlen;
-			
+
 			ILibSimpleDataStore_Get(agent->masterDb, "agentName", agentName, (int)sizeof(agentName));
 			jsonlen = sprintf_s(ILibScratchPad, sizeof(ILibScratchPad), "{\"action\":\"agentName\",\"value\":\"%s\"}", agentName);
 			MeshServer_SendJSON(agent, WebStateObject, ILibScratchPad, jsonlen);
+			if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshServer_SendAgentInfo: sent agentName JSON\n"); fflush(g_log_file); }
 		}
 	}
 
+	if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshServer_SendAgentInfo: checking meshCoreCtx=%p, serverAuthState=%d\n", (void*)agent->meshCoreCtx, agent->serverAuthState); fflush(g_log_file); }
 	if (agent->meshCoreCtx != NULL)
 	{
-		if (duk_peval_string(agent->meshCoreCtx, "require('identifiers').isVM();") == 0)
-		{
-			if (duk_get_boolean(agent->meshCoreCtx, -1))
-			{
-				info->platformType = htonl(MeshCommand_AuthInfo_PlatformType_VIRTUAL);
-			}
-		}
-		duk_pop(agent->meshCoreCtx);
-		if (info->platformType != htonl(MeshCommand_AuthInfo_PlatformType_VIRTUAL))
-		{
-			if (duk_peval_string(agent->meshCoreCtx, "require('identifiers').isBatteryPowered();") == 0)
-			{
-				if (duk_get_boolean(agent->meshCoreCtx, -1))
-				{
-					info->platformType = htonl(MeshCommand_AuthInfo_PlatformType_LAPTOP);
-				}
-			}
-			duk_pop(agent->meshCoreCtx);
-		}
+		if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshServer_SendAgentInfo: SKIPPING isVM/isBatteryPowered calls - they crash on first install!\n"); fflush(g_log_file); }
+		// NOTE: Temporarily disabled isVM() and isBatteryPowered() calls to debug crash on first install
+		// The original code was:
+		// if (duk_peval_string(agent->meshCoreCtx, "require('identifiers').isVM();") == 0) { ... }
+		// if (duk_peval_string(agent->meshCoreCtx, "require('identifiers').isBatteryPowered();") == 0) { ... }
 	}
 
-
+	if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshServer_SendAgentInfo: about to send WebSocket data\n"); fflush(g_log_file); }
 
 	// Send mesh agent information to the server
 	ILibWebClient_WebSocket_Send(WebStateObject, ILibWebClient_WebSocket_DataType_BINARY, (char*)info, sizeof(MeshCommand_BinaryPacket_AuthInfo) + hostnamelen, ILibAsyncSocket_MemoryOwnership_USER, ILibWebClient_WebSocket_FragmentFlag_Complete);
 	agent->retryTime = 0;
+	if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshServer_SendAgentInfo: WebSocket send done\n"); fflush(g_log_file); }
+
+	if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshServer_SendAgentInfo: about to print Connected, serverAuthState=%d\n", agent->serverAuthState); fflush(g_log_file); }
 
 	if ((agent->capabilities & MeshCommand_AuthInfo_CapabilitiesMask_RECOVERY) == MeshCommand_AuthInfo_CapabilitiesMask_RECOVERY)
 	{
@@ -2842,6 +2840,7 @@ void MeshServer_SendAgentInfo(MeshAgentHostContainer* agent, ILibWebClient_State
 		printf("Connected.\n");
 	}
 
+	if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshServer_SendAgentInfo: printed Connected, will call MeshServer_ServerAuthenticated: %s\n", agent->serverAuthState == 3 ? "YES" : "NO"); fflush(g_log_file); }
 	if (agent->serverAuthState == 3) { MeshServer_ServerAuthenticated(WebStateObject, agent); }
 }
 
@@ -2985,6 +2984,8 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 {
 	unsigned short command = ntohs(((unsigned short*)cmd)[0]);
 	unsigned short requestid;
+
+	if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshServer_ProcessCommand: command=%u, cmdLen=%d, serverAuthState=%d\n", command, cmdLen, agent->serverAuthState); fflush(g_log_file); }
 
 	if (agent->controlChannelDebug != 0)
 	{
@@ -3148,10 +3149,12 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 			case MeshCommand_AuthConfirm: // Server indicates that we are authenticated, we can now send data.
 				{
 				if (agent->controlChannelDebug != 0) { printf("Authentication Complete...\n");  ILIBLOGMESSAGEX("Authentication Complete..."); }
+				if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshCommand_AuthConfirm received, serverAuthState before |=2: %d\n", agent->serverAuthState); fflush(g_log_file); }
 
 					// We have to wait for the server to indicate that it authenticated the agent (us) before sending any data to the server.
 					// Node authentication requires the server make database calls, so we need to delay.
 					agent->serverAuthState |= 2;
+					if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] serverAuthState after |=2: %d, will call MeshServer_ServerAuthenticated: %s\n", agent->serverAuthState, agent->serverAuthState == 3 ? "YES" : "NO"); fflush(g_log_file); }
 					if (agent->serverAuthState == 3) { MeshServer_ServerAuthenticated(WebStateObject, agent); }
 				}
 				break;
@@ -3760,10 +3763,12 @@ void MeshServer_ControlChannel_PongSink(ILibWebClient_StateObject WebStateObject
 void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int InterruptFlag, struct packetheader *header, char *bodyBuffer, int *beginPointer, int endPointer, ILibWebClient_ReceiveStatus recvStatus, void *user1, void *user2, int *PAUSE)
 {
 	MeshAgentHostContainer *agent = (MeshAgentHostContainer*)user1;
+	if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshServer_OnResponse called: recvStatus=%d, InterruptFlag=%d, header=%p\n", recvStatus, InterruptFlag, (void*)header); fflush(g_log_file); }
 	ILibChain_Link_SetMetadata(ILibChain_GetCurrentLink(agent->chain), "MeshServer_ControlChannel");
-	
+
 	if (agent->controlChannelRequest != NULL)
 	{
+		if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] Removing timeout timer...\n"); fflush(g_log_file); }
 		ILibLifeTime_Remove(ILibGetBaseTimer(agent->chain), agent->controlChannelRequest);
 		ILibMemory_Free(agent->controlChannelRequest);
 		agent->controlChannelRequest = NULL;
@@ -3774,9 +3779,11 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 	{
 		case ILibWebClient_ReceiveStatus_Partial:
 		case ILibWebClient_ReceiveStatus_LastPartial:
+			if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] Received partial data\n"); fflush(g_log_file); }
 			*beginPointer = endPointer; // ToDo: Buffer this data and send it up
 			break;
 		case ILibWebClient_ReceiveStatus_Connection_Established: // New connection established.
+			if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] Connection ESTABLISHED!\n"); fflush(g_log_file); }
 		{
 			if (agent->controlChannelDebug != 0)
 			{
@@ -3888,6 +3895,7 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 			break;
 		}
 		case ILibWebClient_ReceiveStatus_Complete: // Disconnection
+			if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] Connection COMPLETE (Disconnected)\n"); fflush(g_log_file); }
 			if (agent->controlChannelDebug != 0)
 			{
 				printf("Control Channel Disconnected [%d]...\n", ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
@@ -3934,7 +3942,8 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 			agent->controlChannel = NULL; // Set the agent MeshCentral server control channel
 			agent->serverConnectionState = 0;
 			break;
-		case ILibWebClient_ReceiveStatus_MoreDataToBeReceived:	// Data received			
+		case ILibWebClient_ReceiveStatus_MoreDataToBeReceived:	// Data received
+			if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MoreDataToBeReceived, StatusCode=%d\n", header ? header->StatusCode : -1); fflush(g_log_file); }
 			if (header->StatusCode == 101)
 			{
 				// Process Mesh Agent commands
@@ -3945,11 +3954,15 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 				printf("Protocol Error encountered...\n");
 			}
 			break;
+		default:
+			if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] Unknown recvStatus: %d\n", recvStatus); fflush(g_log_file); }
+			break;
 	}
 
 	// If there are no headers, this is a connection error. Log it and try again...
 	if (header == NULL)
 	{
+		if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] header is NULL - Connection Error! ChainBeingDestroyed=%d\n", ILibIsChainBeingDestroyed(agent->chain)); fflush(g_log_file); }
 		if (ILibIsChainBeingDestroyed(agent->chain)) { return; }
 		ILibRemoteLogging_printf(ILibChainGetLogger(ILibWebClient_GetChainFromWebStateObject(WebStateObject)), ILibRemoteLogging_Modules_Agent_GuardPost, ILibRemoteLogging_Flags_VerbosityLevel_1, "Agent Host Container: Mesh Server Connection Error, trying again later.");
 		printf("Mesh Server Connection Error [%d]\n", ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
@@ -3993,6 +4006,7 @@ void MeshServer_ConnectEx_NetworkError(void *j)
 	void *request = ((void**)j)[1];
 	ILibMemory_Free(j);
 
+	if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshServer_ConnectEx_NetworkError: 20s timeout fired!\n"); fflush(g_log_file); }
 	if (agent->controlChannelDebug != 0) { ILIBLOGMESSAGEX("Network Timeout Occurred..."); }
 	agent->serverConnectionState = 0; // We are cancelling connection request
 
@@ -4246,11 +4260,17 @@ void MeshServer_ConnectEx(MeshAgentHostContainer *agent)
 		if (meshServer.sin6_family == AF_UNSPEC)
 		{
 			// Could not resolve host name
+			if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] DNS resolution failed for host, checking cached address...\n"); fflush(g_log_file); }
 			if (ILibSimpleDataStore_GetEx(agent->masterDb, serverUrl, serverUrlLen, (char*)&meshServer, sizeof(struct sockaddr_in6)) == 0)
 			{
 				meshServer.sin6_family = AF_UNSPEC;
+				if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] No cached address found, DNS fully failed\n"); fflush(g_log_file); }
 				ILibRemoteLogging_printf(ILibChainGetLogger(agent->chain), ILibRemoteLogging_Modules_Agent_GuardPost, ILibRemoteLogging_Flags_VerbosityLevel_1, "agentcore: Could not resolve: %s", ILibScratchPad);
 				printf("agentcore: Could not resolve: %s\n", host);
+			}
+			else
+			{
+				if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] Using cached address from DB\n"); fflush(g_log_file); }
 			}
 		}
 		else
@@ -4384,18 +4404,23 @@ void MeshServer_ConnectEx(MeshAgentHostContainer *agent)
 
 	free(path);
 
+	if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshServer_ConnectEx: useproxy=%d, sin6_family=%d (AF_UNSPEC=%d)\n", useproxy, meshServer.sin6_family, AF_UNSPEC); fflush(g_log_file); }
+
 	if (useproxy != 0 || meshServer.sin6_family != AF_UNSPEC)
 	{
 		if (useproxy == 0) { strcpy_s(agent->serverip, sizeof(agent->serverip), ILibRemoteLogging_ConvertAddress((struct sockaddr*)&meshServer)); }
 		printf("Connecting %sto: %s\n", useproxy!=0?"(via proxy) ":"", agent->serveruri);
 		if (agent->logUpdate != 0 || agent->controlChannelDebug != 0) { ILIBLOGMESSAGEX("Connecting %sto: %s", useproxy != 0 ? "(via proxy) " : "", agent->serveruri); }
 
+		if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] Adding WebSocket request headers...\n"); fflush(g_log_file); }
 		ILibWebClient_AddWebSocketRequestHeaders(req, 65535, MeshServer_OnSendOK);
 
+		if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] Creating pipeline request...\n"); fflush(g_log_file); }
 		void **tmp = ILibMemory_SmartAllocate(2 * sizeof(void*));
 		agent->controlChannelRequest = tmp;
 		tmp[0] = agent;
 		tmp[1] = reqToken = ILibWebClient_PipelineRequest(agent->httpClientManager, (struct sockaddr*)&meshServer, req, MeshServer_OnResponse, agent, NULL);
+		if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] Pipeline request created, setting 20s timeout timer...\n"); fflush(g_log_file); }
 		ILibLifeTime_Add(ILibGetBaseTimer(agent->chain), tmp, 20, MeshServer_ConnectEx_NetworkError, MeshServer_ConnectEx_NetworkError_Cleanup);
 
 #ifndef MICROSTACK_NOTLS
@@ -4437,9 +4462,11 @@ void MeshServer_ConnectEx(MeshAgentHostContainer *agent)
 			duk_pop(agent->meshCoreCtx);
 		}
 		agent->serverConnectionState = 1; // We are trying to connect
+		if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] serverConnectionState set to 1 (trying to connect)\n"); fflush(g_log_file); }
 	}
 	else
 	{
+		if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] Cannot connect (no proxy, no resolved address) - will retry via MeshServer_Connect\n"); fflush(g_log_file); }
 		ILibDestructPacket(req);
 		MeshServer_Connect(agent);
 	}
@@ -4510,8 +4537,10 @@ void MeshServer_Connect(MeshAgentHostContainer *agent)
 {
 	unsigned int timeout;
 
+	if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshServer_Connect called, serverConnectionState=%d\n", agent->serverConnectionState); fflush(g_log_file); }
+
 	// If this is called while we are in any connection state, just leave now.
-	if (agent->serverConnectionState != 0) return;
+	if (agent->serverConnectionState != 0) { if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] Already in connection state, returning\n"); fflush(g_log_file); } return; }
 
 	if (ILibSimpleDataStore_Get(agent->masterDb, "selfTest", NULL, 0) != 0)
 	{
@@ -4851,6 +4880,7 @@ void MeshAgent_RunScriptOnly_Finalizer(duk_context *ctx, void *user)
 	MeshAgentHostContainer *agentHost = (MeshAgentHostContainer*)user;
 	agentHost->exitCode = ILibDuktape_Process_GetExitCode(ctx);
 
+	if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshAgent_RunScriptOnly_Finalizer: exitCode=%d, chainBeingDestroyed=%d\n", agentHost->exitCode, ILibIsChainBeingDestroyed(agentHost->chain)); fflush(g_log_file); }
 	agentHost->meshCoreCtx = NULL;
 	if (ILibIsChainBeingDestroyed(agentHost->chain) == 0)
 	{
@@ -4954,6 +4984,7 @@ void MeshAgent_AgentMode_Core_ServerTimeout(duk_context *ctx, void ** args, int 
 
 void MeshAgent_AgentInstallerCTX_Finalizer(duk_context *ctx, void *user)
 {
+	if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshAgent_AgentInstallerCTX_Finalizer called, chainBeingDestroyed=%d\n", ILibIsChainBeingDestroyed(user)); fflush(g_log_file); }
 	if (ILibIsChainBeingDestroyed(user) == 0)
 	{
 		ILibStopChain(user);
@@ -6455,17 +6486,21 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 
 	// Check to see if we are running as just a JavaScript Engine
 	if (agentHost->meshCoreCtx_embeddedScript != NULL || (paramLen >= 2 && ILibString_EndsWith(param[1], -1, ".js", 3) != 0) || (paramLen >= 2 && ILibString_EndsWith(param[1], -1, ".zip", 4) != 0))
-	{ 
+	{
 		// We are acting as a scripting engine
+		if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] Starting as scripting engine...\n"); fflush(g_log_file); }
 		ILibChain_RunOnMicrostackThreadEx(agentHost->chain, MeshAgent_ScriptMode_Dispatched, reserved);
 		ILibStartChain(agentHost->chain);
-		agentHost->chain = NULL; 
+		if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] Scripting engine chain has stopped\n"); fflush(g_log_file); }
+		agentHost->chain = NULL;
 	}
 	else
 	{
 		// We are acting as an Agent
+		if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] Starting as Agent...\n"); fflush(g_log_file); }
 		ILibChain_RunOnMicrostackThreadEx(agentHost->chain, MeshAgent_AgentMode_Dispatched, reserved);
 		ILibStartChain(agentHost->chain);
+		if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] Agent chain has stopped\n"); fflush(g_log_file); }
 		agentHost->chain = NULL; // Mesh agent has exited, set the chain to NULL
 
 		// Close the database
@@ -6633,6 +6668,7 @@ void MeshAgent_Destroy(MeshAgentHostContainer* agent)
 }
 void MeshAgent_Stop(MeshAgentHostContainer *agent)
 {
+	if (g_log_file) { fprintf(g_log_file, "[DEBUG-CONNECT] MeshAgent_Stop called - stopping chain!\n"); fflush(g_log_file); }
 	ILibStopChain(agent->chain);
 }
 

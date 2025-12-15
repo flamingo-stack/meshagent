@@ -40,6 +40,8 @@ limitations under the License.
 #else
 	#if defined(__APPLE__)
 		#include <util.h>
+		#include <mach/mach.h>       // For mach_port_t, mach_task_self()
+		#include <bsm/libbsm.h>      // For audit session management (TCC permissions)
 	#else
 		#include <termios.h>
 #ifdef _OPENBSD
@@ -523,6 +525,57 @@ void ILibProcessPipe_Process_HardKill(ILibProcessPipe_Process p)
 	ILibProcessPipe_Process_Destroy(p);
 }
 
+#ifdef __APPLE__
+// Join the audit session of the console user (for TCC permissions like Screen Recording)
+// This must be called in the child process BEFORE setuid()
+// Returns 0 on success, -1 on failure
+static int ILibProcessPipe_JoinUserAuditSession(uid_t uid)
+{
+	// Get current audit info to see what session we're in
+	auditinfo_addr_t cur_ainfo;
+	memset(&cur_ainfo, 0, sizeof(cur_ainfo));
+
+	if (getaudit_addr(&cur_ainfo, sizeof(cur_ainfo)) == 0)
+	{
+		fprintf(stderr, "[ILibProcessPipe] Current ASID: %d, AUID: %d\n",
+			cur_ainfo.ai_asid, cur_ainfo.ai_auid);
+		fflush(stderr);
+	}
+
+	// Scan for existing GUI sessions (100001 to 100050 range)
+	// We try to find and join ANY active session since we're root
+	for (au_asid_t try_asid = 100001; try_asid <= 100050; try_asid++)
+	{
+		mach_port_t port = MACH_PORT_NULL;
+		kern_return_t kr = audit_session_port(try_asid, &port);
+
+		if (kr == 0 && port != MACH_PORT_NULL)
+		{
+			fprintf(stderr, "[ILibProcessPipe] Found active session %d, attempting to join...\n", try_asid);
+			fflush(stderr);
+
+			au_asid_t new_asid = audit_session_join(port);
+			mach_port_deallocate(mach_task_self(), port);
+
+			if (new_asid != AU_DEFAUDITSID && new_asid != (au_asid_t)-1)
+			{
+				fprintf(stderr, "[ILibProcessPipe] Successfully joined session %d (new ASID: %d)\n", try_asid, new_asid);
+				fflush(stderr);
+				return 0;
+			}
+			else
+			{
+				fprintf(stderr, "[ILibProcessPipe] audit_session_join(%d) failed, new_asid=%d\n", try_asid, new_asid);
+				fflush(stderr);
+			}
+		}
+	}
+
+	fprintf(stderr, "[ILibProcessPipe] No GUI sessions found in range 100001-100050 for uid %d\n", uid);
+	fflush(stderr);
+	return -1;
+}
+#endif
 
 
 ILibProcessPipe_Process ILibProcessPipe_Manager_SpawnProcessEx4(ILibProcessPipe_Manager pipeManager, char* target, char* const* parameters, ILibProcessPipe_SpawnTypes spawnType, void *sid, void *envvars, int extraMemorySize)
@@ -842,7 +895,21 @@ ILibProcessPipe_Process ILibProcessPipe_Manager_SpawnProcessEx4(ILibProcessPipe_
 		}
 		if (UID != -1 && UID != 0)
 		{
+#ifdef __APPLE__
+			// On macOS, join the user's audit session BEFORE setuid()
+			// This is critical for TCC permissions (Screen Recording, etc.) to work
+			// when child process is spawned from a daemon running in system session
+			fprintf(stderr, "[ILibProcessPipe] Child process starting, UID=%lld, PID=%d, attempting to join user audit session...\n", (long long)UID, getpid());
+			fflush(stderr);
+			int join_result = ILibProcessPipe_JoinUserAuditSession((uid_t)UID);
+			fprintf(stderr, "[ILibProcessPipe] JoinUserAuditSession returned %d, now calling setuid(%lld)...\n", join_result, (long long)UID);
+			fflush(stderr);
+#endif
 			ignore_result(setuid((uid_t)UID));
+#ifdef __APPLE__
+			fprintf(stderr, "[ILibProcessPipe] setuid complete, new UID=%d, EUID=%d\n", getuid(), geteuid());
+			fflush(stderr);
+#endif
 		}
 		if (needSetSid != 0)
 		{
