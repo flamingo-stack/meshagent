@@ -45,6 +45,12 @@ int g_kvm_socket_fd = -1;           // Socket fd for daemon<->agent communicatio
 void *g_kvm_socket_user = NULL;     // User data for socket mode callbacks
 pthread_t g_socket_read_thread;     // Thread for reading from agent socket
 int g_socket_read_running = 0;      // Flag to control read thread
+
+// Forward declarations for LaunchAgent socket functions
+#if USE_LAUNCHAGENT_KVM
+int kvm_socket_send(char *buffer, int bufferLen);
+void* kvm_socket_read_thread_func(void* arg);
+#endif
 #if defined(_TLSLOG)
 #define TLSLOG1 printf
 #else
