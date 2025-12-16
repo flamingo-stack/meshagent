@@ -34,6 +34,8 @@ limitations under the License.
 
 #include <string.h>
 #include <pwd.h>
+#include <bsm/libbsm.h>
+#include <errno.h>
 
 int KVM_Listener_FD = -1;
 int g_kvm_socket_fd = -1;      // Socket fd when using launchctl asuser mode
@@ -624,6 +626,70 @@ void* kvm_server_mainloop(void* param)
 	g_shutdown = 0;
 	fprintf(stderr, "[KVM-CHILD] Starting mainloop, g_shutdown=%d, KVM_AGENT_FD=%d\n", g_shutdown, KVM_AGENT_FD);
 	fflush(stderr);
+
+	// Extended diagnostics at child startup
+	fprintf(stderr, "[KVM-CHILD-DIAG] === CHILD PROCESS DIAGNOSTICS ===\n");
+	fprintf(stderr, "[KVM-CHILD-DIAG] PID=%d, PPID=%d, UID=%d, EUID=%d, GID=%d, EGID=%d\n",
+		getpid(), getppid(), getuid(), geteuid(), getgid(), getegid());
+	fflush(stderr);
+
+	// Check audit session
+	{
+		auditinfo_addr_t ainfo;
+		memset(&ainfo, 0, sizeof(ainfo));
+		if (getaudit_addr(&ainfo, sizeof(ainfo)) == 0) {
+			fprintf(stderr, "[KVM-CHILD-DIAG] Audit: ASID=%d, AUID=%d, EUID=%d, EGID=%d, termid.port=%d\n",
+				ainfo.ai_asid, ainfo.ai_auid, ainfo.ai_mask.am_success, ainfo.ai_mask.am_failure, ainfo.ai_termid.at_port);
+		} else {
+			fprintf(stderr, "[KVM-CHILD-DIAG] Audit: getaudit_addr failed, errno=%d\n", errno);
+		}
+		fflush(stderr);
+	}
+
+	// Check main display
+	{
+		CGDirectDisplayID mainDisplay = CGMainDisplayID();
+		fprintf(stderr, "[KVM-CHILD-DIAG] CGMainDisplayID()=%u\n", mainDisplay);
+
+		uint32_t displayCount = 0;
+		CGDirectDisplayID displays[16];
+		CGGetActiveDisplayList(16, displays, &displayCount);
+		fprintf(stderr, "[KVM-CHILD-DIAG] Active displays count=%u\n", displayCount);
+		for (uint32_t i = 0; i < displayCount && i < 16; i++) {
+			fprintf(stderr, "[KVM-CHILD-DIAG]   Display[%u]: ID=%u, Width=%zu, Height=%zu\n",
+				i, displays[i], CGDisplayPixelsWide(displays[i]), CGDisplayPixelsHigh(displays[i]));
+		}
+		fflush(stderr);
+	}
+
+	// Check TCC permission status multiple ways
+	if (__builtin_available(macOS 10.15, *)) {
+		bool preflight = CGPreflightScreenCaptureAccess();
+		fprintf(stderr, "[KVM-CHILD-DIAG] CGPreflightScreenCaptureAccess() at startup = %s\n", preflight ? "true" : "false");
+		fflush(stderr);
+	}
+
+	// Try a test capture immediately
+	{
+		CGDirectDisplayID testDisplay = CGMainDisplayID();
+		fprintf(stderr, "[KVM-CHILD-DIAG] Test capture: display=%u\n", testDisplay);
+		fflush(stderr);
+
+		CGImageRef testImage = CGDisplayCreateImage(testDisplay);
+		if (testImage != NULL) {
+			size_t w = CGImageGetWidth(testImage);
+			size_t h = CGImageGetHeight(testImage);
+			fprintf(stderr, "[KVM-CHILD-DIAG] Test capture SUCCESS! image=%p, size=%zux%zu\n", (void*)testImage, w, h);
+			CGImageRelease(testImage);
+		} else {
+			fprintf(stderr, "[KVM-CHILD-DIAG] Test capture FAILED! CGDisplayCreateImage returned NULL\n");
+		}
+		fflush(stderr);
+	}
+
+	fprintf(stderr, "[KVM-CHILD-DIAG] === END DIAGNOSTICS ===\n");
+	fflush(stderr);
+
 	pthread_create(&kvmthread, NULL, kvm_mainloopinput, param);
 
 	if (KVM_AGENT_FD != -1)
@@ -785,6 +851,52 @@ void* kvm_server_mainloop(void* param)
 		if (image == NULL)
 		{
 			g_nullRetryCount++;
+
+			// Extended diagnostics on first NULL
+			if (g_nullRetryCount == 1) {
+				fprintf(stderr, "[KVM-DIAG-NULL] === FIRST NULL DIAGNOSTICS ===\n");
+
+				// Re-check permission status
+				if (__builtin_available(macOS 10.15, *)) {
+					bool preflight2 = CGPreflightScreenCaptureAccess();
+					fprintf(stderr, "[KVM-DIAG-NULL] CGPreflightScreenCaptureAccess() after NULL = %s\n", preflight2 ? "true" : "false");
+
+					// Try requesting again
+					fprintf(stderr, "[KVM-DIAG-NULL] Calling CGRequestScreenCaptureAccess()...\n");
+					bool request2 = CGRequestScreenCaptureAccess();
+					fprintf(stderr, "[KVM-DIAG-NULL] CGRequestScreenCaptureAccess() = %s\n", request2 ? "true" : "false");
+
+					// Check again after request
+					bool preflight3 = CGPreflightScreenCaptureAccess();
+					fprintf(stderr, "[KVM-DIAG-NULL] CGPreflightScreenCaptureAccess() after request = %s\n", preflight3 ? "true" : "false");
+				}
+
+				// Check process info again
+				fprintf(stderr, "[KVM-DIAG-NULL] PID=%d, PPID=%d, UID=%d, EUID=%d\n",
+					getpid(), getppid(), getuid(), geteuid());
+
+				// Check audit session again
+				auditinfo_addr_t ainfo2;
+				memset(&ainfo2, 0, sizeof(ainfo2));
+				if (getaudit_addr(&ainfo2, sizeof(ainfo2)) == 0) {
+					fprintf(stderr, "[KVM-DIAG-NULL] Current Audit: ASID=%d, AUID=%d\n",
+						ainfo2.ai_asid, ainfo2.ai_auid);
+				}
+
+				// Check display info
+				CGDirectDisplayID mainDisp = CGMainDisplayID();
+				fprintf(stderr, "[KVM-DIAG-NULL] CGMainDisplayID()=%u, requested screen_num=%d\n", mainDisp, screen_num);
+
+				// Check if display is asleep or has changed
+				boolean_t isAsleep = CGDisplayIsAsleep(screen_num);
+				boolean_t isOnline = CGDisplayIsOnline(screen_num);
+				boolean_t isMain = CGDisplayIsMain(screen_num);
+				fprintf(stderr, "[KVM-DIAG-NULL] Display state: isAsleep=%d, isOnline=%d, isMain=%d\n",
+					isAsleep, isOnline, isMain);
+
+				fprintf(stderr, "[KVM-DIAG-NULL] === END FIRST NULL DIAGNOSTICS ===\n");
+				fflush(stderr);
+			}
 
 			// Retry up to 30 times (30 seconds) - GUI may not be ready after reboot
 			if (g_nullRetryCount <= 30)
