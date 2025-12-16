@@ -39,8 +39,12 @@ limitations under the License.
 
 int KVM_Listener_FD = -1;
 int g_kvm_socket_fd = -1;      // Socket fd when using launchctl asuser mode
+int g_kvm_listen_fd = -1;      // Listening socket fd for launchctl asuser mode
 void *g_kvm_socket_user = NULL; // User data for socket mode
+char g_kvm_socket_path[256] = {0}; // Socket path for launchctl asuser mode
 #define KVM_Listener_Path "/usr/local/mesh_services/meshagent/kvm"
+#define USE_LAUNCHCTL_ASUSER 1  // Enable launchctl asuser mode for OpenFrame
+#define KVM_LAUNCHCTL_SOCKET_PATH "/tmp/meshkvm_daemon.sock"  // Fixed socket path for launchctl asuser mode
 #if defined(_TLSLOG)
 #define TLSLOG1 printf
 #else
@@ -548,14 +552,108 @@ void* kvm_server_mainloop(void* param)
 
 	if (param == NULL)
 	{
-		// This is doing I/O via StdIn/StdOut
 		// Register SIGTERM handler for graceful shutdown (OpenFrame mode)
 		// Critical for macOS - without this, SIGKILL corrupts TCC screen recording permission
 		signal(SIGTERM, ExitSink);
 
-		int flags;
-		flags = fcntl(STDOUT_FILENO, F_GETFL, 0);
-		if (fcntl(STDOUT_FILENO, F_SETFL, (O_NONBLOCK | flags) ^ O_NONBLOCK) == -1) {}
+#if USE_LAUNCHCTL_ASUSER
+		// Check if daemon's socket exists - if so, we were launched via launchctl asuser
+		// and should connect to daemon's socket instead of using stdin/stdout
+		struct stat socket_stat;
+		if (stat(KVM_LAUNCHCTL_SOCKET_PATH, &socket_stat) == 0 && (socket_stat.st_mode & S_IFSOCK))
+		{
+			fprintf(stderr, "[KVM-CHILD] Detected daemon socket at %s - connecting via launchctl asuser mode\n",
+				KVM_LAUNCHCTL_SOCKET_PATH);
+			fflush(stderr);
+
+			// Connect to daemon's socket
+			int sock_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+			if (sock_fd >= 0)
+			{
+				struct sockaddr_un sock_addr;
+				memset(&sock_addr, 0, sizeof(sock_addr));
+				sock_addr.sun_family = AF_UNIX;
+				strncpy(sock_addr.sun_path, KVM_LAUNCHCTL_SOCKET_PATH, sizeof(sock_addr.sun_path) - 1);
+
+				// Retry connection
+				int connect_retries = 10;
+				while (connect_retries > 0)
+				{
+					fprintf(stderr, "[KVM-CHILD] Attempting connect to daemon socket (try %d/10)...\n",
+						11 - connect_retries);
+					fflush(stderr);
+
+					if (connect(sock_fd, (struct sockaddr *)&sock_addr, SUN_LEN(&sock_addr)) == 0)
+					{
+						fprintf(stderr, "[KVM-CHILD] Connected to daemon socket! fd=%d\n", sock_fd);
+						fflush(stderr);
+
+						// Use socket for I/O instead of stdin/stdout
+						KVM_AGENT_FD = sock_fd;
+
+						// Test TCC permission immediately
+						fprintf(stderr, "[KVM-CHILD] === Testing TCC Screen Recording permission ===\n");
+						bool preflight = CGPreflightScreenCaptureAccess();
+						fprintf(stderr, "[KVM-CHILD] CGPreflightScreenCaptureAccess() = %s\n",
+							preflight ? "true" : "false");
+
+						CGDirectDisplayID mainDisplay = CGMainDisplayID();
+						fprintf(stderr, "[KVM-CHILD] CGMainDisplayID() = %u\n", mainDisplay);
+
+						CGImageRef testImage = CGDisplayCreateImage(mainDisplay);
+						if (testImage != NULL)
+						{
+							size_t w = CGImageGetWidth(testImage);
+							size_t h = CGImageGetHeight(testImage);
+							fprintf(stderr, "[KVM-CHILD] TEST CAPTURE SUCCESS! size=%zux%zu\n", w, h);
+							CGImageRelease(testImage);
+						}
+						else
+						{
+							fprintf(stderr, "[KVM-CHILD] TEST CAPTURE FAILED! CGDisplayCreateImage returned NULL\n");
+						}
+						fprintf(stderr, "[KVM-CHILD] === End TCC test ===\n");
+						fflush(stderr);
+
+						// Continue to mainloop with socket I/O
+						break;
+					}
+
+					fprintf(stderr, "[KVM-CHILD] connect() failed: errno=%d (%s)\n", errno, strerror(errno));
+					fflush(stderr);
+					usleep(100000); // 100ms
+					connect_retries--;
+				}
+
+				if (connect_retries == 0)
+				{
+					fprintf(stderr, "[KVM-CHILD] Failed to connect to daemon socket after 10 retries\n");
+					fflush(stderr);
+					close(sock_fd);
+					// Fall back to stdin/stdout mode
+				}
+			}
+			else
+			{
+				fprintf(stderr, "[KVM-CHILD] Failed to create socket: errno=%d\n", errno);
+				fflush(stderr);
+			}
+		}
+		else
+		{
+			fprintf(stderr, "[KVM-CHILD] No daemon socket found at %s - using stdin/stdout mode\n",
+				KVM_LAUNCHCTL_SOCKET_PATH);
+			fflush(stderr);
+		}
+#endif
+
+		// Standard stdin/stdout mode (if KVM_AGENT_FD was not set above)
+		if (KVM_AGENT_FD == -1)
+		{
+			int flags;
+			flags = fcntl(STDOUT_FILENO, F_GETFL, 0);
+			if (fcntl(STDOUT_FILENO, F_SETFL, (O_NONBLOCK | flags) ^ O_NONBLOCK) == -1) {}
+		}
 	}
 	else
 	{
@@ -1092,6 +1190,143 @@ void kvm_relay_StdErrHandler(ILibProcessPipe_Process sender, char *buffer, size_
 	*bytesConsumed = bufferLen;
 }
 
+#if USE_LAUNCHCTL_ASUSER
+// Socket read thread for launchctl asuser mode
+static pthread_t g_socket_read_thread = (pthread_t)NULL;
+static int g_socket_read_running = 0;
+
+static void* kvm_socket_read_thread(void* arg)
+{
+	void **user = (void**)arg;
+	ILibKVM_WriteHandler writeHandler = (ILibKVM_WriteHandler)user[0];
+	void *reserved = user[1];
+	char buffer[65536];
+	int offset = 0;
+	int read_count = 0;
+	int message_count = 0;
+
+	fprintf(stderr, "[KVM-SOCKET-THREAD] Read thread started, fd=%d, writeHandler=%p, reserved=%p\n",
+		g_kvm_socket_fd, (void*)writeHandler, reserved);
+	fflush(stderr);
+
+	while (g_socket_read_running && g_kvm_socket_fd >= 0)
+	{
+		int bytesRead = read(g_kvm_socket_fd, buffer + offset, sizeof(buffer) - offset);
+		read_count++;
+
+		if (bytesRead <= 0)
+		{
+			if (bytesRead < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+			{
+				usleep(10000);
+				continue;
+			}
+			fprintf(stderr, "[KVM-SOCKET-THREAD] Read error or EOF: bytesRead=%d, errno=%d, read_count=%d\n",
+				bytesRead, errno, read_count);
+			fflush(stderr);
+			break;
+		}
+
+		if (read_count <= 5 || read_count % 100 == 0)
+		{
+			fprintf(stderr, "[KVM-SOCKET-THREAD] Read #%d: bytesRead=%d, offset_before=%d\n",
+				read_count, bytesRead, offset);
+			fflush(stderr);
+		}
+
+		offset += bytesRead;
+
+		// Process complete messages
+		int processed = 0;
+		while (processed < offset)
+		{
+			if (offset - processed < 4) break; // Need at least header
+
+			unsigned short cmd = ntohs(((unsigned short*)(buffer + processed))[0]);
+			unsigned short size;
+
+			if (cmd == (unsigned short)MNG_JUMBO)
+			{
+				if (offset - processed < 8) break;
+				size = 8 + ntohl(((unsigned int*)(buffer + processed))[1]);
+			}
+			else
+			{
+				size = ntohs(((unsigned short*)(buffer + processed))[1]);
+			}
+
+			if (size > offset - processed) break; // Incomplete message
+
+			message_count++;
+			if (message_count <= 10 || message_count % 100 == 0)
+			{
+				fprintf(stderr, "[KVM-SOCKET-THREAD] Forwarding message #%d: cmd=%u, size=%u\n",
+					message_count, cmd, size);
+				fflush(stderr);
+			}
+
+			// Forward to write handler
+			writeHandler(buffer + processed, size, reserved);
+			processed += size;
+		}
+
+		// Shift remaining data
+		if (processed > 0 && processed < offset)
+		{
+			memmove(buffer, buffer + processed, offset - processed);
+		}
+		offset -= processed;
+	}
+
+	fprintf(stderr, "[KVM-SOCKET-THREAD] Exiting, total_reads=%d, total_messages=%d, g_socket_read_running=%d\n",
+		read_count, message_count, g_socket_read_running);
+	fflush(stderr);
+	return NULL;
+}
+
+// Accept connection from child and start read thread
+static int kvm_socket_accept_and_start(void **user)
+{
+	fprintf(stderr, "[KVM-SOCKET-ACCEPT] Waiting for child connection on listen_fd=%d, socket_path=%s\n",
+		g_kvm_listen_fd, g_kvm_socket_path);
+	fflush(stderr);
+
+	// Set a timeout for accept
+	struct timeval tv;
+	tv.tv_sec = 10;  // 10 second timeout
+	tv.tv_usec = 0;
+	int setsock_ret = setsockopt(g_kvm_listen_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+	fprintf(stderr, "[KVM-SOCKET-ACCEPT] setsockopt(SO_RCVTIMEO, 10s) returned %d\n", setsock_ret);
+	fflush(stderr);
+
+	fprintf(stderr, "[KVM-SOCKET-ACCEPT] Calling accept()...\n");
+	fflush(stderr);
+
+	g_kvm_socket_fd = accept(g_kvm_listen_fd, NULL, NULL);
+	if (g_kvm_socket_fd < 0)
+	{
+		fprintf(stderr, "[KVM-SOCKET-ACCEPT] Accept FAILED: errno=%d (%s)\n", errno, strerror(errno));
+		fflush(stderr);
+		return -1;
+	}
+
+	fprintf(stderr, "[KVM-SOCKET-ACCEPT] Child connected successfully! client_fd=%d\n", g_kvm_socket_fd);
+	fflush(stderr);
+
+	// Start read thread
+	fprintf(stderr, "[KVM-SOCKET-ACCEPT] Starting read thread, user=%p\n", (void*)user);
+	fflush(stderr);
+
+	g_socket_read_running = 1;
+	int pthread_ret = pthread_create(&g_socket_read_thread, NULL, kvm_socket_read_thread, user);
+
+	fprintf(stderr, "[KVM-SOCKET-ACCEPT] pthread_create returned %d, thread=%p\n",
+		pthread_ret, (void*)g_socket_read_thread);
+	fflush(stderr);
+
+	return pthread_ret == 0 ? 0 : -1;
+}
+#endif
 
 // Setup the KVM session. Return 1 if ok, 0 if it could not be setup.
 void* kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler writeHandler, void *reserved, int uid, int openFrameMode)
@@ -1180,7 +1415,130 @@ void* kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler 
 			g_shutdown = 0;
 		}
 
-		// Spawn child kvm process into a specific user session
+#if USE_LAUNCHCTL_ASUSER
+		if (g_openFrameMode)
+		{
+			fprintf(stderr, "[KVM-LAUNCHCTL] === Starting launchctl asuser mode ===\n");
+			fprintf(stderr, "[KVM-LAUNCHCTL] uid=%d, exePath=%s, binaryName=%s\n", uid, exePath, binaryName);
+			fflush(stderr);
+
+			// OpenFrame mode: Use launchctl asuser to spawn child in user's bootstrap namespace
+			// This ensures TCC permissions work after daemon restart
+
+			// Create listening socket - use fixed path
+			strncpy(g_kvm_socket_path, KVM_LAUNCHCTL_SOCKET_PATH, sizeof(g_kvm_socket_path) - 1);
+			fprintf(stderr, "[KVM-LAUNCHCTL] Socket path: %s\n", g_kvm_socket_path);
+			fflush(stderr);
+
+			int remove_ret = remove(g_kvm_socket_path); // Remove any stale socket
+			fprintf(stderr, "[KVM-LAUNCHCTL] remove() old socket returned %d (errno=%d if failed)\n",
+				remove_ret, remove_ret < 0 ? errno : 0);
+			fflush(stderr);
+
+			g_kvm_listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+			if (g_kvm_listen_fd < 0)
+			{
+				fprintf(stderr, "[KVM-LAUNCHCTL] socket() FAILED: errno=%d (%s)\n", errno, strerror(errno));
+				fflush(stderr);
+				return NULL;
+			}
+			fprintf(stderr, "[KVM-LAUNCHCTL] socket() created fd=%d\n", g_kvm_listen_fd);
+			fflush(stderr);
+
+			struct sockaddr_un serveraddr;
+			memset(&serveraddr, 0, sizeof(serveraddr));
+			serveraddr.sun_family = AF_UNIX;
+			strncpy(serveraddr.sun_path, g_kvm_socket_path, sizeof(serveraddr.sun_path) - 1);
+
+			if (bind(g_kvm_listen_fd, (struct sockaddr *)&serveraddr, SUN_LEN(&serveraddr)) < 0)
+			{
+				fprintf(stderr, "[KVM-LAUNCHCTL] bind() FAILED: errno=%d (%s)\n", errno, strerror(errno));
+				fflush(stderr);
+				close(g_kvm_listen_fd);
+				g_kvm_listen_fd = -1;
+				return NULL;
+			}
+			fprintf(stderr, "[KVM-LAUNCHCTL] bind() successful\n");
+			fflush(stderr);
+
+			// Make socket accessible to user
+			int chmod_ret = chmod(g_kvm_socket_path, 0777);
+			fprintf(stderr, "[KVM-LAUNCHCTL] chmod(0777) returned %d\n", chmod_ret);
+			fflush(stderr);
+
+			if (listen(g_kvm_listen_fd, 1) < 0)
+			{
+				fprintf(stderr, "[KVM-LAUNCHCTL] listen() FAILED: errno=%d (%s)\n", errno, strerror(errno));
+				fflush(stderr);
+				close(g_kvm_listen_fd);
+				g_kvm_listen_fd = -1;
+				remove(g_kvm_socket_path);
+				return NULL;
+			}
+			fprintf(stderr, "[KVM-LAUNCHCTL] listen() successful, socket ready at %s\n", g_kvm_socket_path);
+			fflush(stderr);
+
+			// Launch child via launchctl asuser - use -kvm0, child will detect socket and connect
+			char launchCmd[1024];
+			snprintf(launchCmd, sizeof(launchCmd), "launchctl asuser %d \"%s\" -kvm0 &",
+				uid, exePath);
+
+			fprintf(stderr, "[KVM-LAUNCHCTL] Executing command: %s\n", launchCmd);
+			fflush(stderr);
+
+			int ret = system(launchCmd);
+			fprintf(stderr, "[KVM-LAUNCHCTL] system() returned %d\n", ret);
+			fflush(stderr);
+
+			if (ret != 0)
+			{
+				fprintf(stderr, "[KVM-LAUNCHCTL] system() FAILED with non-zero return!\n");
+				fflush(stderr);
+				close(g_kvm_listen_fd);
+				g_kvm_listen_fd = -1;
+				remove(g_kvm_socket_path);
+				return NULL;
+			}
+
+			// Store user data for socket mode
+			g_kvm_socket_user = user;
+			fprintf(stderr, "[KVM-LAUNCHCTL] g_kvm_socket_user set to %p\n", g_kvm_socket_user);
+			fflush(stderr);
+
+			// Accept connection from child and start read thread
+			fprintf(stderr, "[KVM-LAUNCHCTL] Calling kvm_socket_accept_and_start()...\n");
+			fflush(stderr);
+
+			int accept_ret = kvm_socket_accept_and_start(user);
+			if (accept_ret < 0)
+			{
+				fprintf(stderr, "[KVM-LAUNCHCTL] kvm_socket_accept_and_start() FAILED: ret=%d\n", accept_ret);
+				fflush(stderr);
+				close(g_kvm_listen_fd);
+				g_kvm_listen_fd = -1;
+				remove(g_kvm_socket_path);
+				return NULL;
+			}
+			fprintf(stderr, "[KVM-LAUNCHCTL] kvm_socket_accept_and_start() succeeded\n");
+			fflush(stderr);
+
+			// Close listening socket - we have the connection
+			close(g_kvm_listen_fd);
+			g_kvm_listen_fd = -1;
+			fprintf(stderr, "[KVM-LAUNCHCTL] Listening socket closed\n");
+			fflush(stderr);
+
+			fprintf(stderr, "[KVM-LAUNCHCTL] === launchctl asuser mode COMPLETE! g_kvm_socket_fd=%d ===\n",
+				g_kvm_socket_fd);
+			fflush(stderr);
+
+			// Return a non-NULL value to indicate success
+			// In socket mode, we don't have a pipe - data comes via socket read thread
+			return (void*)(intptr_t)g_kvm_socket_fd;
+		}
+#endif
+
+		// Standard mode or fallback: Spawn child kvm process directly
 		gChildProcess = ILibProcessPipe_Manager_SpawnProcessEx3(processPipeMgr, exePath, parms0, ILibProcessPipe_SpawnTypes_DEFAULT, (void*)(uint64_t)uid, 0);
 		g_slavekvm = ILibProcessPipe_Process_GetPID(gChildProcess);
 
@@ -1243,11 +1601,16 @@ void kvm_cleanup()
 
 		g_shutdown = 1;
 
-		// Socket mode (launchctl asuser): close socket but keep child running
+		// Socket mode (launchctl asuser): close socket and stop read thread
 		if (g_kvm_socket_fd >= 0)
 		{
 			fprintf(stderr, "[KVM] kvm_cleanup() closing socket %d (openframe socket mode)\n", g_kvm_socket_fd);
 			fflush(stderr);
+
+#if USE_LAUNCHCTL_ASUSER
+			// Stop read thread first
+			g_socket_read_running = 0;
+#endif
 
 			// Send pause command before closing
 			char buffer[5];
@@ -1258,6 +1621,22 @@ void kvm_cleanup()
 
 			close(g_kvm_socket_fd);
 			g_kvm_socket_fd = -1;
+
+#if USE_LAUNCHCTL_ASUSER
+			// Wait for read thread to exit
+			if (g_socket_read_thread != (pthread_t)NULL)
+			{
+				pthread_join(g_socket_read_thread, NULL);
+				g_socket_read_thread = (pthread_t)NULL;
+			}
+
+			// Clean up socket file
+			if (g_kvm_socket_path[0] != '\0')
+			{
+				remove(g_kvm_socket_path);
+				g_kvm_socket_path[0] = '\0';
+			}
+#endif
 
 			if (g_kvm_socket_user != NULL)
 			{
