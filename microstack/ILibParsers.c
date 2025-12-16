@@ -2950,7 +2950,7 @@ void ILibChain_DebugOffset(char *buffer, int bufferLen, uint64_t addrOffset)
 			len += sprintf_s(buffer + len, bufferLen - len, "]\n");
 		}
 	}
-#elif defined(_POSIX) && !defined(__APPLE__)
+#else
 	char addrtmp[255];
 	int len = 0;
 	pid_t pid;
@@ -2971,7 +2971,7 @@ void ILibChain_DebugOffset(char *buffer, int bufferLen, uint64_t addrOffset)
 
 			dup2(fd[1], STDOUT_FILENO);
 			close(fd[1]);
-
+			
 			execv("/usr/bin/addr2line", (char**)ILib_POSIX_CrashParamBuffer);
 			if (write(STDOUT_FILENO, "??:0", 4)) {}
 			_exit(0);
@@ -3000,9 +3000,6 @@ void ILibChain_DebugOffset(char *buffer, int bufferLen, uint64_t addrOffset)
 
 		buffer[len] = 0;
 	}
-#else
-	// macOS: addr2line not available, just provide basic info
-	sprintf_s(buffer, bufferLen, "[Debug info not available on macOS]");
 #endif
 #endif
 }
