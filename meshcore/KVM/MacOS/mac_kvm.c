@@ -389,14 +389,16 @@ int kvm_server_inputdata(char* block, int blocklen)
 					g_tileInfo[row][col].flag = 0;
 				}
 			}
-			fprintf(stderr, "[KVM-CHILD] REFRESH processed, tiles reset\n");
+			fprintf(stderr, "[KVM-CHILD] REFRESH processed, tiles reset, g_shutdown=%d, g_remotepause=%d\n",
+				g_shutdown, g_remotepause);
 			fflush(stderr);
 			break;
 		}
 		case MNG_KVM_PAUSE: // Pause
 		{
 			if (size != 5) break;
-			fprintf(stderr, "[KVM-CHILD] PAUSE received, value=%d\n", block[4]);
+			fprintf(stderr, "[KVM-CHILD] PAUSE received, value=%d, g_shutdown=%d, g_remotepause(before)=%d\n",
+				block[4], g_shutdown, g_remotepause);
 			fflush(stderr);
 			g_remotepause = block[4];
 			break;
@@ -691,7 +693,20 @@ void* kvm_server_mainloop(void* param)
 
 		screen_num = CGMainDisplayID();
 
-		if (screen_num == 0) { g_shutdown = 1; senddebug(-2); break; }
+		// Detailed diagnostics for debugging capture failures
+		static int g_diagCount = 0;
+		g_diagCount++;
+		if (g_diagCount <= 5 || g_diagCount % 50 == 0) {
+			fprintf(stderr, "[KVM-DIAG] Loop #%d: screen_num=%u, g_shutdown=%d, g_remotepause=%d\n",
+				g_diagCount, screen_num, g_shutdown, g_remotepause);
+			fflush(stderr);
+		}
+
+		if (screen_num == 0) {
+			fprintf(stderr, "[KVM-DIAG] CGMainDisplayID returned 0! Setting g_shutdown=1\n");
+			fflush(stderr);
+			g_shutdown = 1; senddebug(-2); break;
+		}
 		
 		if (SCREEN_SCALE_SET == 0)
 		{
@@ -723,6 +738,13 @@ void* kvm_server_mainloop(void* param)
 		static int g_nullRetryCount = 0;  // Retry counter for CGDisplayCreateImage failures
 		static int g_permissionChecked = 0;  // Flag to check permission once
 
+		// Log static variable states for debugging
+		if (g_diagCount <= 5 || g_nullRetryCount > 0) {
+			fprintf(stderr, "[KVM-DIAG] Static vars: g_nullRetryCount=%d, g_permissionChecked=%d, g_captureCount=%d\n",
+				g_nullRetryCount, g_permissionChecked, g_captureCount);
+			fflush(stderr);
+		}
+
 		// Check TCC permission status before capture attempt
 		if (g_nullRetryCount == 0 && g_permissionChecked == 0)
 		{
@@ -744,7 +766,21 @@ void* kvm_server_mainloop(void* param)
 			}
 		}
 
+		// Log before CGDisplayCreateImage call
+		if (g_diagCount <= 5 || g_nullRetryCount > 0) {
+			fprintf(stderr, "[KVM-DIAG] About to call CGDisplayCreateImage(screen_num=%u)\n", screen_num);
+			fflush(stderr);
+		}
+
 		CGImageRef image = CGDisplayCreateImage(screen_num);
+
+		// Log result of CGDisplayCreateImage
+		if (g_diagCount <= 5 || image == NULL) {
+			fprintf(stderr, "[KVM-DIAG] CGDisplayCreateImage result: image=%p (NULL=%s)\n",
+				(void*)image, image == NULL ? "YES" : "NO");
+			fflush(stderr);
+		}
+
 		//senddebug(99);
 		if (image == NULL)
 		{
