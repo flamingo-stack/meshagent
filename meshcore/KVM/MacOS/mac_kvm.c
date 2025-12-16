@@ -92,6 +92,7 @@ int g_pause = 0;
 int g_shutdown = 0;
 int g_cleanup_in_progress = 0;  // Guard against double cleanup
 int g_openFrameMode = 0;        // OpenFrame mode - enables KVM child process reuse
+int g_launchctlSocketMode = 0;  // Flag: child connected via launchctl asuser socket (should handle input events)
 int g_resetipc = 0;
 int kvm_clientProcessId = 0;
 int g_restartcount = 0;
@@ -346,7 +347,19 @@ int kvm_server_inputdata(char* block, int blocklen)
 			break;
 		case MNG_KVM_KEY: // Key
 		{
-			if (size != 6 || KVM_AGENT_FD != -1) { break; }
+			// Allow key events if: size is correct AND (not using IPC or in launchctl socket mode)
+			if (size != 6 || (KVM_AGENT_FD != -1 && !g_launchctlSocketMode)) {
+				static int key_skip_count = 0;
+				if (++key_skip_count <= 5)
+				{
+					fprintf(stderr, "[KVM-INPUT] KEY event SKIPPED #%d: size=%d, KVM_AGENT_FD=%d, g_launchctlSocketMode=%d\n",
+						key_skip_count, size, KVM_AGENT_FD, g_launchctlSocketMode);
+					fflush(stderr);
+				}
+				break;
+			}
+			fprintf(stderr, "[KVM-INPUT] KEY event: key=%d, action=%d\n", block[5], block[4]);
+			fflush(stderr);
 			KeyAction(block[5], block[4]);
 			break;
 		}
@@ -354,15 +367,31 @@ int kvm_server_inputdata(char* block, int blocklen)
 		{
 			int x, y;
 			short w = 0;
-			if (KVM_AGENT_FD != -1) { break; }
+			// Allow mouse events if: not using IPC or in launchctl socket mode
+			if (KVM_AGENT_FD != -1 && !g_launchctlSocketMode) {
+				static int mouse_skip_count = 0;
+				if (++mouse_skip_count <= 5)
+				{
+					fprintf(stderr, "[KVM-INPUT] MOUSE event SKIPPED #%d: KVM_AGENT_FD=%d, g_launchctlSocketMode=%d\n",
+						mouse_skip_count, KVM_AGENT_FD, g_launchctlSocketMode);
+					fflush(stderr);
+				}
+				break;
+			}
 			if (size == 10 || size == 12)
 			{
 				x = ((int)ntohs(((unsigned short*)(block))[3])) / SCREEN_SCALE;
 				y = ((int)ntohs(((unsigned short*)(block))[4])) / SCREEN_SCALE;
-				
+
 				if (size == 12) w = ((short)ntohs(((short*)(block))[5]));
-				
-				//printf("x:%d, y:%d, b:%d, w:%d\n", x, y, block[5], w);
+
+				static int mouse_event_count = 0;
+				if (++mouse_event_count <= 5)
+				{
+					fprintf(stderr, "[KVM-INPUT] MOUSE event #%d: x=%d, y=%d, btn=%d, wheel=%d\n",
+						mouse_event_count, x, y, (int)(unsigned char)(block[5]), w);
+					fflush(stderr);
+				}
 				MouseAction(x, y, (int)(unsigned char)(block[5]), w);
 			}
 			break;
@@ -590,6 +619,7 @@ void* kvm_server_mainloop(void* param)
 
 						// Use socket for I/O instead of stdin/stdout
 						KVM_AGENT_FD = sock_fd;
+						g_launchctlSocketMode = 1; // Enable input event handling in child
 
 						// Test TCC permission immediately
 						fprintf(stderr, "[KVM-CHILD] === Testing TCC Screen Recording permission ===\n");
@@ -1200,18 +1230,42 @@ static void* kvm_socket_read_thread(void* arg)
 	void **user = (void**)arg;
 	ILibKVM_WriteHandler writeHandler = (ILibKVM_WriteHandler)user[0];
 	void *reserved = user[1];
-	char buffer[131072]; // 128KB buffer for large JUMBO packets
+
+	// Use dynamic buffer - start with 512KB, can handle most JUMBO packets
+	int buffer_size = 524288; // 512KB
+	char *buffer = (char*)malloc(buffer_size);
+	if (buffer == NULL)
+	{
+		fprintf(stderr, "[KVM-SOCKET-THREAD] Failed to allocate buffer!\n");
+		fflush(stderr);
+		return NULL;
+	}
+
 	int offset = 0;
 	int read_count = 0;
 	int message_count = 0;
 
-	fprintf(stderr, "[KVM-SOCKET-THREAD] Read thread started, fd=%d, writeHandler=%p, reserved=%p\n",
-		g_kvm_socket_fd, (void*)writeHandler, reserved);
+	fprintf(stderr, "[KVM-SOCKET-THREAD] Read thread started, fd=%d, writeHandler=%p, reserved=%p, buffer_size=%d\n",
+		g_kvm_socket_fd, (void*)writeHandler, reserved, buffer_size);
 	fflush(stderr);
 
 	while (g_socket_read_running && g_kvm_socket_fd >= 0)
 	{
-		int bytesRead = read(g_kvm_socket_fd, buffer + offset, sizeof(buffer) - offset);
+		// Check if we need more buffer space
+		if (buffer_size - offset < 65536)
+		{
+			int new_size = buffer_size * 2;
+			char *new_buffer = (char*)realloc(buffer, new_size);
+			if (new_buffer != NULL)
+			{
+				buffer = new_buffer;
+				buffer_size = new_size;
+				fprintf(stderr, "[KVM-SOCKET-THREAD] Expanded buffer to %d bytes\n", buffer_size);
+				fflush(stderr);
+			}
+		}
+
+		int bytesRead = read(g_kvm_socket_fd, buffer + offset, buffer_size - offset);
 		read_count++;
 
 		if (bytesRead <= 0)
@@ -1248,15 +1302,26 @@ static void* kvm_socket_read_thread(void* arg)
 
 			if (cmd == (unsigned short)MNG_JUMBO)
 			{
-				// JUMBO packet: [2 bytes cmd][4 bytes (ignored)][4 bytes size] + data
+				// JUMBO packet: [2 bytes cmd][2 bytes=8][4 bytes data_size] + data
+				// Total packet size = 8 (header) + data_size
 				if (remaining < 8) break;
-				packet_size = 8 + (int)ntohl(((unsigned int*)(buffer + processed))[1]);
+				int data_size = (int)ntohl(((unsigned int*)(buffer + processed))[1]);
+				packet_size = 8 + data_size;
 
-				if (message_count < 10)
+				if (message_count < 20)
 				{
-					fprintf(stderr, "[KVM-SOCKET-THREAD] JUMBO packet #%d: cmd=%u, data_size=%d, packet_size=%d\n",
-						message_count + 1, cmd, (int)ntohl(((unsigned int*)(buffer + processed))[1]), packet_size);
+					fprintf(stderr, "[KVM-SOCKET-THREAD] JUMBO packet #%d: cmd=%u, data_size=%d, packet_size=%d, remaining=%d\n",
+						message_count + 1, cmd, data_size, packet_size, remaining);
 					fflush(stderr);
+				}
+
+				// Sanity check for JUMBO packets
+				if (data_size <= 0 || data_size > 10000000) // Max 10MB for a single tile is unreasonable
+				{
+					fprintf(stderr, "[KVM-SOCKET-THREAD] ERROR: Invalid JUMBO data_size=%d, skipping 8 bytes\n", data_size);
+					fflush(stderr);
+					processed += 8;
+					continue;
 				}
 			}
 			else
@@ -1264,28 +1329,48 @@ static void* kvm_socket_read_thread(void* arg)
 				// Normal packet: [2 bytes cmd][2 bytes total_size]
 				packet_size = (int)ntohs(((unsigned short*)(buffer + processed))[1]);
 
-				if (message_count < 10)
+				if (message_count < 20)
 				{
-					fprintf(stderr, "[KVM-SOCKET-THREAD] Normal packet #%d: cmd=%u, packet_size=%d\n",
-						message_count + 1, cmd, packet_size);
+					fprintf(stderr, "[KVM-SOCKET-THREAD] Normal packet #%d: cmd=%u, packet_size=%d, remaining=%d\n",
+						message_count + 1, cmd, packet_size, remaining);
 					fflush(stderr);
+				}
+
+				// Sanity check for normal packets
+				if (packet_size <= 0 || packet_size > 65535)
+				{
+					fprintf(stderr, "[KVM-SOCKET-THREAD] ERROR: Invalid normal packet_size=%d, cmd=%u, skipping 4 bytes\n",
+						packet_size, cmd);
+					fflush(stderr);
+					processed += 4;
+					continue;
 				}
 			}
 
-			// Sanity check - packet_size must be positive and reasonable
-			if (packet_size <= 0 || packet_size > sizeof(buffer))
+			// If packet doesn't fit in current buffer, try to expand
+			if (packet_size > buffer_size)
 			{
-				fprintf(stderr, "[KVM-SOCKET-THREAD] ERROR: Invalid packet_size=%d, cmd=%u, skipping 4 bytes\n",
-					packet_size, cmd);
-				fflush(stderr);
-				processed += 4; // Skip bad header
-				continue;
+				int new_size = packet_size + 65536;
+				char *new_buffer = (char*)realloc(buffer, new_size);
+				if (new_buffer != NULL)
+				{
+					buffer = new_buffer;
+					buffer_size = new_size;
+					fprintf(stderr, "[KVM-SOCKET-THREAD] Expanded buffer to %d for packet_size=%d\n", buffer_size, packet_size);
+					fflush(stderr);
+				}
+				else
+				{
+					fprintf(stderr, "[KVM-SOCKET-THREAD] ERROR: Cannot expand buffer for packet_size=%d\n", packet_size);
+					fflush(stderr);
+					break;
+				}
 			}
 
 			if (packet_size > remaining) break; // Incomplete packet, wait for more data
 
 			message_count++;
-			if (message_count <= 10 || message_count % 1000 == 0)
+			if (message_count <= 20 || message_count % 1000 == 0)
 			{
 				fprintf(stderr, "[KVM-SOCKET-THREAD] Forwarding message #%d: cmd=%u, size=%d\n",
 					message_count, cmd, packet_size);
@@ -1311,6 +1396,7 @@ static void* kvm_socket_read_thread(void* arg)
 	fprintf(stderr, "[KVM-SOCKET-THREAD] Exiting, total_reads=%d, total_messages=%d, g_socket_read_running=%d\n",
 		read_count, message_count, g_socket_read_running);
 	fflush(stderr);
+	free(buffer);
 	return NULL;
 }
 
