@@ -1200,7 +1200,7 @@ static void* kvm_socket_read_thread(void* arg)
 	void **user = (void**)arg;
 	ILibKVM_WriteHandler writeHandler = (ILibKVM_WriteHandler)user[0];
 	void *reserved = user[1];
-	char buffer[65536];
+	char buffer[131072]; // 128KB buffer for large JUMBO packets
 	int offset = 0;
 	int read_count = 0;
 	int message_count = 0;
@@ -1229,53 +1229,83 @@ static void* kvm_socket_read_thread(void* arg)
 
 		if (read_count <= 5 || read_count % 100 == 0)
 		{
-			fprintf(stderr, "[KVM-SOCKET-THREAD] Read #%d: bytesRead=%d, offset_before=%d\n",
-				read_count, bytesRead, offset);
+			fprintf(stderr, "[KVM-SOCKET-THREAD] Read #%d: bytesRead=%d, offset_before=%d, total=%d\n",
+				read_count, bytesRead, offset, offset + bytesRead);
 			fflush(stderr);
 		}
 
 		offset += bytesRead;
 
-		// Process complete messages
+		// Process complete messages (same logic as kvm_relay_StdOutHandler)
 		int processed = 0;
 		while (processed < offset)
 		{
-			if (offset - processed < 4) break; // Need at least header
+			int remaining = offset - processed;
+			if (remaining < 4) break; // Need at least header
 
 			unsigned short cmd = ntohs(((unsigned short*)(buffer + processed))[0]);
-			unsigned short size;
+			int packet_size;
 
 			if (cmd == (unsigned short)MNG_JUMBO)
 			{
-				if (offset - processed < 8) break;
-				size = 8 + ntohl(((unsigned int*)(buffer + processed))[1]);
+				// JUMBO packet: [2 bytes cmd][4 bytes (ignored)][4 bytes size] + data
+				if (remaining < 8) break;
+				packet_size = 8 + (int)ntohl(((unsigned int*)(buffer + processed))[1]);
+
+				if (message_count < 10)
+				{
+					fprintf(stderr, "[KVM-SOCKET-THREAD] JUMBO packet #%d: cmd=%u, data_size=%d, packet_size=%d\n",
+						message_count + 1, cmd, (int)ntohl(((unsigned int*)(buffer + processed))[1]), packet_size);
+					fflush(stderr);
+				}
 			}
 			else
 			{
-				size = ntohs(((unsigned short*)(buffer + processed))[1]);
+				// Normal packet: [2 bytes cmd][2 bytes total_size]
+				packet_size = (int)ntohs(((unsigned short*)(buffer + processed))[1]);
+
+				if (message_count < 10)
+				{
+					fprintf(stderr, "[KVM-SOCKET-THREAD] Normal packet #%d: cmd=%u, packet_size=%d\n",
+						message_count + 1, cmd, packet_size);
+					fflush(stderr);
+				}
 			}
 
-			if (size > offset - processed) break; // Incomplete message
+			// Sanity check - packet_size must be positive and reasonable
+			if (packet_size <= 0 || packet_size > sizeof(buffer))
+			{
+				fprintf(stderr, "[KVM-SOCKET-THREAD] ERROR: Invalid packet_size=%d, cmd=%u, skipping 4 bytes\n",
+					packet_size, cmd);
+				fflush(stderr);
+				processed += 4; // Skip bad header
+				continue;
+			}
+
+			if (packet_size > remaining) break; // Incomplete packet, wait for more data
 
 			message_count++;
-			if (message_count <= 10 || message_count % 100 == 0)
+			if (message_count <= 10 || message_count % 1000 == 0)
 			{
-				fprintf(stderr, "[KVM-SOCKET-THREAD] Forwarding message #%d: cmd=%u, size=%u\n",
-					message_count, cmd, size);
+				fprintf(stderr, "[KVM-SOCKET-THREAD] Forwarding message #%d: cmd=%u, size=%d\n",
+					message_count, cmd, packet_size);
 				fflush(stderr);
 			}
 
 			// Forward to write handler
-			writeHandler(buffer + processed, size, reserved);
-			processed += size;
+			writeHandler(buffer + processed, packet_size, reserved);
+			processed += packet_size;
 		}
 
-		// Shift remaining data
-		if (processed > 0 && processed < offset)
+		// Shift remaining data to beginning of buffer
+		if (processed > 0)
 		{
-			memmove(buffer, buffer + processed, offset - processed);
+			if (processed < offset)
+			{
+				memmove(buffer, buffer + processed, offset - processed);
+			}
+			offset -= processed;
 		}
-		offset -= processed;
 	}
 
 	fprintf(stderr, "[KVM-SOCKET-THREAD] Exiting, total_reads=%d, total_messages=%d, g_socket_read_running=%d\n",
