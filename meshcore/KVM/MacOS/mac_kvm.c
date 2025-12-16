@@ -33,9 +33,18 @@ limitations under the License.
 
 #include <string.h>
 #include <pwd.h>
+#include <sys/stat.h>
 
 int KVM_Listener_FD = -1;
 #define KVM_Listener_Path "/usr/local/mesh_services/meshagent/kvm"
+
+// LaunchAgent KVM mode - daemon connects to agent's socket instead of spawning child
+#define USE_LAUNCHAGENT_KVM 1
+#define KVM_LAUNCHAGENT_SOCKET_PATH "/tmp/meshkvm_agent.sock"
+int g_kvm_socket_fd = -1;           // Socket fd for daemon<->agent communication
+void *g_kvm_socket_user = NULL;     // User data for socket mode callbacks
+pthread_t g_socket_read_thread;     // Thread for reading from agent socket
+int g_socket_read_running = 0;      // Flag to control read thread
 #if defined(_TLSLOG)
 #define TLSLOG1 printf
 #else
@@ -410,8 +419,30 @@ int kvm_server_inputdata(char* block, int blocklen)
 }
 
 
+static int g_feeddata_count = 0;  // Counter for feeddata calls
+
 int kvm_relay_feeddata(char* buf, int len)
 {
+	g_feeddata_count++;
+#if USE_LAUNCHAGENT_KVM
+	// In LaunchAgent mode, send via socket if connected
+	if (g_openFrameMode && g_kvm_socket_fd >= 0)
+	{
+		if (g_feeddata_count <= 5 || g_feeddata_count % 100 == 0)
+		{
+			fprintf(stderr, "[KVM-FEEDDATA] #%d: Using socket mode, len=%d, fd=%d\n",
+				g_feeddata_count, len, g_kvm_socket_fd);
+			fflush(stderr);
+		}
+		return kvm_socket_send(buf, len);
+	}
+	if (g_feeddata_count <= 5)
+	{
+		fprintf(stderr, "[KVM-FEEDDATA] #%d: Using pipe mode (g_openFrameMode=%d, g_kvm_socket_fd=%d), len=%d\n",
+			g_feeddata_count, g_openFrameMode, g_kvm_socket_fd, len);
+		fflush(stderr);
+	}
+#endif
 	ILibProcessPipe_Process_WriteStdIn(gChildProcess, buf, len, ILibTransport_MemoryOwnership_USER);
 	return(len);
 }
@@ -556,8 +587,14 @@ void* kvm_server_mainloop(void* param)
 
 		memset(&serveraddr, 0, sizeof(serveraddr));
 		serveraddr.sun_family = AF_UNIX;
+#if USE_LAUNCHAGENT_KVM
+		// Use LaunchAgent socket path for daemon<->agent communication
+		strcpy(serveraddr.sun_path, KVM_LAUNCHAGENT_SOCKET_PATH);
+		remove(KVM_LAUNCHAGENT_SOCKET_PATH);
+#else
 		strcpy(serveraddr.sun_path, KVM_Listener_Path);
 		remove(KVM_Listener_Path);
+#endif
 		if (bind(KVM_Listener_FD, (struct sockaddr *)&serveraddr, SUN_LEN(&serveraddr)) < 0)
 		{
 			char tmp[255];
@@ -887,6 +924,130 @@ void kvm_relay_StdErrHandler(ILibProcessPipe_Process sender, char *buffer, size_
 	*bytesConsumed = bufferLen;
 }
 
+#if USE_LAUNCHAGENT_KVM
+static int g_socket_read_count = 0;  // Counter for read operations
+
+// Thread function to read data from LaunchAgent socket and forward to writeHandler
+void* kvm_socket_read_thread_func(void* arg)
+{
+	void **user = (void**)arg;
+	ILibKVM_WriteHandler writeHandler = (ILibKVM_WriteHandler)user[0];
+	void *reserved = user[1];
+
+	char buffer[65535];
+	ssize_t bytesRead;
+
+	fprintf(stderr, "[KVM-SOCKET] Read thread STARTED, fd=%d, writeHandler=%p, reserved=%p\n",
+		g_kvm_socket_fd, (void*)writeHandler, reserved);
+	fflush(stderr);
+
+	g_socket_read_count = 0;
+
+	while (g_socket_read_running && g_kvm_socket_fd >= 0)
+	{
+		bytesRead = read(g_kvm_socket_fd, buffer, sizeof(buffer));
+		if (bytesRead > 0)
+		{
+			g_socket_read_count++;
+			if (g_socket_read_count <= 5 || g_socket_read_count % 100 == 0)
+			{
+				fprintf(stderr, "[KVM-SOCKET] Read #%d: received %zd bytes from agent, fd=%d\n",
+					g_socket_read_count, bytesRead, g_kvm_socket_fd);
+				fflush(stderr);
+			}
+			// Forward data to writeHandler (same as kvm_relay_StdOutHandler does)
+			if (writeHandler != NULL)
+			{
+				writeHandler(buffer, (int)bytesRead, reserved);
+				if (g_socket_read_count <= 5)
+				{
+					fprintf(stderr, "[KVM-SOCKET] Read #%d: forwarded %zd bytes to writeHandler\n",
+						g_socket_read_count, bytesRead);
+					fflush(stderr);
+				}
+			}
+			else
+			{
+				fprintf(stderr, "[KVM-SOCKET] WARNING: writeHandler is NULL, dropping %zd bytes!\n", bytesRead);
+				fflush(stderr);
+			}
+		}
+		else if (bytesRead == 0)
+		{
+			// Connection closed
+			fprintf(stderr, "[KVM-SOCKET] Connection closed by agent (read returned 0), total reads=%d\n", g_socket_read_count);
+			fflush(stderr);
+			break;
+		}
+		else
+		{
+			if (errno == EINTR)
+			{
+				fprintf(stderr, "[KVM-SOCKET] Read interrupted (EINTR), continuing...\n");
+				fflush(stderr);
+				continue;
+			}
+			if (errno == EAGAIN || errno == EWOULDBLOCK)
+			{
+				usleep(10000); // 10ms
+				continue;
+			}
+			fprintf(stderr, "[KVM-SOCKET] Read ERROR: errno=%d (%s), fd=%d, total reads=%d\n",
+				errno, strerror(errno), g_kvm_socket_fd, g_socket_read_count);
+			fflush(stderr);
+			break;
+		}
+	}
+
+	fprintf(stderr, "[KVM-SOCKET] Read thread EXITING, g_socket_read_running=%d, g_kvm_socket_fd=%d, total reads=%d\n",
+		g_socket_read_running, g_kvm_socket_fd, g_socket_read_count);
+	fflush(stderr);
+	return NULL;
+}
+
+static int g_socket_send_count = 0;  // Counter for send operations
+
+// Send data to LaunchAgent via socket
+int kvm_socket_send(char *buffer, int bufferLen)
+{
+	if (g_kvm_socket_fd < 0)
+	{
+		fprintf(stderr, "[KVM-SOCKET] Send FAILED: socket not connected (fd=%d)\n", g_kvm_socket_fd);
+		fflush(stderr);
+		return -1;
+	}
+
+	g_socket_send_count++;
+	if (g_socket_send_count <= 5 || g_socket_send_count % 100 == 0)
+	{
+		fprintf(stderr, "[KVM-SOCKET] Send #%d: sending %d bytes to agent, fd=%d\n",
+			g_socket_send_count, bufferLen, g_kvm_socket_fd);
+		fflush(stderr);
+	}
+
+	ssize_t totalSent = 0;
+	while (totalSent < bufferLen)
+	{
+		ssize_t sent = write(g_kvm_socket_fd, buffer + totalSent, bufferLen - totalSent);
+		if (sent < 0)
+		{
+			if (errno == EINTR) continue;
+			fprintf(stderr, "[KVM-SOCKET] Send ERROR: errno=%d (%s), fd=%d, sent %zd of %d bytes\n",
+				errno, strerror(errno), g_kvm_socket_fd, totalSent, bufferLen);
+			fflush(stderr);
+			return -1;
+		}
+		totalSent += sent;
+	}
+
+	if (g_socket_send_count <= 5)
+	{
+		fprintf(stderr, "[KVM-SOCKET] Send #%d: successfully sent %d bytes\n", g_socket_send_count, bufferLen);
+		fflush(stderr);
+	}
+	return (int)totalSent;
+}
+#endif
 
 // Setup the KVM session. Return 1 if ok, 0 if it could not be setup.
 void* kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler writeHandler, void *reserved, int uid, int openFrameMode)
@@ -916,6 +1077,122 @@ void* kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler 
 
 	if (uid != 0)
 	{
+#if USE_LAUNCHAGENT_KVM
+		fprintf(stderr, "[KVM-SETUP] ENTER kvm_relay_setup() uid=%d, openFrameMode=%d, USE_LAUNCHAGENT_KVM=1\n", uid, g_openFrameMode);
+		fprintf(stderr, "[KVM-SETUP] exePath=%s, writeHandler=%p, reserved=%p\n", exePath, (void*)writeHandler, reserved);
+		fprintf(stderr, "[KVM-SETUP] Current state: g_kvm_socket_fd=%d, g_shutdown=%d, g_cleanup_in_progress=%d\n",
+			g_kvm_socket_fd, g_shutdown, g_cleanup_in_progress);
+		fflush(stderr);
+
+		if (g_openFrameMode)
+		{
+			// LaunchAgent mode: connect to existing LaunchAgent socket instead of spawning child
+			fprintf(stderr, "[KVM-SETUP] LaunchAgent mode ACTIVE, will try to connect to socket\n");
+			fflush(stderr);
+
+			g_shutdown = 0;
+			g_cleanup_in_progress = 0;
+			g_socket_send_count = 0;  // Reset send counter for new session
+
+			// Check if already connected
+			if (g_kvm_socket_fd >= 0)
+			{
+				fprintf(stderr, "[KVM-SETUP] REUSING existing socket connection, fd=%d\n", g_kvm_socket_fd);
+				fflush(stderr);
+
+				// Send unpause command
+				fprintf(stderr, "[KVM-SETUP] Sending unpause command to agent...\n");
+				fflush(stderr);
+				char pauseBuffer[5];
+				((unsigned short*)pauseBuffer)[0] = (unsigned short)htons((unsigned short)MNG_KVM_PAUSE);
+				((unsigned short*)pauseBuffer)[1] = (unsigned short)htons((unsigned short)5);
+				pauseBuffer[4] = 0;  // unpause
+				kvm_relay_feeddata(pauseBuffer, 5);
+
+				// Send refresh command
+				fprintf(stderr, "[KVM-SETUP] Sending refresh command to agent...\n");
+				fflush(stderr);
+				kvm_relay_reset();
+
+				g_kvm_socket_user = user;
+				fprintf(stderr, "[KVM-SETUP] Socket reuse complete, returning fd=%d\n", g_kvm_socket_fd);
+				fflush(stderr);
+				return (void*)(intptr_t)g_kvm_socket_fd;
+			}
+
+			// Try to connect to LaunchAgent socket
+			fprintf(stderr, "[KVM-SETUP] Creating new socket for LaunchAgent connection...\n");
+			fflush(stderr);
+
+			struct sockaddr_un serveraddr;
+			int sock_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+			if (sock_fd < 0)
+			{
+				fprintf(stderr, "[KVM-SETUP] FAILED to create socket: errno=%d (%s)\n", errno, strerror(errno));
+				fflush(stderr);
+				return NULL;
+			}
+			fprintf(stderr, "[KVM-SETUP] Created socket fd=%d\n", sock_fd);
+			fflush(stderr);
+
+			memset(&serveraddr, 0, sizeof(serveraddr));
+			serveraddr.sun_family = AF_UNIX;
+			strcpy(serveraddr.sun_path, KVM_LAUNCHAGENT_SOCKET_PATH);
+
+			fprintf(stderr, "[KVM-SETUP] Connecting to LaunchAgent socket: %s\n", KVM_LAUNCHAGENT_SOCKET_PATH);
+			fflush(stderr);
+
+			// Check if socket file exists
+			struct stat st;
+			if (stat(KVM_LAUNCHAGENT_SOCKET_PATH, &st) != 0)
+			{
+				fprintf(stderr, "[KVM-SETUP] WARNING: Socket file does not exist! errno=%d (%s)\n", errno, strerror(errno));
+				fprintf(stderr, "[KVM-SETUP] Is LaunchAgent running? Check: launchctl list | grep mesh\n");
+				fflush(stderr);
+			}
+			else
+			{
+				fprintf(stderr, "[KVM-SETUP] Socket file exists, mode=%o, uid=%d, gid=%d\n",
+					st.st_mode, st.st_uid, st.st_gid);
+				fflush(stderr);
+			}
+
+			if (connect(sock_fd, (struct sockaddr *)&serveraddr, SUN_LEN(&serveraddr)) < 0)
+			{
+				fprintf(stderr, "[KVM-SETUP] FAILED to connect to LaunchAgent socket: errno=%d (%s)\n", errno, strerror(errno));
+				fprintf(stderr, "[KVM-SETUP] Possible causes:\n");
+				fprintf(stderr, "[KVM-SETUP]   1. LaunchAgent is not running\n");
+				fprintf(stderr, "[KVM-SETUP]   2. LaunchAgent has not created the socket yet\n");
+				fprintf(stderr, "[KVM-SETUP]   3. Permission denied to connect\n");
+				fflush(stderr);
+				close(sock_fd);
+				return NULL;
+			}
+
+			fprintf(stderr, "[KVM-SETUP] SUCCESS! Connected to LaunchAgent socket, fd=%d\n", sock_fd);
+			fflush(stderr);
+
+			g_kvm_socket_fd = sock_fd;
+			g_kvm_socket_user = user;
+
+			// Start read thread to receive data from agent
+			fprintf(stderr, "[KVM-SETUP] Creating read thread for socket communication...\n");
+			fflush(stderr);
+			g_socket_read_running = 1;
+			if (pthread_create(&g_socket_read_thread, NULL, kvm_socket_read_thread_func, user) != 0)
+			{
+				fprintf(stderr, "[KVM-SETUP] FAILED to create socket read thread: errno=%d (%s)\n", errno, strerror(errno));
+				fflush(stderr);
+				close(g_kvm_socket_fd);
+				g_kvm_socket_fd = -1;
+				return NULL;
+			}
+
+			fprintf(stderr, "[KVM-SETUP] Read thread created successfully, returning fd=%d\n", g_kvm_socket_fd);
+			fflush(stderr);
+			return (void*)(intptr_t)g_kvm_socket_fd;
+		}
+#else
 		if (g_openFrameMode)
 		{
 			// OpenFrame mode: Reset state BEFORE spawning child so it inherits clean state
@@ -969,6 +1246,7 @@ void* kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler 
 				}
 			}
 		}
+#endif
 		else
 		{
 			// Standard mode: original behavior - just reset g_shutdown
@@ -1021,8 +1299,8 @@ void kvm_relay_reset()
 // Clean up the KVM session.
 void kvm_cleanup()
 {
-	fprintf(stderr, "[KVM] kvm_cleanup() called, g_cleanup_in_progress=%d, g_shutdown=%d, gChildProcess=%p, g_slavekvm=%d, g_openFrameMode=%d\n",
-		g_cleanup_in_progress, g_shutdown, (void*)gChildProcess, g_slavekvm, g_openFrameMode);
+	fprintf(stderr, "[KVM] kvm_cleanup() called, g_cleanup_in_progress=%d, g_shutdown=%d, gChildProcess=%p, g_slavekvm=%d, g_openFrameMode=%d, g_kvm_socket_fd=%d\n",
+		g_cleanup_in_progress, g_shutdown, (void*)gChildProcess, g_slavekvm, g_openFrameMode, g_kvm_socket_fd);
 	fflush(stderr);
 
 	if (g_openFrameMode)
@@ -1038,6 +1316,30 @@ void kvm_cleanup()
 
 		g_shutdown = 1;
 
+#if USE_LAUNCHAGENT_KVM
+		// LaunchAgent socket mode: send pause and keep socket open for reuse
+		if (g_kvm_socket_fd >= 0)
+		{
+			fprintf(stderr, "[KVM] kvm_cleanup() sending pause command via socket (LaunchAgent mode)\n");
+			fflush(stderr);
+			// Send pause command to reduce CPU usage while idle
+			char buffer[5];
+			((unsigned short*)buffer)[0] = (unsigned short)htons((unsigned short)MNG_KVM_PAUSE);
+			((unsigned short*)buffer)[1] = (unsigned short)htons((unsigned short)5);
+			buffer[4] = 1;  // pause = 1
+			kvm_socket_send(buffer, 5);
+
+			// Keep the socket open for reuse on next connection
+			// The LaunchAgent process maintains its TCC permissions
+			fprintf(stderr, "[KVM] kvm_cleanup() keeping socket open for reuse\n");
+			fflush(stderr);
+		}
+		else
+		{
+			fprintf(stderr, "[KVM] kvm_cleanup() no socket to clean up\n");
+			fflush(stderr);
+		}
+#else
 		if (gChildProcess != NULL && g_slavekvm > 0)
 		{
 			// OpenFrame mode: keep the child process alive for reuse
@@ -1069,6 +1371,7 @@ void kvm_cleanup()
 			fprintf(stderr, "[KVM] kvm_cleanup() no child process to clean up\n");
 			fflush(stderr);
 		}
+#endif
 
 		// Reset cleanup guard so next kvm_relay_setup can work
 		g_cleanup_in_progress = 0;

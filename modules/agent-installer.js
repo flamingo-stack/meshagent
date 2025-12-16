@@ -315,7 +315,7 @@ function installService(params)
                     name: options.name,
                     servicePath: svc.appLocation(),
                     startType: 'AUTO_START',
-                    sessionTypes: ['LoginWindow'],
+                    sessionTypes: ['Aqua'],  // Run in user's GUI session for TCC permissions
                     parameters: ['-kvm1']
                 });
             process.stdout.write(' [DONE]\n');
