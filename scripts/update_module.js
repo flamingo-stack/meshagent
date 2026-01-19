@@ -50,31 +50,39 @@ function updateModule(moduleName) {
         newBlock += `\n\tfree(${varName});`;
         cContent = cContent.substring(0, startIdx) + newBlock + cContent.substring(endIdx);
     } else if (moduleName === 'agent-installer') {
-        // Large module with memcpy_s format
-        const varName = '_agentinstaller';
-        // Find and replace the block
-        const blockStartRegex = /char \*_agentinstaller = ILibMemory_Allocate\(\d+, 0, NULL, NULL\);/;
-        const blockEndRegex = /ILibDuktape_AddCompressedModuleEx\(ctx, "agent-installer", _agentinstaller, "[^"]+"\);/;
-        const startMatch = cContent.match(blockStartRegex);
-        const endMatch = cContent.match(blockEndRegex);
-        if (!startMatch || !endMatch) {
-            console.error('Could not find agent-installer block in C file');
-            process.exit(1);
+        // agent-installer uses inline duk_peval_string_noresult format
+        const inlineRegex = /duk_peval_string_noresult\(ctx, "addCompressedModule\('agent-installer', Buffer\.from\('[^']+', 'base64'\), '[^']+'\);"\);/;
+        const inlineMatch = cContent.match(inlineRegex);
+        if (inlineMatch) {
+            // Inline format found - replace it
+            const isoTimestamp = new Date(stat.mtime).toISOString();
+            const newInline = `duk_peval_string_noresult(ctx, "addCompressedModule('agent-installer', Buffer.from('${base64Data}', 'base64'), '${isoTimestamp}');");`;
+            cContent = cContent.replace(inlineRegex, newInline);
+        } else {
+            // Try memcpy_s format
+            const varName = '_agentinstaller';
+            const blockStartRegex = /char \*_agentinstaller = ILibMemory_Allocate\(\d+, 0, NULL, NULL\);/;
+            const blockEndRegex = /ILibDuktape_AddCompressedModuleEx\(ctx, "agent-installer", _agentinstaller, "[^"]+"\);/;
+            const startMatch = cContent.match(blockStartRegex);
+            const endMatch = cContent.match(blockEndRegex);
+            if (!startMatch || !endMatch) {
+                console.error('Could not find agent-installer block in C file (neither inline nor memcpy_s format)');
+                process.exit(1);
+            }
+            const startIdx = cContent.indexOf(startMatch[0]);
+            const endIdx = cContent.indexOf(endMatch[0]) + endMatch[0].length;
+            let newBlock = `char *${varName} = ILibMemory_Allocate(${base64Data.length + 1}, 0, NULL, NULL);`;
+            let offset = 0;
+            const chunkSize = 16000;
+            while (offset < base64Data.length) {
+                const chunk = base64Data.substring(offset, offset + chunkSize);
+                const remaining = base64Data.length - offset;
+                newBlock += `\n\tmemcpy_s(${varName} + ${offset}, ${remaining}, "${chunk}", ${chunk.length});`;
+                offset += chunk.length;
+            }
+            newBlock += `\n\tILibDuktape_AddCompressedModuleEx(ctx, "agent-installer", ${varName}, "${timestamp}");`;
+            cContent = cContent.substring(0, startIdx) + newBlock + cContent.substring(endIdx);
         }
-        const startIdx = cContent.indexOf(startMatch[0]);
-        const endIdx = cContent.indexOf(endMatch[0]) + endMatch[0].length;
-        // Generate new block
-        let newBlock = `char *${varName} = ILibMemory_Allocate(${base64Data.length + 1}, 0, NULL, NULL);`;
-        let offset = 0;
-        const chunkSize = 16000;
-        while (offset < base64Data.length) {
-            const chunk = base64Data.substring(offset, offset + chunkSize);
-            const remaining = base64Data.length - offset;
-            newBlock += `\n\tmemcpy_s(${varName} + ${offset}, ${remaining}, "${chunk}", ${chunk.length});`;
-            offset += chunk.length;
-        }
-        newBlock += `\n\tILibDuktape_AddCompressedModuleEx(ctx, "agent-installer", ${varName}, "${timestamp}");`;
-        cContent = cContent.substring(0, startIdx) + newBlock + cContent.substring(endIdx);
     } else {
         console.error(`Unknown module: ${moduleName}`);
         process.exit(1);

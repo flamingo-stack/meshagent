@@ -49,6 +49,7 @@ limitations under the License.
 #ifdef _POSIX
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <errno.h>
 #endif
 
 #ifdef _OPENBSD
@@ -4033,7 +4034,9 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 {
 	MeshAgentHostContainer *agent = (MeshAgentHostContainer*)user1;
 	ILibChain_Link_SetMetadata(ILibChain_GetCurrentLink(agent->chain), "MeshServer_ControlChannel");
-	
+
+	ILIBLOGMESSAGEX("[RESPONSE] MeshServer_OnResponse called, recvStatus=%d, InterruptFlag=%d", recvStatus, InterruptFlag);
+
 	if (agent->controlChannelRequest != NULL)
 	{
 		ILibLifeTime_Remove(ILibGetBaseTimer(agent->chain), agent->controlChannelRequest);
@@ -4050,10 +4053,10 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 			break;
 		case ILibWebClient_ReceiveStatus_Connection_Established: // New connection established.
 		{
+			ILIBLOGMESSAGEX("[RESPONSE] Connection Established [fd=%d]", ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
 			if (agent->controlChannelDebug != 0)
 			{
 				printf("Control Channel Connection Established [%d]...\n", ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
-				ILIBLOGMESSAGEX("Control Channel Connection Established [%d]...", ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
 			}
 #ifndef MICROSTACK_NOTLS
 			int len;
@@ -4222,17 +4225,13 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 	// If there are no headers, this is a connection error. Log it and try again...
 	if (header == NULL)
 	{
-		if (ILibIsChainBeingDestroyed(agent->chain)) { return; }
+		ILIBLOGMESSAGEX("[RESPONSE] ERROR: Connection failed (header=NULL), InterruptFlag=%d, fd=%d", InterruptFlag, ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
+		if (ILibIsChainBeingDestroyed(agent->chain)) { ILIBLOGMESSAGEX("[RESPONSE] Chain being destroyed, returning"); return; }
 		ILibRemoteLogging_printf(ILibChainGetLogger(ILibWebClient_GetChainFromWebStateObject(WebStateObject)), ILibRemoteLogging_Modules_Agent_GuardPost, ILibRemoteLogging_Flags_VerbosityLevel_1, "Agent Host Container: Mesh Server Connection Error, trying again later.");
 		printf("Mesh Server Connection Error [%d]\n", ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
 
 		agent->autoproxy_status = 0;
-		if (agent->logUpdate != 0) 
-		{
-			sprintf_s(ILibScratchPad, sizeof(ILibScratchPad), "Connection Error [%p, %d, [%d]]...\n", WebStateObject, InterruptFlag, ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
-			ILIBLOGMESSSAGE(ILibScratchPad); 
-		}
-
+		ILIBLOGMESSAGEX("[RESPONSE] Scheduling reconnect via MeshServer_Connect");
 
 		if (agent->multicastServerUrl != NULL) { free(agent->multicastServerUrl); agent->multicastServerUrl = NULL; }
 		MeshServer_Connect(agent);
@@ -4330,20 +4329,23 @@ void MeshServer_ConnectEx(MeshAgentHostContainer *agent)
 	size_t useproxy = 0;
 	char webproxy[1024];
 
+	ILIBLOGMESSAGEX("[CONNECT] MeshServer_ConnectEx called, serverConnectionState=%d", agent->serverConnectionState);
+
 	memset(&meshServer, 0, sizeof(struct sockaddr_in6));
-	if (agent->timerLogging != 0 && agent->retryTimerSet != 0) 
+	if (agent->timerLogging != 0 && agent->retryTimerSet != 0)
 	{
 		agent->retryTimerSet = 0;
-		ILIBLOGMESSAGEX("    >> Retry Timer Elapsed [serverConnectionState: %d, chainState: %d]", agent->serverConnectionState, ILibIsChainBeingDestroyed(agent->chain)); 
+		ILIBLOGMESSAGEX("    >> Retry Timer Elapsed [serverConnectionState: %d, chainState: %d]", agent->serverConnectionState, ILibIsChainBeingDestroyed(agent->chain));
 	}
 
 	// If this is called while we are in any connection state, just leave now.
-	if (agent->serverConnectionState != 0) return;
+	if (agent->serverConnectionState != 0) { ILIBLOGMESSAGEX("[CONNECT] Already in connection state %d, returning", agent->serverConnectionState); return; }
 
-	if (ILibIsChainBeingDestroyed(agent->chain) != 0) { return; }
+	if (ILibIsChainBeingDestroyed(agent->chain) != 0) { ILIBLOGMESSAGEX("[CONNECT] Chain being destroyed, returning"); return; }
 
 	len = ILibSimpleDataStore_Get(agent->masterDb, "MeshServer", ILibScratchPad2, sizeof(ILibScratchPad2));
-	if (len == 0) { printf("No MeshCentral settings found, place .msh file with this executable and restart.\r\n"); ILibRemoteLogging_printf(ILibChainGetLogger(agent->chain), ILibRemoteLogging_Modules_Microstack_Generic, ILibRemoteLogging_Flags_VerbosityLevel_1, "agentcore: MeshServer URI not found"); return; }
+	if (len == 0) { printf("No MeshCentral settings found, place .msh file with this executable and restart.\r\n"); ILIBLOGMESSAGEX("[CONNECT] ERROR: MeshServer URI not found in database"); ILibRemoteLogging_printf(ILibChainGetLogger(agent->chain), ILibRemoteLogging_Modules_Microstack_Generic, ILibRemoteLogging_Flags_VerbosityLevel_1, "agentcore: MeshServer URI not found"); return; }
+	ILIBLOGMESSAGEX("[CONNECT] MeshServer URL from db: %s (len=%d)", ILibScratchPad2, (int)len);
 
 	if (ILibSimpleDataStore_Get(agent->masterDb, "autoproxy", ILibScratchPad, sizeof(ILibScratchPad)) != 0)
 	{
@@ -4660,7 +4662,7 @@ void MeshServer_ConnectEx(MeshAgentHostContainer *agent)
 	{
 		if (useproxy == 0) { strcpy_s(agent->serverip, sizeof(agent->serverip), ILibRemoteLogging_ConvertAddress((struct sockaddr*)&meshServer)); }
 		printf("Connecting %sto: %s\n", useproxy!=0?"(via proxy) ":"", agent->serveruri);
-		if (agent->logUpdate != 0 || agent->controlChannelDebug != 0) { ILIBLOGMESSAGEX("Connecting %sto: %s", useproxy != 0 ? "(via proxy) " : "", agent->serveruri); }
+		ILIBLOGMESSAGEX("[CONNECT] Connecting %sto: %s (IP: %s)", useproxy != 0 ? "(via proxy) " : "", agent->serveruri, agent->serverip);
 
 		ILibWebClient_AddWebSocketRequestHeaders(req, 65535, MeshServer_OnSendOK);
 
@@ -4778,12 +4780,35 @@ void MeshServer_Agent_SelfTest(MeshAgentHostContainer *agent)
 	duk_pop(agent->meshCoreCtx);
 }
 
+// Helper to write directly to log file
+void MeshAgent_DirectLog(const char *format, ...)
+{
+	if (ILibCriticalLogFilename == NULL) return;
+	FILE *f = fopen(ILibCriticalLogFilename, "a");
+	if (f != NULL)
+	{
+		char timeStr[32];
+		time_t now = time(NULL);
+		strftime(timeStr, sizeof(timeStr), "%H:%M:%S", localtime(&now));
+		fprintf(f, "[%s] ", timeStr);
+		va_list args;
+		va_start(args, format);
+		vfprintf(f, format, args);
+		va_end(args);
+		fprintf(f, "\n");
+		fflush(f);
+		fclose(f);
+	}
+}
+
 void MeshServer_Connect(MeshAgentHostContainer *agent)
 {
 	unsigned int timeout;
 
+	MeshAgent_DirectLog("[CONNECT] MeshServer_Connect called, serverConnectionState=%d, retryTime=%d", agent->serverConnectionState, agent->retryTime);
+
 	// If this is called while we are in any connection state, just leave now.
-	if (agent->serverConnectionState != 0) return;
+	if (agent->serverConnectionState != 0) { MeshAgent_DirectLog("[CONNECT] Already in connection state %d, returning", agent->serverConnectionState); return; }
 
 	if (ILibSimpleDataStore_Get(agent->masterDb, "selfTest", NULL, 0) != 0)
 	{
@@ -4848,6 +4873,7 @@ void MeshServer_Connect(MeshAgentHostContainer *agent)
 	if (agent->retryTime == 0)
 	{
 		agent->retryTime = (timeout % 1500) + 500;		// Random value between 500 and 2000
+		ILIBLOGMESSAGEX("[CONNECT] First connect attempt, retryTime=%d", agent->retryTime);
 		MeshServer_ConnectEx(agent);
 	}
 	else
@@ -4863,7 +4889,8 @@ void MeshServer_Connect(MeshAgentHostContainer *agent)
 			delay = agent->retryTime + (timeout % agent->retryTime);		// Random value between current value and double the current value
 		}
 		printf("AutoRetry Connect in %d milliseconds\n", delay);
-		if (agent->timerLogging != 0) { ILIBLOGMESSAGEX(" >> Retry Timer set for %d milliseconds", delay); agent->retryTimerSet = 1; }
+		ILIBLOGMESSAGEX("[CONNECT] Retry scheduled in %d ms", delay);
+		if (agent->timerLogging != 0) { agent->retryTimerSet = 1; }
 		ILibLifeTime_AddEx(ILibGetBaseTimer(agent->chain), agent, delay, (ILibLifeTime_OnCallback)MeshServer_ConnectEx, NULL);
 		agent->retryTime = delay;
 	}
@@ -5266,6 +5293,7 @@ void MeshAgent_Agent_SemaphoreTrack_Sink(char *source, void *user, int init)
 
 int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **param, int parseCommands)
 {
+	MeshAgent_DirectLog("[AGENT] MeshAgent_AgentMode START");
 	int resetNodeId = 0;
 #ifdef WIN32
 	int pLen;
@@ -5332,6 +5360,25 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 			agentHost->openFrameTokenPath = param[ri + 1]; parseCommands = 0;
 			++ri;
 		}
+		// Handle service mode parameters (passed as separate arguments from LaunchDaemon)
+		if (strcmp(param[ri], "--serviceId") == 0 && ((ri + 1) < paramLen))
+		{
+			// Running as service - disable command parsing so agent enters main mode
+			parseCommands = 0;
+			++ri; // Skip the value
+		}
+		if (strcmp(param[ri], "--disableUpdate") == 0 && ((ri + 1) < paramLen))
+		{
+			++ri; // Skip the value
+		}
+		if (strcmp(param[ri], "--appBundle") == 0 && ((ri + 1) < paramLen))
+		{
+			if (strcmp(param[ri + 1], "1") == 0)
+			{
+				agentHost->appBundleMode = 1;
+			}
+			++ri; // Skip the value
+		}
 #ifndef MICROSTACK_NOTLS
 		if (strcmp(param[ri], "-nocertstore") == 0)
 		{
@@ -5361,9 +5408,12 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 	}
 
 	// We are a Mesh Agent
+	MeshAgent_DirectLog("[AGENT] Creating masterDb...");
 	if (agentHost->masterDb == NULL) {
 		char* dbPath = MeshAgent_MakeAbsolutePath(agentHost->exePath, ".db");
+		MeshAgent_DirectLog("[AGENT] dbPath: %s", dbPath);
 		agentHost->masterDb = ILibSimpleDataStore_Create(dbPath);
+		MeshAgent_DirectLog("[AGENT] masterDb created: %p", (void*)agentHost->masterDb);
 	}
 
 	int ixr = 0;
@@ -5400,6 +5450,16 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 		if (strcmp("-upgrade", param[ri]) == 0)
 		{
 			installFlag = 3;
+		}
+
+		// Handle --disableUpdate in separate argument format (from LaunchDaemon plist)
+		if (strcmp(param[ri], "--disableUpdate") == 0 && ((ri + 1) < paramLen))
+		{
+			if (strcmp(param[ri + 1], "1") == 0)
+			{
+				ILibSimpleDataStore_Cached(agentHost->masterDb, "disableUpdate", 13, "1", 1);
+			}
+			++ri; // Skip the value
 		}
 
 		if ((ix = ILibString_IndexOf(param[ri], len, "=", 1)) > 2 && strncmp(param[ri], "--", 2) == 0)
@@ -5456,6 +5516,7 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 	}
 
 #ifdef __APPLE__
+	MeshAgent_DirectLog("[AGENT] TCC check section, fetchstate=%d, installFlag=%d", fetchstate, installFlag);
 	// Spawn TCC check at startup (only if not in install/fetch mode)
 	// The -tccCheck process will check permissions and decide whether to show UI
 	if (fetchstate == 0 && installFlag == 0)
@@ -5621,8 +5682,9 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 		}
 	}
 
+	MeshAgent_DirectLog("[AGENT] Creating httpClientManager...");
 	agentHost->httpClientManager = ILibCreateWebClient(3, agentHost->chain);
-
+	MeshAgent_DirectLog("[AGENT] httpClientManager created: %p", (void*)agentHost->httpClientManager);
 
 	if (agentHost->masterDb != NULL)
 	{
@@ -5659,8 +5721,12 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 #endif
 
 #if !defined(MICROSTACK_NOTLS) || defined(_POSIX)
+	MeshAgent_DirectLog("[AGENT] Creating temporary JS context...");
 	duk_context *tmpCtx = ILibDuktape_ScriptContainer_InitializeJavaScriptEngineEx(0, 0, agentHost->chain, NULL, NULL, agentHost->exePath, NULL, NULL, NULL);
+	MeshAgent_DirectLog("[AGENT] Temp JS context created: %p", (void*)tmpCtx);
+	MeshAgent_DirectLog("[AGENT] Calling linux-pathfix...");
 	duk_peval_string_noresult(tmpCtx, "require('linux-pathfix')();");
+	MeshAgent_DirectLog("[AGENT] linux-pathfix done");
 	int msnlen;
 	char *tmpString;
 
@@ -5712,20 +5778,27 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 		agentHost->displayName = "MeshCentral";
 	}
 
+	MeshAgent_DirectLog("[AGENT] Getting service info for: %s", agentHost->meshServiceName);
 	duk_push_sprintf(tmpCtx, "require('service-manager').manager.getService('%s').isMe();", agentHost->meshServiceName);
 	tmpString = (char*)duk_get_string(tmpCtx, -1);
 
+	MeshAgent_DirectLog("[AGENT] Checking getServiceType...");
 	if (duk_peval_string(tmpCtx, "(function foo() { var f = require('service-manager').manager.getServiceType(); switch(f){case 'procd': return(7); case 'windows': return(10); case 'launchd': return(3); case 'freebsd': return(5); case 'systemd': return(1); case 'init': return(2); case 'upstart': return(4); default: return(0);}})()") == 0)
 	{
 		agentHost->platformType = (MeshAgent_Posix_PlatformTypes)duk_get_int(tmpCtx, -1);
+		MeshAgent_DirectLog("[AGENT] platformType=%d", agentHost->platformType);
 	}
+	MeshAgent_DirectLog("[AGENT] Checking isMe...");
 	if (duk_peval_string(tmpCtx, tmpString) == 0)
 	{
 		agentHost->JSRunningAsService = duk_get_boolean(tmpCtx, -1);
+		MeshAgent_DirectLog("[AGENT] JSRunningAsService=%d", agentHost->JSRunningAsService);
 	}
+	MeshAgent_DirectLog("[AGENT] Checking isRoot...");
 	if (duk_peval_string(tmpCtx, "require('user-sessions').isRoot();") == 0)
 	{
 		agentHost->JSRunningWithAdmin = duk_get_boolean(tmpCtx, -1);
+		MeshAgent_DirectLog("[AGENT] JSRunningWithAdmin=%d", agentHost->JSRunningWithAdmin);
 	}
 
 	if (agentHost->JSRunningAsService == 0 && agentHost->serviceReserved != 0)
@@ -5769,6 +5842,7 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 #endif
 #if !defined(MICROSTACK_NOTLS)
 
+	MeshAgent_DirectLog("[AGENT] MAC address check section, openFrameMode=%d", agentHost->openFrameMode);
 	// In OpenFrame mode, never reset NodeID based on MAC address changes
 	if (!agentHost->openFrameMode && ILibSimpleDataStore_Get(agentHost->masterDb, "skipmaccheck", NULL, 0) == 0)
 	{
@@ -5822,7 +5896,9 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 			}
 		}
 	}
+	MeshAgent_DirectLog("[AGENT] Destroying temp JS context...");
 	Duktape_SafeDestroyHeap(tmpCtx);
+	MeshAgent_DirectLog("[AGENT] Temp JS context destroyed");
 
 	// In OpenFrame mode, never reset NodeID
 	if (agentHost->openFrameMode && resetNodeId == 1)
@@ -5832,11 +5908,19 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 	}
 
 	// Load the mesh agent certificates
-	if ((resetNodeId == 1 || agent_LoadCertificates(agentHost) != 0) && agent_GenerateCertificates(agentHost, NULL) != 0) { printf("Certificate error\r\n"); }
-	if (agent_VerifyMeshCertificates(agentHost) != 0) { printf("Certificate validation error\r\n"); }
+	MeshAgent_DirectLog("[AGENT] Loading certificates, resetNodeId=%d", resetNodeId);
+	if ((resetNodeId == 1 || agent_LoadCertificates(agentHost) != 0) && agent_GenerateCertificates(agentHost, NULL) != 0) { printf("Certificate error\r\n"); MeshAgent_DirectLog("[AGENT] Certificate error!"); }
+	MeshAgent_DirectLog("[AGENT] Verifying certificates...");
+	if (agent_VerifyMeshCertificates(agentHost) != 0) { printf("Certificate validation error\r\n"); MeshAgent_DirectLog("[AGENT] Certificate validation error!"); }
+	MeshAgent_DirectLog("[AGENT] Certificates OK");
 #else
 	printf("TLS support disabled\n");
 #endif
+
+	MeshAgent_DirectLog("[AGENT] parseCommands=%d, paramLen=%d", parseCommands, paramLen);
+	if (paramLen >= 2) {
+		MeshAgent_DirectLog("[AGENT] param[1]=%s", param[1]);
+	}
 
 	// Read the .tag file if present and push it into the database
 	{
@@ -6038,7 +6122,11 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 	else if (options) { exit(EXIT_SUCCESS); }
 #endif
 
-	if (parseCommands == 0 || paramLen == 1 || ((paramLen == 2) && (strcmp(param[1], "run") == 0 || strcmp(param[1], "connect") == 0)))
+	MeshAgent_DirectLog("[AGENT] Checking main condition: parseCommands=%d, paramLen=%d", parseCommands, paramLen);
+	int mainCondition = (parseCommands == 0 || paramLen == 1 || ((paramLen == 2) && (strcmp(param[1], "run") == 0 || strcmp(param[1], "connect") == 0)));
+	MeshAgent_DirectLog("[AGENT] Main condition result: %d (1=enter agent block, 0=skip and return 0)", mainCondition);
+
+	if (mainCondition)
 	{
 #ifdef WIN32
 		char* filePath = MeshAgent_MakeAbsolutePath(agentHost->exePath, ".update.exe");
@@ -6149,7 +6237,8 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 		{
 			ILibIPAddressMonitor_Create(agentHost->chain, MeshAgent_AgentMode_IPAddressChanged_Handler, agentHost);
 		}
-		if (agentHost->localdebugmode == 0) { MeshServer_Connect(agentHost); }
+		MeshAgent_DirectLog("[AGENT] About to call MeshServer_Connect, localdebugmode=%d", agentHost->localdebugmode);
+		if (agentHost->localdebugmode == 0) { MeshServer_Connect(agentHost); MeshAgent_DirectLog("[AGENT] MeshServer_Connect returned"); }
 		else
 		{
 			CoreModuleLen = ILibSimpleDataStore_Get(agentHost->masterDb, "CoreModule", NULL, 0);
@@ -6224,6 +6313,7 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 
 		return 1;
 	}
+	MeshAgent_DirectLog("[AGENT] Main condition was FALSE - returning 0 (will cause ILibStopChain)!");
 	return 0;
 }
 
@@ -6832,15 +6922,83 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 		return 0;
 	}
 
-	char* logPath = MeshAgent_MakeAbsolutePath(agentHost->exePath, ".log");
-	ILibCriticalLogFilename = ILibString_Copy(logPath, 0);
+	// For macOS bundles, create log file next to .app bundle, not inside it
+	// exePath: /path/to/MeshAgent.app/Contents/MacOS/meshagent
+	// logPath: /path/to/meshagent.log
+	{
+		char *appMarker = strstr(agentHost->exePath, ".app/Contents/MacOS/");
+		if (appMarker != NULL)
+		{
+			// Running from bundle - put log next to .app
+			size_t parentLen = appMarker - agentHost->exePath;
+			// Find the parent directory of the .app
+			while (parentLen > 0 && agentHost->exePath[parentLen - 1] != '/') { parentLen--; }
+			if (parentLen > 0) parentLen--; // remove trailing slash
+			sprintf_s(ILibScratchPad2, sizeof(ILibScratchPad2), "%.*s/meshagent.log", (int)parentLen, agentHost->exePath);
+			ILibCriticalLogFilename = ILibString_Copy(ILibScratchPad2, 0);
+		}
+		else
+		{
+			// Not a bundle - use standard path next to binary
+			char* logPath = MeshAgent_MakeAbsolutePath(agentHost->exePath, ".log");
+			ILibCriticalLogFilename = ILibString_Copy(logPath, 0);
+		}
+	}
+	printf("[DEBUG] Log file path: %s\n", ILibCriticalLogFilename);
+	printf("[DEBUG] exePath: %s, appBundleMode: %d\n", agentHost->exePath, agentHost->appBundleMode);
+
+	// Force create log file and write initial entry
+	{
+		FILE *logFile = fopen(ILibCriticalLogFilename, "a");
+		if (logFile != NULL)
+		{
+			fprintf(logFile, "\n[%s] ========== MeshAgent Starting ==========\n", __TIME__);
+			fprintf(logFile, "[%s] exePath: %s\n", __TIME__, agentHost->exePath);
+			fprintf(logFile, "[%s] appBundleMode: %d\n", __TIME__, agentHost->appBundleMode);
+			fflush(logFile);
+			fprintf(logFile, "[%s] CHECKPOINT 1 - before fclose\n", __TIME__);
+			fflush(logFile);
+			fclose(logFile);
+			printf("[DEBUG] Log file created successfully\n");
+		}
+		else
+		{
+			printf("[DEBUG] ERROR: Failed to create log file: %s (errno=%d)\n", ILibCriticalLogFilename, errno);
+		}
+	}
+
+	// Direct log write - test if crash happens after initial log block
+	{
+		FILE *logFile2 = fopen(ILibCriticalLogFilename, "a");
+		if (logFile2) {
+			fprintf(logFile2, "[%s] CHECKPOINT 2 - after Apple block ends\n", __TIME__);
+			fflush(logFile2);
+			fclose(logFile2);
+		}
+	}
 #endif // __APPLE__
+
+	// Direct log outside Apple block
+	if (ILibCriticalLogFilename != NULL) {
+		FILE *logFile3 = fopen(ILibCriticalLogFilename, "a");
+		if (logFile3) {
+			fprintf(logFile3, "[LOG] CHECKPOINT 3 - after #endif APPLE\n");
+			fflush(logFile3);
+			fclose(logFile3);
+		}
+	}
+
+	MeshAgent_DirectLog("[STARTUP] Step 1: Platform init complete");
 
 #ifndef MICROSTACK_NOTLS
 	util_openssl_init();
 #endif
 
+	MeshAgent_DirectLog("[STARTUP] Step 2: OpenSSL init complete");
+
 	ILibChain_OnDestroyEvent_AddHandler(agentHost->chain, MeshAgent_ChainEnd, agentHost);
+
+	MeshAgent_DirectLog("[STARTUP] Step 3: Chain destroy handler added");
 
 #ifdef WIN32
 	x = ILibString_LastIndexOf(param[0], -1, "\\", 1);
@@ -6854,19 +7012,25 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 
 	void *reserved[] = { agentHost, &paramLen, param };
 
+	MeshAgent_DirectLog("[STARTUP] Step 4: Reserved array prepared");
+
 	// Check to see if we are running as just a JavaScript Engine
 	if (agentHost->meshCoreCtx_embeddedScript != NULL || (paramLen >= 2 && ILibString_EndsWith(param[1], -1, ".js", 3) != 0) || (paramLen >= 2 && ILibString_EndsWith(param[1], -1, ".zip", 4) != 0))
-	{ 
+	{
 		// We are acting as a scripting engine
+		MeshAgent_DirectLog("[STARTUP] Entering SCRIPT mode");
 		ILibChain_RunOnMicrostackThreadEx(agentHost->chain, MeshAgent_ScriptMode_Dispatched, reserved);
 		ILibStartChain(agentHost->chain);
-		agentHost->chain = NULL; 
+		agentHost->chain = NULL;
 	}
 	else
 	{
 		// We are acting as an Agent
+		MeshAgent_DirectLog("[STARTUP] Step 5: Entering AGENT mode - dispatching...");
 		ILibChain_RunOnMicrostackThreadEx(agentHost->chain, MeshAgent_AgentMode_Dispatched, reserved);
+		MeshAgent_DirectLog("[STARTUP] Step 6: Starting chain...");
 		ILibStartChain(agentHost->chain);
+		MeshAgent_DirectLog("[STARTUP] Chain exited");
 		agentHost->chain = NULL; // Mesh agent has exited, set the chain to NULL
 
 		// Close the database
