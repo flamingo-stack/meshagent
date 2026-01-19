@@ -48,6 +48,7 @@ limitations under the License.
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <CoreServices/CoreServices.h>
+#include <SystemConfiguration/SystemConfiguration.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -305,7 +306,21 @@ int kvm_init()
 	ILibCriticalLogFilename = "KVMAgent.log";  // -kvm1 is a LaunchAgent, not a slave process
 	int old_height_count = TILE_HEIGHT_COUNT;
 
+	{
+		char tmp[256];
+		int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: kvm_init() called\n");
+		write(STDOUT_FILENO, tmp, tmplen);
+		fsync(STDOUT_FILENO);
+	}
+
 	SCREEN_NUM = CGMainDisplayID();
+
+	{
+		char tmp[256];
+		int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: CGMainDisplayID() returned screen_num=%d\n", SCREEN_NUM);
+		write(STDOUT_FILENO, tmp, tmplen);
+		fsync(STDOUT_FILENO);
+	}
 
 	if (SCREEN_WIDTH > 0)
 	{
@@ -316,6 +331,13 @@ int kvm_init()
 
 	SCREEN_HEIGHT = CGDisplayPixelsHigh(SCREEN_NUM) * SCREEN_SCALE;
 	SCREEN_WIDTH = CGDisplayPixelsWide(SCREEN_NUM) * SCREEN_SCALE;
+
+	{
+		char tmp[256];
+		int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Screen resolution: %dx%d, scale=%d\n", SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_SCALE);
+		write(STDOUT_FILENO, tmp, tmplen);
+		fsync(STDOUT_FILENO);
+	}
 
 	// Some magic numbers.
 	TILE_WIDTH = 32;
@@ -766,12 +788,54 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 
 		signal(SIGTERM, ExitSink);
 	}
+
+	// Check Screen Recording permission BEFORE initializing KVM
+	{
+		char tmp[256];
+		int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Checking Screen Recording permission via CGPreflightScreenCaptureAccess...\n");
+		write(STDOUT_FILENO, tmp, tmplen);
+		fsync(STDOUT_FILENO);
+
+		if (__builtin_available(macOS 10.15, *)) {
+			bool hasPermission = CGPreflightScreenCaptureAccess();
+			tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: CGPreflightScreenCaptureAccess() = %s\n", hasPermission ? "YES (granted)" : "NO (DENIED!)");
+			write(STDOUT_FILENO, tmp, tmplen);
+			fsync(STDOUT_FILENO);
+
+			if (!hasPermission) {
+				tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: WARNING - Screen Recording permission NOT granted! Screen will be BLACK.\n");
+				write(STDOUT_FILENO, tmp, tmplen);
+				fsync(STDOUT_FILENO);
+
+				// Request permission (will show system prompt only once)
+				tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Calling CGRequestScreenCaptureAccess() to prompt user...\n");
+				write(STDOUT_FILENO, tmp, tmplen);
+				fsync(STDOUT_FILENO);
+
+				bool requested = CGRequestScreenCaptureAccess();
+				tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: CGRequestScreenCaptureAccess() returned %s\n", requested ? "YES" : "NO");
+				write(STDOUT_FILENO, tmp, tmplen);
+				fsync(STDOUT_FILENO);
+			}
+		} else {
+			tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: macOS < 10.15, no permission check needed\n");
+			write(STDOUT_FILENO, tmp, tmplen);
+			fsync(STDOUT_FILENO);
+		}
+	}
+
 	// Init the kvm
 	g_messageQ = ILibQueue_Create();
 	if (kvm_init() != 0) { return (void*)-1; }
 
 
 	g_shutdown = 0;
+	{
+		char tmp[256];
+		int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Starting main capture loop...\n");
+		write(STDOUT_FILENO, tmp, tmplen);
+		fsync(STDOUT_FILENO);
+	}
 	pthread_create(&kvmthread, NULL, kvm_mainloopinput, param);
 
 	while (!g_shutdown) 
@@ -865,10 +929,31 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 		}
 
 		//senddebug(screen_num);
+		static int capture_attempt_count = 0;
+		capture_attempt_count++;
+		if (capture_attempt_count <= 3) {
+			char tmp[256];
+			int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Attempting CGDisplayCreateImage (attempt #%d, screen_num=%d)\n", capture_attempt_count, screen_num);
+			write(STDOUT_FILENO, tmp, tmplen);
+			fsync(STDOUT_FILENO);
+		}
+
 		CGImageRef image = CGDisplayCreateImage(screen_num);
+
+		if (capture_attempt_count <= 3) {
+			char tmp[256];
+			int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: CGDisplayCreateImage returned %s\n", image ? "valid image" : "NULL (NO SCREEN RECORDING PERMISSION!)");
+			write(STDOUT_FILENO, tmp, tmplen);
+			fsync(STDOUT_FILENO);
+		}
+
 		//senddebug(99);
-		if (image == NULL) 
+		if (image == NULL)
 		{
+			char tmp[256];
+			int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: FATAL - Screen capture failed! Screen Recording permission is DENIED. g_shutdown=1\n");
+			write(STDOUT_FILENO, tmp, tmplen);
+			fsync(STDOUT_FILENO);
 			g_shutdown = 1;
 			senddebug(0);
 		}
@@ -1016,27 +1101,36 @@ int kvm_create_session(char *companyName, char *meshServiceName, char *serviceID
 	mode_t old_umask;
 	int signal_fd;
 
+	ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION: Starting session creation (serviceID=%s)", serviceID ? serviceID : "NULL");
+
 	// Build dynamic paths based on companyName and meshServiceName
 	// This must be called before checking if session is already active
 	// because paths might not have been built yet
 	if (KVM_Listener_Path == NULL)
 	{
+		ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION: Building dynamic paths...");
 		kvm_build_dynamic_paths(companyName, meshServiceName, serviceID, exePath);
+		ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION: Paths built - socket=%s, queue=%s, signal=%s",
+			KVM_Listener_Path, KVM_Queue_Directory, KVM_Session_Signal_File);
 	}
 
 	// Check if session already active
 	if (KVM_Daemon_Listener_FD != -1)
 	{
+		ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION: Session already active (FD=%d), returning 0", KVM_Daemon_Listener_FD);
 		return 0;  // Already initialized
 	}
 
 	// 1. Create domain socket FIRST (before directory/signal file)
 	// This prevents race condition where -kvm1 starts before socket is ready
+	ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION: Creating listener socket...");
 	if ((KVM_Daemon_Listener_FD = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
 	{
+		ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION_FAIL: socket() failed, errno=%d (%s)", errno, strerror(errno));
 		fprintf(stderr, "KVM: Failed to create listener socket: %s\n", strerror(errno));
 		return -1;
 	}
+	ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION: Socket created, FD=%d", KVM_Daemon_Listener_FD);
 
 	// Set socket to allow world-writable (code signature verification provides security)
 	old_umask = umask(0000);
@@ -1048,14 +1142,17 @@ int kvm_create_session(char *companyName, char *meshServiceName, char *serviceID
 	// Remove old socket file if exists
 	unlink(KVM_Listener_Path);
 
+	ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION: Binding socket to %s...", KVM_Listener_Path);
 	if (bind(KVM_Daemon_Listener_FD, (struct sockaddr *)&serveraddr, SUN_LEN(&serveraddr)) < 0)
 	{
+		ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION_FAIL: bind() failed, errno=%d (%s)", errno, strerror(errno));
 		fprintf(stderr, "KVM: Failed to bind listener socket: %s\n", strerror(errno));
 		close(KVM_Daemon_Listener_FD);
 		KVM_Daemon_Listener_FD = -1;
 		umask(old_umask);
 		return -1;
 	}
+	ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION: Socket bound successfully");
 
 	umask(old_umask);
 
@@ -1063,30 +1160,38 @@ int kvm_create_session(char *companyName, char *meshServiceName, char *serviceID
 	chmod(KVM_Listener_Path, 0777);
 
 	// Listen with backlog of 2 (handles fast-user-switching edge case)
+	ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION: Starting listen() on socket...");
 	if (listen(KVM_Daemon_Listener_FD, 2) < 0)
 	{
+		ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION_FAIL: listen() failed, errno=%d (%s)", errno, strerror(errno));
 		fprintf(stderr, "KVM: Failed to listen on socket: %s\n", strerror(errno));
 		close(KVM_Daemon_Listener_FD);
 		KVM_Daemon_Listener_FD = -1;
 		unlink(KVM_Listener_Path);
 		return -1;
 	}
+	ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION: Socket listening");
 
 	// 2. NOW create queue directory for LaunchAgent QueueDirectories monitoring
 	// Socket is guaranteed ready before -kvm1 can start
+	ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION: Creating queue directory %s...", KVM_Queue_Directory);
 	if (mkdir(KVM_Queue_Directory, 0755) < 0 && errno != EEXIST)
 	{
+		ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION_FAIL: mkdir() failed, errno=%d (%s)", errno, strerror(errno));
 		fprintf(stderr, "KVM: Failed to create queue directory %s: %s\n", KVM_Queue_Directory, strerror(errno));
 		close(KVM_Daemon_Listener_FD);
 		KVM_Daemon_Listener_FD = -1;
 		unlink(KVM_Listener_Path);
 		return -1;
 	}
+	ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION: Queue directory ready");
 
 	// 3. Create signal file to trigger QueueDirectories (directory not empty)
+	ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION: Creating signal file %s...", KVM_Session_Signal_File);
 	signal_fd = open(KVM_Session_Signal_File, O_CREAT | O_WRONLY, 0644);
 	if (signal_fd < 0)
 	{
+		ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION_FAIL: open(signal_file) failed, errno=%d (%s)", errno, strerror(errno));
 		fprintf(stderr, "KVM: Failed to create session signal file: %s\n", strerror(errno));
 		close(KVM_Daemon_Listener_FD);
 		KVM_Daemon_Listener_FD = -1;
@@ -1097,6 +1202,73 @@ int kvm_create_session(char *companyName, char *meshServiceName, char *serviceID
 	write(signal_fd, "1", 1);  // Write something so file is not empty
 	close(signal_fd);
 
+	// 4. Force-restart LaunchAgent to ensure it triggers
+	// This fixes the "stuck at exit 78" issue where LaunchAgent tried to start
+	// before socket was ready and got stuck in failed state (KeepAlive=false)
+	// First try bootstrap (in case agent not loaded), then kickstart -k (force restart)
+	{
+		uid_t console_uid = 0;
+		SCDynamicStoreRef store = SCDynamicStoreCreate(NULL, CFSTR("MeshAgentKVM"), NULL, NULL);
+		if (store != NULL)
+		{
+			CFStringRef userName = SCDynamicStoreCopyConsoleUser(store, &console_uid, NULL);
+			if (userName != NULL) CFRelease(userName);
+			CFRelease(store);
+		}
+		ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION: Got console_uid=%d", console_uid);
+
+		if (console_uid > 0)
+		{
+			const char *svcName = serviceID ? serviceID : "meshagent";
+			char domain[32];
+			char svc_target[64];
+			char plist_path[128];
+
+			snprintf(domain, sizeof(domain), "gui/%d", console_uid);
+			snprintf(svc_target, sizeof(svc_target), "gui/%d/%s-agent", console_uid, svcName);
+			snprintf(plist_path, sizeof(plist_path), "/Library/LaunchAgents/%s-agent.plist", svcName);
+
+			ILIBLOGMESSAGEX("MSG_KVM_LAUNCHAGENT: domain=%s, target=%s, plist=%s", domain, svc_target, plist_path);
+
+			// Step 1: Bootout (fork/exec)
+			ILIBLOGMESSAGEX("MSG_KVM_LAUNCHAGENT: Bootout...");
+			pid_t pid = fork();
+			if (pid == 0) {
+				// Child
+				execl("/bin/launchctl", "launchctl", "bootout", svc_target, NULL);
+				_exit(1);
+			} else if (pid > 0) {
+				int status;
+				waitpid(pid, &status, 0);
+				ILIBLOGMESSAGEX("MSG_KVM_LAUNCHAGENT: Bootout finished, status=%d", WEXITSTATUS(status));
+			}
+
+			// Step 2: Wait 1 second
+			ILIBLOGMESSAGEX("MSG_KVM_LAUNCHAGENT: Waiting 1 second...");
+			sleep(1);
+
+			// Step 3: Bootstrap (fork/exec)
+			ILIBLOGMESSAGEX("MSG_KVM_LAUNCHAGENT: Bootstrap...");
+			pid = fork();
+			if (pid == 0) {
+				// Child
+				execl("/bin/launchctl", "launchctl", "bootstrap", domain, plist_path, NULL);
+				_exit(1);
+			} else if (pid > 0) {
+				int status;
+				waitpid(pid, &status, 0);
+				ILIBLOGMESSAGEX("MSG_KVM_LAUNCHAGENT: Bootstrap finished, status=%d", WEXITSTATUS(status));
+			}
+
+			ILIBLOGMESSAGEX("MSG_KVM_LAUNCHAGENT: Done");
+		}
+		else
+		{
+			ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION: No console user (uid=0), skipping LaunchAgent kickstart");
+		}
+	}
+
+	ILIBLOGMESSAGEX("MSG_KVM_CREATE_SESSION_SUCCESS: Session created, waiting for -kvm1 connection (FD=%d)", KVM_Daemon_Listener_FD);
 	return 0;
 }
 
@@ -1104,15 +1276,20 @@ int kvm_create_session(char *companyName, char *meshServiceName, char *serviceID
 // This causes -kvm1 to exit (directory empty, avoiding QueueDirectories weirdness)
 void kvm_cleanup_session(void)
 {
+	ILIBLOGMESSAGEX("MSG_KVM_CLEANUP_SESSION: Starting session cleanup...");
+
 	// Close and remove socket
 	if (KVM_Daemon_Listener_FD != -1)
 	{
+		ILIBLOGMESSAGEX("MSG_KVM_CLEANUP_SESSION: Closing listener socket FD=%d", KVM_Daemon_Listener_FD);
 		close(KVM_Daemon_Listener_FD);
 		KVM_Daemon_Listener_FD = -1;
 	}
+	ILIBLOGMESSAGEX("MSG_KVM_CLEANUP_SESSION: Removing socket file %s", KVM_Listener_Path);
 	unlink(KVM_Listener_Path);
 
 	// Remove signal file (makes directory empty)
+	ILIBLOGMESSAGEX("MSG_KVM_CLEANUP_SESSION: Removing signal file %s", KVM_Session_Signal_File);
 	unlink(KVM_Session_Signal_File);
 
 	// Clear all contents from directory (equivalent to rm -rf /var/run/meshagent/*)
@@ -1148,8 +1325,11 @@ void kvm_cleanup_session(void)
 	}
 	else if (errno != ENOENT)
 	{
+		ILIBLOGMESSAGEX("MSG_KVM_CLEANUP_SESSION: Warning - failed to open queue directory, errno=%d (%s)", errno, strerror(errno));
 		fprintf(stderr, "KVM: Warning - failed to open queue directory: %s\n", strerror(errno));
 	}
+
+	ILIBLOGMESSAGEX("MSG_KVM_CLEANUP_SESSION: Session cleanup complete");
 }
 
 void* kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler writeHandler, void *reserved, int uid, char *companyName, char *meshServiceName, char *serviceID)
@@ -1165,32 +1345,42 @@ void* kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler 
 
 	int client_fd;
 
+	ILIBLOGMESSAGEX("MSG_KVM_RELAY_SETUP: Starting relay setup (serviceID=%s)", serviceID ? serviceID : "NULL");
+
 	// Create KVM session (directory + signal file + socket)
 	// This triggers QueueDirectories to start -kvm1
 	if (kvm_create_session(companyName, meshServiceName, serviceID, exePath) < 0)
 	{
+		ILIBLOGMESSAGEX("MSG_KVM_RELAY_SETUP_FAIL: kvm_create_session() failed");
 		fprintf(stderr, "KVM: Failed to create session\n");
 		return NULL;
 	}
 
 	// Accept connection from -kvm1 LaunchAgent (triggered by QueueDirectories)
+	ILIBLOGMESSAGEX("MSG_KVM_RELAY_SETUP: Calling accept() - BLOCKING until -kvm1 connects...");
 	client_fd = accept(KVM_Daemon_Listener_FD, NULL, NULL);
 
 	if (client_fd < 0)
 	{
+		ILIBLOGMESSAGEX("MSG_KVM_RELAY_SETUP_FAIL: accept() failed, errno=%d (%s)", errno, strerror(errno));
 		fprintf(stderr, "KVM: Failed to accept connection: %s\n", strerror(errno));
 		kvm_cleanup_session();  // Clean up on failure
 		return NULL;
 	}
 
+	ILIBLOGMESSAGEX("MSG_KVM_RELAY_SETUP: accept() returned, client_fd=%d. Verifying peer codesign...", client_fd);
+
 	// Verify connecting process is legitimate meshagent binary
 	if (!verify_peer_codesign(client_fd))
 	{
+		ILIBLOGMESSAGEX("MSG_KVM_RELAY_SETUP_FAIL: Peer verification FAILED - rejecting connection");
 		fprintf(stderr, "KVM: Peer verification FAILED - rejecting connection\n");
 		close(client_fd);
 		kvm_cleanup_session();  // Clean up on failure
 		return NULL;
 	}
+
+	ILIBLOGMESSAGEX("MSG_KVM_RELAY_SETUP_SUCCESS: Peer verified, returning client_fd=%d", client_fd);
 
 	// Return FD cast as void* for use with ILibAsyncSocket
 	return (void*)(intptr_t)client_fd;
@@ -1230,6 +1420,7 @@ void kvm_relay_reset(void *reserved)
 // Clean up the KVM session.
 void kvm_cleanup()
 {
+	ILIBLOGMESSAGEX("MSG_KVM_CLEANUP: kvm_cleanup() called, setting g_shutdown=1");
 	KvmDebugLog("kvm_cleanup\n");
 	g_shutdown = 1;
 	// DEPRECATED: Process pipe cleanup - no longer used in socket architecture
@@ -1243,7 +1434,9 @@ void kvm_cleanup()
 
 	// Cleanup session resources (directory, signal file, socket)
 	// This triggers -kvm1 to exit (QueueDirectories detects empty directory)
+	ILIBLOGMESSAGEX("MSG_KVM_CLEANUP: Calling kvm_cleanup_session()...");
 	kvm_cleanup_session();
+	ILIBLOGMESSAGEX("MSG_KVM_CLEANUP: kvm_cleanup() complete");
 }
 
 

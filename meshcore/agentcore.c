@@ -1290,8 +1290,11 @@ void ILibDuktape_MeshAgent_DomainSocket_OnDisconnect(ILibAsyncSocket_SocketModul
 {
 	RemoteDesktop_Ptrs *ptrs = (RemoteDesktop_Ptrs*)user;
 
+	ILIBLOGMESSAGEX("MSG_KVM_DOMAIN_SOCKET_DISCONNECT: OnDisconnect called, ptrs=%p", ptrs);
+
 	if (ptrs != NULL && ptrs->ctx != NULL)
 	{
+		ILIBLOGMESSAGEX("MSG_KVM_DOMAIN_SOCKET_DISCONNECT: Sending console text, ending stream...");
 		MeshAgent_sendConsoleText(ptrs->ctx, "KVM Domain Socket Disconnected");
 
 		// NEW ARCHITECTURE: LaunchAgent runs in both LoginWindow and Aqua contexts
@@ -1299,6 +1302,7 @@ void ILibDuktape_MeshAgent_DomainSocket_OnDisconnect(ILibAsyncSocket_SocketModul
 		if (ptrs->stream != NULL)
 		{
 			MeshAgent_sendConsoleText(ptrs->ctx, "KVM session ended");
+			ILIBLOGMESSAGEX("MSG_KVM_DOMAIN_SOCKET_DISCONNECT: Calling DuplexStream_WriteEnd");
 			ILibDuktape_DuplexStream_WriteEnd(ptrs->stream);
 		}
 	}
@@ -1306,30 +1310,38 @@ void ILibDuktape_MeshAgent_DomainSocket_OnDisconnect(ILibAsyncSocket_SocketModul
 	// Clean up
 	if (ptrs != NULL)
 	{
+		ILIBLOGMESSAGEX("MSG_KVM_DOMAIN_SOCKET_DISCONNECT: Cleanup - setting kvmDomainSocketModule=NULL, kvmDomainSocket=0");
 		ptrs->kvmDomainSocketModule = NULL;
 		ptrs->kvmDomainSocket = 0;
 	}
+
+	ILIBLOGMESSAGEX("MSG_KVM_DOMAIN_SOCKET_DISCONNECT: OnDisconnect complete");
 }
 
 void ILibDuktape_MeshAgent_DomainSocket_OnConnect(ILibAsyncSocket_SocketModule socketModule, int Connected, void *user)
 {
 	RemoteDesktop_Ptrs *ptrs = (RemoteDesktop_Ptrs*)user;
 
+	ILIBLOGMESSAGEX("MSG_KVM_DOMAIN_SOCKET_CONNECT: OnConnect called, Connected=%d, ptrs=%p", Connected, ptrs);
+
 	if (Connected == 0)
 	{
 		// Connection failed
+		ILIBLOGMESSAGEX("MSG_KVM_DOMAIN_SOCKET_CONNECT_FAIL: Connection failed");
 		if (ptrs != NULL && ptrs->ctx != NULL)
 		{
 			MeshAgent_sendConsoleText(ptrs->ctx, "KVM Domain Socket Connection Failed");
 		}
 		if (ptrs != NULL && ptrs->stream != NULL)
 		{
+			ILIBLOGMESSAGEX("MSG_KVM_DOMAIN_SOCKET_CONNECT_FAIL: Calling DuplexStream_WriteEnd");
 			ILibDuktape_DuplexStream_WriteEnd(ptrs->stream);
 		}
 	}
 	else
 	{
 		// Connection established (should already be connected when using UseThisSocket)
+		ILIBLOGMESSAGEX("MSG_KVM_DOMAIN_SOCKET_CONNECT_SUCCESS: Connection established");
 		if (ptrs != NULL && ptrs->ctx != NULL)
 		{
 			MeshAgent_sendConsoleText(ptrs->ctx, "KVM Domain Socket Connected");
@@ -1545,35 +1557,53 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 		// Always use domain socket, regardless of console_uid
 		// LaunchAgent handles both LoginWindow (console_uid=0) and Aqua (console_uid!=0) via LimitLoadToSessionType
 
+		ILIBLOGMESSAGEX("MSG_GET_REMOTE_DESKTOP: macOS path - console_uid=%d, serviceID=%s", console_uid, agent->serviceID ? agent->serviceID : "NULL");
+
 		// Spawn TCC check before establishing KVM connection (non-blocking)
 		// The -tccCheck process will check permissions and decide whether to show UI
 		int should_spawn = 1;  // Default: spawn TCC check
 
+		ILIBLOGMESSAGEX("MSG_TCC_CHECK_START: Checking if TCC spawn is needed...");
+
 		// Check if user previously selected "Do not remind me again"
 		int len = ILibSimpleDataStore_Get(agent->masterDb, "tccPermissionsUIDisabled", ILibScratchPad, sizeof(ILibScratchPad));
+		ILIBLOGMESSAGEX("MSG_TCC_CHECK_DB: tccPermissionsUIDisabled lookup returned len=%d", len);
 		if (len > 0 && len < sizeof(ILibScratchPad))
 		{
 			ILibScratchPad[len] = 0;  // Null-terminate
+			ILIBLOGMESSAGEX("MSG_TCC_CHECK_DB_VALUE: tccPermissionsUIDisabled='%s'", ILibScratchPad);
 			if (strcmp(ILibScratchPad, "1") == 0)
 			{
 				should_spawn = 0;
+				ILIBLOGMESSAGEX("MSG_TCC_CHECK_SKIP: User disabled TCC UI reminder");
 			}
 		}
 
 		if (should_spawn)
 		{
+			ILIBLOGMESSAGEX("MSG_TCC_SPAWN: Spawning -tccCheck process, exePath=%s, console_uid=%d", agent->exePath ? agent->exePath : "NULL", console_uid);
 			int tcc_pipe_fd = show_tcc_permissions_window_async(agent->exePath, agent->pipeManager, console_uid);
+			ILIBLOGMESSAGEX("MSG_TCC_SPAWN_RESULT: show_tcc_permissions_window_async returned pipe_fd=%d", tcc_pipe_fd);
 			if (tcc_pipe_fd >= 0) {
 				// Create async monitor to read result from pipe
+				ILIBLOGMESSAGEX("MSG_TCC_MONITOR: Creating TCCPipeMonitor for pipe_fd=%d", tcc_pipe_fd);
 				TCCPipeMonitor_Create(agent->chain, agent->masterDb, tcc_pipe_fd);
+			} else {
+				ILIBLOGMESSAGEX("MSG_TCC_SPAWN_FAILED: Failed to spawn -tccCheck (pipe_fd=%d)", tcc_pipe_fd);
 			}
+		} else {
+			ILIBLOGMESSAGEX("MSG_TCC_SKIP: Not spawning TCC check (should_spawn=0)");
 		}
 
 		// Get the connected FD from kvm_relay_setup (daemon accepts connection from -kvm1)
+		ILIBLOGMESSAGEX("MSG_GET_REMOTE_DESKTOP: Calling kvm_relay_setup() - this will BLOCK until -kvm1 connects...");
 		int client_fd = (int)(intptr_t)kvm_relay_setup(agent->exePath, agent->pipeManager, ILibDuktape_MeshAgent_RemoteDesktop_KVM_WriteSink, ptrs, console_uid, agent->companyName, agent->meshServiceName, agent->serviceID);
+
+		ILIBLOGMESSAGEX("MSG_GET_REMOTE_DESKTOP: kvm_relay_setup() returned client_fd=%d", client_fd);
 
 		if (client_fd > 0)
 		{
+			ILIBLOGMESSAGEX("MSG_GET_REMOTE_DESKTOP: Creating ILibAsyncSocket module for client_fd=%d", client_fd);
 			// Create ILibAsyncSocket module to wrap the FD
 			ptrs->kvmDomainSocketModule = ILibCreateAsyncSocketModuleWithMemory(duk_ctx_chain(ctx), 65535,
 				ILibDuktape_MeshAgent_DomainSocket_OnData,
@@ -1588,10 +1618,12 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 			// Store the FD
 			ptrs->kvmDomainSocket = client_fd;
 
+			ILIBLOGMESSAGEX("MSG_GET_REMOTE_DESKTOP_SUCCESS: Domain socket established, client_fd=%d", client_fd);
 			MeshAgent_sendConsoleText(ctx, "Domain socket connection established");
 		}
 		else
 		{
+			ILIBLOGMESSAGEX("MSG_GET_REMOTE_DESKTOP_FAIL: kvm_relay_setup() failed, client_fd=%d", client_fd);
 			MeshAgent_sendConsoleText(ctx, "Failed to establish domain socket connection");
 			ILibDuktape_DuplexStream_WriteEnd(ptrs->stream);
 		}

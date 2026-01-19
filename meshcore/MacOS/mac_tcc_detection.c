@@ -2,11 +2,15 @@
 #include <sqlite3.h>
 #include <ApplicationServices/ApplicationServices.h>
 #include <CoreGraphics/CoreGraphics.h>
+#include <CoreFoundation/CoreFoundation.h>
 #include <stdio.h>
 #include <unistd.h>
 
 // TCC Database Path
 #define TCC_DB_PATH "/Library/Application Support/com.apple.TCC/TCC.db"
+
+// Forward declaration
+static TCC_PermissionStatus check_screen_recording_via_tcc_db(void);
 
 /**
  * Check Full Disk Access permission
@@ -42,7 +46,77 @@ TCC_PermissionStatus check_accessibility_permission(void) {
 }
 
 /**
- * Check Screen Recording permission
+ * Check Screen Recording permission via TCC database query
+ *
+ * Queries TCC.db directly to check if Screen Recording permission is granted.
+ * This is the most reliable method - updates in real-time when user changes settings.
+ * Requires FDA permission to read TCC.db.
+ *
+ * @return TCC_PERMISSION_GRANTED_USER if granted, TCC_PERMISSION_DENIED otherwise
+ */
+static TCC_PermissionStatus check_screen_recording_via_tcc_db(void) {
+    sqlite3 *db = NULL;
+    sqlite3_stmt *stmt = NULL;
+    TCC_PermissionStatus result = TCC_PERMISSION_DENIED;
+
+    // Get our bundle identifier using CoreFoundation (pure C)
+    CFBundleRef mainBundle = CFBundleGetMainBundle();
+    if (!mainBundle) {
+        return TCC_PERMISSION_DENIED;
+    }
+
+    CFStringRef bundleIdRef = CFBundleGetIdentifier(mainBundle);
+    if (!bundleIdRef) {
+        // No bundle ID - can't query TCC.db
+        return TCC_PERMISSION_DENIED;
+    }
+
+    // Convert CFString to C string
+    char bundleIdCStr[256];
+    if (!CFStringGetCString(bundleIdRef, bundleIdCStr, sizeof(bundleIdCStr), kCFStringEncodingUTF8)) {
+        return TCC_PERMISSION_DENIED;
+    }
+
+    // Open TCC.db
+    int rc = sqlite3_open_v2(TCC_DB_PATH, &db, SQLITE_OPEN_READONLY, NULL);
+    if (rc != SQLITE_OK) {
+        // Can't open TCC.db (no FDA)
+        return TCC_PERMISSION_DENIED;
+    }
+
+    // Query for Screen Recording permission
+    // auth_value: 0 = denied, 2 = allowed
+    const char *sql = "SELECT auth_value FROM access WHERE service='kTCCServiceScreenCapture' AND client=?";
+
+    rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        sqlite3_close(db);
+        return TCC_PERMISSION_DENIED;
+    }
+
+    // Bind bundle ID parameter
+    sqlite3_bind_text(stmt, 1, bundleIdCStr, -1, SQLITE_STATIC);
+
+    // Execute query
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        int auth_value = sqlite3_column_int(stmt, 0);
+        // auth_value 2 = allowed by user
+        // auth_value 0 = denied
+        if (auth_value == 2) {
+            result = TCC_PERMISSION_GRANTED_USER;
+        }
+    }
+    // If no row found, permission not yet requested (DENIED)
+
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+
+    return result;
+}
+
+/**
+ * Check Screen Recording permission (legacy method via window list)
  *
  * Uses CGWindowListCopyWindowInfo to check if we can see window names
  * from other processes. This method updates in REAL-TIME without requiring
@@ -55,7 +129,7 @@ TCC_PermissionStatus check_accessibility_permission(void) {
  * This is the industry-standard approach used by Splashtop, TeamViewer, etc.
  * Requires macOS 10.15+
  */
-TCC_PermissionStatus check_screen_recording_permission(void) {
+static TCC_PermissionStatus check_screen_recording_via_window_list(void) {
     pid_t currentPID = getpid();
 
     // Get list of all on-screen windows
@@ -119,6 +193,27 @@ TCC_PermissionStatus check_screen_recording_permission(void) {
     }
 
     return hasPermission ? TCC_PERMISSION_GRANTED_USER : TCC_PERMISSION_DENIED;
+}
+
+/**
+ * Check Screen Recording permission
+ *
+ * Primary method: Query TCC.db directly (requires FDA)
+ * Fallback: Use window list method if TCC.db query fails
+ *
+ * @return TCC_PERMISSION_GRANTED_USER if granted, TCC_PERMISSION_DENIED otherwise
+ */
+TCC_PermissionStatus check_screen_recording_permission(void) {
+    // Try TCC.db query first (most reliable, real-time updates)
+    TCC_PermissionStatus result = check_screen_recording_via_tcc_db();
+
+    // If TCC.db method returned GRANTED, we're done
+    if (result == TCC_PERMISSION_GRANTED_USER) {
+        return result;
+    }
+
+    // Fallback to window list method (in case TCC.db query failed or no FDA yet)
+    return check_screen_recording_via_window_list();
 }
 
 /**

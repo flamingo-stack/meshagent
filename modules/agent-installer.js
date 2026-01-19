@@ -2468,6 +2468,17 @@ function uninstallServiceUnified(params) {
             logger.error('Failed to clean up plists: ' + (e.message || e));
         }
 
+        // Reset TCC permissions using tccutil via shell
+        process.stdout.write('Resetting TCC permissions for: ' + serviceId + '\n');
+        var tccChild = require('child_process').execFile('/bin/sh', ['sh']);
+        tccChild.stdout.on('data', function(d) { process.stdout.write(d); });
+        tccChild.stderr.on('data', function(d) { process.stdout.write(d); });
+        tccChild.stdin.write('tccutil reset ScreenCapture ' + serviceId + '\n');
+        tccChild.stdin.write('tccutil reset Accessibility ' + serviceId + '\n');
+        tccChild.stdin.write('tccutil reset SystemPolicyAllFiles ' + serviceId + '\n');
+        tccChild.stdin.end();
+        tccChild.waitExit();
+
         // DISABLED: Legacy diagnostic service cleanup
         // No code in the codebase creates this "Diagnostic" service
         // Keeping commented for reference but not actively checking
@@ -2485,23 +2496,37 @@ function uninstallServiceUnified(params) {
         }
         */
 
-        // Remove data files if requested
-        if (deleteData) {
-            logger.info('Deleting agent data');
+        // Always clean up all agent files on uninstall
+        logger.info('Cleaning up agent files');
+        try {
+            deleteInstallationFiles(installPath, true);
+            logger.info('Agent files cleaned up');
+        } catch (e) {
+            logger.error('Failed to clean up agent files: ' + (e.message || e));
+        }
+
+        // Remove working directory recursively if it still exists
+        if (fs.existsSync(installPath)) {
             try {
-                deleteInstallationFiles(installPath, true);
-                logger.info('Agent data deleted');
+                removeDirectoryRecursive(installPath);
+                logger.info('Removed installation directory: ' + installPath);
             } catch (e) {
-                logger.error('Failed to delete agent data: ' + (e.message || e));
+                logger.warn('Could not remove installation directory: ' + (e.message || e));
             }
         }
 
-        // Remove working directory (if not already removed by deleteData)
-        if (fs.existsSync(installPath)) {
+        // For default path, also clean up parent mesh_services directory if empty
+        var defaultBasePath = '/usr/local/mesh_services/';
+        if (installPath.startsWith(defaultBasePath)) {
             try {
-                fs.rmdirSync(installPath);
+                // Try to remove mesh_services if empty
+                var remaining = fs.readdirSync(defaultBasePath);
+                if (remaining.length === 0) {
+                    fs.rmdirSync(defaultBasePath);
+                    logger.info('Removed empty parent directory: ' + defaultBasePath);
+                }
             } catch (e) {
-                // Directory may not be empty - that's okay
+                // Parent directory not empty or doesn't exist - that's okay
             }
         }
     } else {

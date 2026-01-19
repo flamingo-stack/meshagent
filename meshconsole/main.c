@@ -718,32 +718,30 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 #endif
 
 #if defined(__APPLE__) && defined(_LINKVM)
-	// TODO: Clean up stale KVM session files from previous crash/unclean shutdown
-	// Now that paths are dynamic based on companyName.meshServiceName, we need to either:
-	// 1. Read companyName/meshServiceName early to build correct paths for cleanup
-	// 2. Use glob patterns to clean up all matching files (/tmp/*-kvm.sock, /var/run/*/session-active)
-	// 3. Move cleanup to after database is loaded in MeshAgent_Start
-	// For now, skipping cleanup - each serviceId has its own paths and won't conflict
-	/*
-	unlink("/tmp/meshagent-kvm.sock");
+	// Clean up stale KVM session files from previous crash/unclean shutdown
+	// This prevents QueueDirectories from triggering LaunchAgent before socket is ready
+	// FIX: Without this cleanup, reinstall/upgrade leaves stale files which causes
+	// LaunchAgent to trigger immediately on bootstrap, fail to connect, and get stuck
+	printf("[DAEMON] Cleaning up stale KVM session files...\n");
+
+	unlink("/tmp/meshagent.sock");
 	unlink("/var/run/meshagent/session-active");
 
 	// Clear all contents from /var/run/meshagent but keep the directory itself
-	// This avoids QueueDirectories weirdness while cleaning up stale files
 	DIR *dir = opendir("/var/run/meshagent");
 	if (dir != NULL)
 	{
 		struct dirent *entry;
 		char filepath[PATH_MAX];
-		
+
 		while ((entry = readdir(dir)) != NULL)
 		{
 			// Skip . and .. entries
 			if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
 				continue;
-				
+
 			snprintf(filepath, sizeof(filepath), "/var/run/meshagent/%s", entry->d_name);
-			
+
 			if (entry->d_type == DT_DIR)
 			{
 				// Recursively remove subdirectory - this shouldn't happen but handle it
@@ -758,9 +756,9 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 			}
 		}
 		closedir(dir);
+		printf("[DAEMON] KVM session cleanup complete\n");
 	}
 	// Errors are ignored - files might not exist and that's fine
-	*/
 #endif
 
 	if (argc > 2 && strcasecmp(argv[1], "-faddr") == 0)
