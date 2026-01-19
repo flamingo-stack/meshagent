@@ -1,0 +1,193 @@
+name: Build OpenSSL BSD
+
+on:
+  workflow_dispatch:
+    inputs:
+      openssl_version:
+        description: 'OpenSSL version to build'
+        required: false
+        default: '3.5.4'
+
+jobs:
+  build-freebsd:
+    runs-on: ubuntu-latest
+
+    name: Build FreeBSD x86-64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build OpenSSL in FreeBSD VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: '14.1'
+          usesh: true
+          prepare: |
+            pkg install -y perl5 gmake
+          run: |
+            VERSION="${{ github.event.inputs.openssl_version || '3.5.4' }}"
+            BUILD_DIR="openssl-build-freebsd"
+
+            # Download OpenSSL source
+            fetch "https://github.com/openssl/openssl/releases/download/openssl-$VERSION/openssl-$VERSION.tar.gz"
+            tar -xzf "openssl-$VERSION.tar.gz"
+            mv "openssl-$VERSION" "$BUILD_DIR"
+            rm "openssl-$VERSION.tar.gz"
+
+            # Build OpenSSL
+            cd "$BUILD_DIR"
+            ./Configure BSD-x86_64 \
+              no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic \
+              no-threads no-dso no-shared no-asm no-rc5 no-idea \
+              no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast \
+              no-md2 no-mdc2 \
+              --release
+
+            gmake -j$(sysctl -n hw.ncpu) build_libs
+
+            # Copy libraries
+            mkdir -p ../openssl-bsd-output/freebsd_x86-64
+            cp libssl.a libcrypto.a ../openssl-bsd-output/freebsd_x86-64/
+
+            echo "Build complete for FreeBSD x86-64"
+            ls -lh ../openssl-bsd-output/freebsd_x86-64/
+
+      - name: Upload FreeBSD artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openssl-freebsd-x86-64
+          path: openssl-bsd-output/freebsd_x86-64/*.a
+          retention-days: 30
+
+  build-openbsd:
+    runs-on: ubuntu-latest
+
+    name: Build OpenBSD x86-64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build OpenSSL in OpenBSD VM
+        uses: vmactions/openbsd-vm@v1
+        with:
+          release: '7.8'
+          usesh: true
+          prepare: |
+            pkg_add perl gmake
+          run: |
+            VERSION="${{ github.event.inputs.openssl_version || '3.5.4' }}"
+            BUILD_DIR="openssl-build-openbsd"
+
+            # Download OpenSSL source
+            ftp -o "openssl-$VERSION.tar.gz" "https://github.com/openssl/openssl/releases/download/openssl-$VERSION/openssl-$VERSION.tar.gz"
+            tar -xzf "openssl-$VERSION.tar.gz"
+            mv "openssl-$VERSION" "$BUILD_DIR"
+            rm "openssl-$VERSION.tar.gz"
+
+            # Build OpenSSL
+            cd "$BUILD_DIR"
+            ./Configure BSD-x86_64 \
+              no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic \
+              no-threads no-dso no-shared no-asm no-rc5 no-idea \
+              no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast \
+              no-md2 no-mdc2 \
+              --release
+
+            /usr/local/bin/gmake -j$(sysctl -n hw.ncpu) build_libs
+
+            # Copy libraries
+            mkdir -p ../openssl-bsd-output/openbsd_x86-64
+            cp libssl.a libcrypto.a ../openssl-bsd-output/openbsd_x86-64/
+
+            echo "Build complete for OpenBSD x86-64"
+            ls -lh ../openssl-bsd-output/openbsd_x86-64/
+
+      - name: Upload OpenBSD artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openssl-openbsd-x86-64
+          path: openssl-bsd-output/openbsd_x86-64/*.a
+          retention-days: 30
+
+  combine-artifacts:
+    needs: [build-freebsd, build-openbsd]
+    runs-on: ubuntu-latest
+    name: Combine all BSD builds
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Combine into single structure
+        run: |
+          mkdir -p openssl-bsd-libs/freebsd_x86-64
+          mkdir -p openssl-bsd-libs/openbsd_x86-64
+
+          # Copy all libraries to their respective BSD folders
+          cp artifacts/openssl-freebsd-x86-64/*.a openssl-bsd-libs/freebsd_x86-64/ || true
+          cp artifacts/openssl-openbsd-x86-64/*.a openssl-bsd-libs/openbsd_x86-64/ || true
+
+          # Display results
+          echo "=== Build Results ==="
+          find openssl-bsd-libs -type f -exec ls -lh {} \;
+
+      - name: Upload combined artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openssl-3.5.4-bsd-all
+          path: openssl-bsd-libs/
+          retention-days: 90
+
+      - name: Create build report
+        run: |
+          cat > BUILD_REPORT.md << 'EOF'
+          # OpenSSL 3.5.4 BSD Build Report
+
+          ## Build Date
+          $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
+          ## BSD Variants Built
+          - **FreeBSD 14.1** (x86-64)
+          - **OpenBSD 7.5** (x86-64)
+
+          ## Libraries Created
+
+          ### FreeBSD x86-64
+          $(ls -lh openssl-bsd-libs/freebsd_x86-64/*.a 2>/dev/null || echo "No files")
+
+          ### OpenBSD x86-64
+          $(ls -lh openssl-bsd-libs/openbsd_x86-64/*.a 2>/dev/null || echo "No files")
+
+          ## Build Configuration
+          All builds use identical OpenSSL configure options:
+          ```
+          no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic
+          no-threads no-dso no-shared no-asm no-rc5 no-idea
+          no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast
+          no-md2 no-mdc2
+          ```
+
+          ## Compiler
+          - FreeBSD: Clang (system default)
+          - OpenBSD: Clang (system default)
+
+          ## Build Method
+          - Built in native VMs using GitHub Actions vmactions
+          - FreeBSD 14.1 VM
+          - OpenBSD 7.5 VM
+
+          ## GitHub Actions Workflow
+          Built using: `.github/workflows/build-openssl-bsd.yml`
+
+          EOF
+
+      - name: Upload build report
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-report-bsd
+          path: BUILD_REPORT.md
+          retention-days: 90
