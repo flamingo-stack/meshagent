@@ -218,6 +218,9 @@ jobs:
     name: "Create Release"
     needs: [build_client, create_universal_macos]
     runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      inputs.version != ''
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -227,13 +230,6 @@ jobs:
         with:
           path: release-artifacts
         continue-on-error: true
-
-      - name: Download existing release artifacts
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p final-artifacts/clients
-          gh release download latest --pattern "*.tar.gz" --pattern "*.zip" --dir final-artifacts/clients || true
 
       - name: Prepare release artifacts
         run: |
@@ -264,16 +260,12 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.version || 'latest' }}
-          name: "🦩 ${{ inputs.version || 'latest' }}"
+          tag_name: ${{ inputs.version }}
+          name: "🦩 ${{ inputs.version }}"
           draft: false
-          prerelease: ${{ github.event_name == 'push' }}
+          prerelease: false
           token: ${{ secrets.GITHUB_TOKEN }}
           body_path: RELEASE_HEADER.md
           files: |
             final-artifacts/clients/*.zip
             final-artifacts/clients/*.tar.gz
-
-      - name: Force update latest tag
-        if: ${{ github.event_name == 'push' }}
-        run: git tag -f latest && git push -f origin latest
