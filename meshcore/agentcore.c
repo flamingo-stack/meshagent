@@ -1228,7 +1228,6 @@ void ILibDuktape_MeshAgent_DomainSocket_OnData(ILibAsyncSocket_SocketModule sock
 
 	static int frame_count = 0;
 	if (++frame_count % 1000 == 0) {
-		printf("KVM: OnData received data (bufferLen=%d, total frames=%d)\n", bufferLen, frame_count);
 		fflush(stdout);
 	}
 
@@ -1293,11 +1292,8 @@ void ILibDuktape_MeshAgent_DomainSocket_OnDisconnect(ILibAsyncSocket_SocketModul
 {
 	RemoteDesktop_Ptrs *ptrs = (RemoteDesktop_Ptrs*)user;
 
-	ILIBLOGMESSAGEX("MSG_KVM_DOMAIN_SOCKET_DISCONNECT: OnDisconnect called, ptrs=%p", ptrs);
-
 	if (ptrs != NULL && ptrs->ctx != NULL)
 	{
-		ILIBLOGMESSAGEX("MSG_KVM_DOMAIN_SOCKET_DISCONNECT: Sending console text, ending stream...");
 		MeshAgent_sendConsoleText(ptrs->ctx, "KVM Domain Socket Disconnected");
 
 		// NEW ARCHITECTURE: LaunchAgent runs in both LoginWindow and Aqua contexts
@@ -1305,7 +1301,6 @@ void ILibDuktape_MeshAgent_DomainSocket_OnDisconnect(ILibAsyncSocket_SocketModul
 		if (ptrs->stream != NULL)
 		{
 			MeshAgent_sendConsoleText(ptrs->ctx, "KVM session ended");
-			ILIBLOGMESSAGEX("MSG_KVM_DOMAIN_SOCKET_DISCONNECT: Calling DuplexStream_WriteEnd");
 			ILibDuktape_DuplexStream_WriteEnd(ptrs->stream);
 		}
 	}
@@ -1313,38 +1308,31 @@ void ILibDuktape_MeshAgent_DomainSocket_OnDisconnect(ILibAsyncSocket_SocketModul
 	// Clean up
 	if (ptrs != NULL)
 	{
-		ILIBLOGMESSAGEX("MSG_KVM_DOMAIN_SOCKET_DISCONNECT: Cleanup - setting kvmDomainSocketModule=NULL, kvmDomainSocket=0");
 		ptrs->kvmDomainSocketModule = NULL;
 		ptrs->kvmDomainSocket = 0;
 	}
-
-	ILIBLOGMESSAGEX("MSG_KVM_DOMAIN_SOCKET_DISCONNECT: OnDisconnect complete");
 }
 
 void ILibDuktape_MeshAgent_DomainSocket_OnConnect(ILibAsyncSocket_SocketModule socketModule, int Connected, void *user)
 {
 	RemoteDesktop_Ptrs *ptrs = (RemoteDesktop_Ptrs*)user;
 
-	ILIBLOGMESSAGEX("MSG_KVM_DOMAIN_SOCKET_CONNECT: OnConnect called, Connected=%d, ptrs=%p", Connected, ptrs);
 
 	if (Connected == 0)
 	{
 		// Connection failed
-		ILIBLOGMESSAGEX("MSG_KVM_DOMAIN_SOCKET_CONNECT_FAIL: Connection failed");
 		if (ptrs != NULL && ptrs->ctx != NULL)
 		{
 			MeshAgent_sendConsoleText(ptrs->ctx, "KVM Domain Socket Connection Failed");
 		}
 		if (ptrs != NULL && ptrs->stream != NULL)
 		{
-			ILIBLOGMESSAGEX("MSG_KVM_DOMAIN_SOCKET_CONNECT_FAIL: Calling DuplexStream_WriteEnd");
 			ILibDuktape_DuplexStream_WriteEnd(ptrs->stream);
 		}
 	}
 	else
 	{
 		// Connection established (should already be connected when using UseThisSocket)
-		ILIBLOGMESSAGEX("MSG_KVM_DOMAIN_SOCKET_CONNECT_SUCCESS: Connection established");
 		if (ptrs != NULL && ptrs->ctx != NULL)
 		{
 			MeshAgent_sendConsoleText(ptrs->ctx, "KVM Domain Socket Connected");
@@ -1560,53 +1548,40 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 		// Always use domain socket, regardless of console_uid
 		// LaunchAgent handles both LoginWindow (console_uid=0) and Aqua (console_uid!=0) via LimitLoadToSessionType
 
-		ILIBLOGMESSAGEX("MSG_GET_REMOTE_DESKTOP: macOS path - console_uid=%d, serviceID=%s", console_uid, agent->serviceID ? agent->serviceID : "NULL");
 
 		// Spawn TCC check before establishing KVM connection (non-blocking)
 		// The -tccCheck process will check permissions and decide whether to show UI
 		int should_spawn = 1;  // Default: spawn TCC check
 
-		ILIBLOGMESSAGEX("MSG_TCC_CHECK_START: Checking if TCC spawn is needed...");
 
 		// Check if user previously selected "Do not remind me again"
 		int len = ILibSimpleDataStore_Get(agent->masterDb, "tccPermissionsUIDisabled", ILibScratchPad, sizeof(ILibScratchPad));
-		ILIBLOGMESSAGEX("MSG_TCC_CHECK_DB: tccPermissionsUIDisabled lookup returned len=%d", len);
 		if (len > 0 && len < sizeof(ILibScratchPad))
 		{
 			ILibScratchPad[len] = 0;  // Null-terminate
-			ILIBLOGMESSAGEX("MSG_TCC_CHECK_DB_VALUE: tccPermissionsUIDisabled='%s'", ILibScratchPad);
 			if (strcmp(ILibScratchPad, "1") == 0)
 			{
 				should_spawn = 0;
-				ILIBLOGMESSAGEX("MSG_TCC_CHECK_SKIP: User disabled TCC UI reminder");
 			}
 		}
 
 		if (should_spawn)
 		{
-			ILIBLOGMESSAGEX("MSG_TCC_SPAWN: Spawning -tccCheck process, exePath=%s, console_uid=%d", agent->exePath ? agent->exePath : "NULL", console_uid);
 			int tcc_pipe_fd = show_tcc_permissions_window_async(agent->exePath, agent->pipeManager, console_uid);
-			ILIBLOGMESSAGEX("MSG_TCC_SPAWN_RESULT: show_tcc_permissions_window_async returned pipe_fd=%d", tcc_pipe_fd);
 			if (tcc_pipe_fd >= 0) {
 				// Create async monitor to read result from pipe
-				ILIBLOGMESSAGEX("MSG_TCC_MONITOR: Creating TCCPipeMonitor for pipe_fd=%d", tcc_pipe_fd);
 				TCCPipeMonitor_Create(agent->chain, agent->masterDb, tcc_pipe_fd);
 			} else {
-				ILIBLOGMESSAGEX("MSG_TCC_SPAWN_FAILED: Failed to spawn -tccCheck (pipe_fd=%d)", tcc_pipe_fd);
 			}
 		} else {
-			ILIBLOGMESSAGEX("MSG_TCC_SKIP: Not spawning TCC check (should_spawn=0)");
 		}
 
 		// Get the connected FD from kvm_relay_setup (daemon accepts connection from -kvm1)
-		ILIBLOGMESSAGEX("MSG_GET_REMOTE_DESKTOP: Calling kvm_relay_setup() - this will BLOCK until -kvm1 connects...");
 		int client_fd = (int)(intptr_t)kvm_relay_setup(agent->exePath, agent->pipeManager, ILibDuktape_MeshAgent_RemoteDesktop_KVM_WriteSink, ptrs, console_uid, agent->companyName, agent->meshServiceName, agent->serviceID);
 
-		ILIBLOGMESSAGEX("MSG_GET_REMOTE_DESKTOP: kvm_relay_setup() returned client_fd=%d", client_fd);
 
 		if (client_fd > 0)
 		{
-			ILIBLOGMESSAGEX("MSG_GET_REMOTE_DESKTOP: Creating ILibAsyncSocket module for client_fd=%d", client_fd);
 			// Create ILibAsyncSocket module to wrap the FD
 			ptrs->kvmDomainSocketModule = ILibCreateAsyncSocketModuleWithMemory(duk_ctx_chain(ctx), 65535,
 				ILibDuktape_MeshAgent_DomainSocket_OnData,
@@ -1621,12 +1596,10 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 			// Store the FD
 			ptrs->kvmDomainSocket = client_fd;
 
-			ILIBLOGMESSAGEX("MSG_GET_REMOTE_DESKTOP_SUCCESS: Domain socket established, client_fd=%d", client_fd);
 			MeshAgent_sendConsoleText(ctx, "Domain socket connection established");
 		}
 		else
 		{
-			ILIBLOGMESSAGEX("MSG_GET_REMOTE_DESKTOP_FAIL: kvm_relay_setup() failed, client_fd=%d", client_fd);
 			MeshAgent_sendConsoleText(ctx, "Failed to establish domain socket connection");
 			ILibDuktape_DuplexStream_WriteEnd(ptrs->stream);
 		}
@@ -2267,7 +2240,6 @@ duk_ret_t ILibDuktape_MeshAgent_AuthToken(duk_context *ctx)
 	MeshAgentHostContainer *agent = (MeshAgentHostContainer*)duk_get_pointer(ctx, -1);
 
 	if (!agent->openFrameMode) {
-		printf("JWT token is only available in openframe mode\n");
 		duk_push_string(ctx, NULL);
 		return 1;
 	}
@@ -2277,17 +2249,15 @@ duk_ret_t ILibDuktape_MeshAgent_AuthToken(duk_context *ctx)
 		char* extracted_token = extract_token(agent->openFrameSecret, agent->openFrameTokenPath);
 		if (extracted_token != NULL) {
 			duk_push_string(ctx, extracted_token);
-			free(extracted_token);  // Free the allocated memory
+			free(extracted_token);
 			return 1;
 		}
 		else {
-			printf("Failed to extract token\n");
 			duk_push_string(ctx, NULL);
 			return 1;
 		}
 	}
 	else {
-		printf("Openframe secret is not available\n");
 		duk_push_string(ctx, NULL);
 		return 1;
 	}
@@ -2511,18 +2481,20 @@ char* MeshAgent_MakeAbsolutePathEx(char *basePath, char *localPath, int escapeBa
 }
 
 // TODO: make as external cmd arg and configure from openframe agent
-// Build path to CoreModule.js for OpenFrame mode using platform-specific path separators
-// Returns: Path to CoreModule.js in the same directory as the executable
-// Note: Uses ILibScratchPad for the result
+// Build path to CoreModule.js for OpenFrame mode with fallback logic:
+// 1. First try next to the executable
+// 2. If not found and we're in a .app bundle, try next to the .app
+// Returns: Path to CoreModule.js (uses ILibScratchPad for the result)
 static char* buildOpenframeCoreModulePath(const char* exePath)
 {
 	char* lastSep;
-	
+	FILE* testFile;
+
 #ifdef WIN32
 	lastSep = strrchr(exePath, '\\');
 	if (lastSep != NULL)
 	{
-		snprintf(ILibScratchPad, sizeof(ILibScratchPad), "%.*s\\CoreModule.js", 
+		snprintf(ILibScratchPad, sizeof(ILibScratchPad), "%.*s\\CoreModule.js",
 			(int)(lastSep - exePath), exePath);
 	}
 	else
@@ -2530,18 +2502,48 @@ static char* buildOpenframeCoreModulePath(const char* exePath)
 		strcpy_s(ILibScratchPad, sizeof(ILibScratchPad), "CoreModule.js");
 	}
 #else
+	// First try: next to the executable
 	lastSep = strrchr(exePath, '/');
 	if (lastSep != NULL)
 	{
-		snprintf(ILibScratchPad, sizeof(ILibScratchPad), "%.*s/CoreModule.js", 
+		snprintf(ILibScratchPad, sizeof(ILibScratchPad), "%.*s/CoreModule.js",
 			(int)(lastSep - exePath), exePath);
 	}
 	else
 	{
 		strcpy_s(ILibScratchPad, sizeof(ILibScratchPad), "CoreModule.js");
 	}
+
+	// Check if file exists at first location
+	testFile = fopen(ILibScratchPad, "rb");
+	if (testFile != NULL)
+	{
+		fclose(testFile);
+		return ILibScratchPad;
+	}
+
+	// Second try: if we're in a .app bundle, look next to the .app
+	// Path pattern: /path/to/App.app/Contents/MacOS/binary
+	char* appMarker = strstr(exePath, ".app/Contents/MacOS/");
+	if (appMarker != NULL)
+	{
+		// Find the start of .app (go back to find the app name)
+		char* appStart = appMarker;
+		while (appStart > exePath && *(appStart - 1) != '/') appStart--;
+
+		// Build path: /path/to/CoreModule.js (next to .app)
+		snprintf(ILibScratchPad, sizeof(ILibScratchPad), "%.*s/CoreModule.js",
+			(int)(appStart - exePath - 1), exePath);
+
+		testFile = fopen(ILibScratchPad, "rb");
+		if (testFile != NULL)
+		{
+			fclose(testFile);
+			return ILibScratchPad;
+		}
+	}
 #endif
-	
+
 	return ILibScratchPad;
 }
 
@@ -2603,7 +2605,6 @@ int agent_GenerateCertificates(MeshAgentHostContainer *agent, char* certfile)
 #endif
 			// Generate a new self-signed root certificate for this node using OpenSSL
 			ILibRemoteLogging_printf(ILibChainGetLogger(agent->chain), ILibRemoteLogging_Modules_Agent_GuardPost, ILibRemoteLogging_Flags_VerbosityLevel_1, "...Generating new Node Certificate");
-			printf("Generating Certificate...\r\n");
 			do
 			{
 				SSL_TRACE1("agent_GenerateCertificates()");
@@ -3108,7 +3109,6 @@ void MeshServer_SendAgentInfo(MeshAgentHostContainer* agent, ILibWebClient_State
 	}
 	else
 	{
-		printf("Connected.\n");
 	}
 
 	if (agent->serverAuthState == 3) { MeshServer_ServerAuthenticated(WebStateObject, agent); }
@@ -3597,11 +3597,9 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 					}
 
 					// Check if we are in openFrame mode
-					if (agent->openFrameMode) 
+					if (agent->openFrameMode)
 					{
 						// For openFrame mode: start CoreModule from file instead of server data
-						printf("OpenFrame mode: starting CoreModule from file instead of server data\n");
-						
 						char* coreModulePath = buildOpenframeCoreModulePath(agent->exePath);
 						FILE *file = fopen(coreModulePath, "rb");
 						if (file != NULL) {
@@ -3610,8 +3608,6 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 							int fileSize = ftell(file);
 							fseek(file, 0, SEEK_SET);
 
-							printf("OpenFrame CoreModule file found, size: %d bytes\n", fileSize);
-							
 							// Allocate memory and read file
 							char* fileCoreModule = (char*)ILibMemory_Allocate(fileSize, 0, NULL, NULL);
 							if (fileCoreModule != NULL) {
@@ -3623,17 +3619,11 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 									{
 										ILibRemoteLogging_printf(ILibChainGetLogger(agent->chain), ILibRemoteLogging_Modules_Microstack_Generic | ILibRemoteLogging_Modules_ConsolePrint,
 											ILibRemoteLogging_Flags_VerbosityLevel_1, "MeshCore: Error (OpenFrame): %s", coreException);
-									} else {
-										printf("OpenFrame CoreModule started successfully from file!\n");
 									}
-								} else {
-									printf("Error reading OpenFrame CoreModule file\n");
 								}
 								ILibMemory_Free(fileCoreModule);
 							}
 							fclose(file);
-						} else {
-							printf("OpenFrame CoreModule file not found at: %s\n", coreModulePath);
 						}
 					}
 					else
@@ -3702,7 +3692,6 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 		}
 		case MeshCommand_CoreOk: // Message from the server indicating our meshcore is ok. No update needed.
 		{
-			printf("Server verified meshcore...");
 
 			duk_eval_string(agent->meshCoreCtx, "_MSH().setuid;");
 			if (duk_is_null_or_undefined(agent->meshCoreCtx, -1) == 0)
@@ -3756,11 +3745,13 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 					{
 						if (agent->openFrameMode)
 						{
-							printf("Use OpenFrame CoreModule from file\n");
+							printf("[COREMODULE-2] === CoreModule loading (timeout handler) ===\n");
+							printf("[COREMODULE-2] OpenFrame mode: loading CoreModule from FILE\n");
+							printf("[COREMODULE-2] exePath: %s\n", agent->exePath ? agent->exePath : "NULL");
 
 							char* coreModulePath = buildOpenframeCoreModulePath(agent->exePath);
-							printf("CoreModule path: %s\n", coreModulePath);
-							
+							printf("[COREMODULE-2] CoreModule path: %s\n", coreModulePath);
+
 							FILE *file = fopen(coreModulePath, "rb");
 							if (file != NULL) {
 								// Get file size
@@ -3768,26 +3759,29 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 								CoreModuleLen = ftell(file);
 								fseek(file, 0, SEEK_SET);
 
-								printf("File size: %d bytes\n", CoreModuleLen);
-								
+								printf("[COREMODULE-2] File opened, size: %d bytes\n", CoreModuleLen);
+
 								// Allocate memory and read file
 								CoreModule = (char*)ILibMemory_Allocate(CoreModuleLen, 0, NULL, NULL);
-								printf("Memory allocated");
 								if (CoreModule != NULL) {
+									printf("[COREMODULE-2] Memory allocated: %d bytes\n", CoreModuleLen);
 									size_t bytesRead = fread(CoreModule, 1, CoreModuleLen, file);
-									printf("Bytes read: %zu\n", bytesRead);
+									printf("[COREMODULE-2] Read %zu bytes from file\n", bytesRead);
 									if (bytesRead != CoreModuleLen) {
-										// Обработка ошибки чтения
+										printf("[COREMODULE-2] ERROR: Read %zu bytes but expected %d\n", bytesRead, CoreModuleLen);
 										ILibMemory_Free(CoreModule);
 										CoreModule = NULL;
 										CoreModuleLen = 0;
+									} else {
+										printf("[COREMODULE-2] SUCCESS: CoreModule loaded from file (%d bytes)\n", CoreModuleLen);
 									}
+								} else {
+									printf("[COREMODULE-2] ERROR: Failed to allocate memory\n");
 								}
-								printf("Successfully read file ");
 								fclose(file);
-						        printf("File closed\n");
+								printf("[COREMODULE-2] File closed\n");
 							} else {
-								printf("OpenFrame CoreModule file not found\n");
+								printf("[COREMODULE-2] ERROR: Failed to open CoreModule file at: %s\n", coreModulePath);
 								CoreModule = NULL;
 								CoreModuleLen = 0;
 							}
@@ -4035,7 +4029,6 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 	MeshAgentHostContainer *agent = (MeshAgentHostContainer*)user1;
 	ILibChain_Link_SetMetadata(ILibChain_GetCurrentLink(agent->chain), "MeshServer_ControlChannel");
 
-	ILIBLOGMESSAGEX("[RESPONSE] MeshServer_OnResponse called, recvStatus=%d, InterruptFlag=%d", recvStatus, InterruptFlag);
 
 	if (agent->controlChannelRequest != NULL)
 	{
@@ -4053,7 +4046,6 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 			break;
 		case ILibWebClient_ReceiveStatus_Connection_Established: // New connection established.
 		{
-			ILIBLOGMESSAGEX("[RESPONSE] Connection Established [fd=%d]", ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
 			if (agent->controlChannelDebug != 0)
 			{
 				printf("Control Channel Connection Established [%d]...\n", ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
@@ -4225,13 +4217,10 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 	// If there are no headers, this is a connection error. Log it and try again...
 	if (header == NULL)
 	{
-		ILIBLOGMESSAGEX("[RESPONSE] ERROR: Connection failed (header=NULL), InterruptFlag=%d, fd=%d", InterruptFlag, ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
-		if (ILibIsChainBeingDestroyed(agent->chain)) { ILIBLOGMESSAGEX("[RESPONSE] Chain being destroyed, returning"); return; }
 		ILibRemoteLogging_printf(ILibChainGetLogger(ILibWebClient_GetChainFromWebStateObject(WebStateObject)), ILibRemoteLogging_Modules_Agent_GuardPost, ILibRemoteLogging_Flags_VerbosityLevel_1, "Agent Host Container: Mesh Server Connection Error, trying again later.");
 		printf("Mesh Server Connection Error [%d]\n", ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
 
 		agent->autoproxy_status = 0;
-		ILIBLOGMESSAGEX("[RESPONSE] Scheduling reconnect via MeshServer_Connect");
 
 		if (agent->multicastServerUrl != NULL) { free(agent->multicastServerUrl); agent->multicastServerUrl = NULL; }
 		MeshServer_Connect(agent);
@@ -4329,7 +4318,6 @@ void MeshServer_ConnectEx(MeshAgentHostContainer *agent)
 	size_t useproxy = 0;
 	char webproxy[1024];
 
-	ILIBLOGMESSAGEX("[CONNECT] MeshServer_ConnectEx called, serverConnectionState=%d", agent->serverConnectionState);
 
 	memset(&meshServer, 0, sizeof(struct sockaddr_in6));
 	if (agent->timerLogging != 0 && agent->retryTimerSet != 0)
@@ -4339,13 +4327,9 @@ void MeshServer_ConnectEx(MeshAgentHostContainer *agent)
 	}
 
 	// If this is called while we are in any connection state, just leave now.
-	if (agent->serverConnectionState != 0) { ILIBLOGMESSAGEX("[CONNECT] Already in connection state %d, returning", agent->serverConnectionState); return; }
 
-	if (ILibIsChainBeingDestroyed(agent->chain) != 0) { ILIBLOGMESSAGEX("[CONNECT] Chain being destroyed, returning"); return; }
 
 	len = ILibSimpleDataStore_Get(agent->masterDb, "MeshServer", ILibScratchPad2, sizeof(ILibScratchPad2));
-	if (len == 0) { printf("No MeshCentral settings found, place .msh file with this executable and restart.\r\n"); ILIBLOGMESSAGEX("[CONNECT] ERROR: MeshServer URI not found in database"); ILibRemoteLogging_printf(ILibChainGetLogger(agent->chain), ILibRemoteLogging_Modules_Microstack_Generic, ILibRemoteLogging_Flags_VerbosityLevel_1, "agentcore: MeshServer URI not found"); return; }
-	ILIBLOGMESSAGEX("[CONNECT] MeshServer URL from db: %s (len=%d)", ILibScratchPad2, (int)len);
 
 	if (ILibSimpleDataStore_Get(agent->masterDb, "autoproxy", ILibScratchPad, sizeof(ILibScratchPad)) != 0)
 	{
@@ -4627,33 +4611,19 @@ void MeshServer_ConnectEx(MeshAgentHostContainer *agent)
 	ILibAddHeaderLine(req, "User-Agent", 10, combined, (int)strnlen_s(combined, 50));
 
 	// Add custom JWT for openframe mode
-	if (agent->openFrameMode)
+	if (agent->openFrameMode && agent->openFrameSecret != NULL)
 	{
-		printf("Use JWT for openframe mode\n");
-		
-		// Use token extractor with openframe-secret if available
-		if (agent->openFrameSecret != NULL) {
-			char* extracted_token = extract_token(agent->openFrameSecret, agent->openFrameTokenPath);
-			if (extracted_token != NULL) {
-				int authLen = 7 + strlen(extracted_token) + 1; // "Bearer " + token + null terminator
-				char *openframeAuthorization = (char*)malloc(authLen);
-				if (openframeAuthorization != NULL) {
-					sprintf(openframeAuthorization, "Bearer %s", extracted_token);
-					ILibAddHeaderLine(req, "Authorization", 13, openframeAuthorization, (int)strlen(openframeAuthorization));
-					free(openframeAuthorization);
-				}
-				free(extracted_token);  // Free the allocated memory
-				printf("Added authorization header with openframe JWT\n");
+		char* extracted_token = extract_token(agent->openFrameSecret, agent->openFrameTokenPath);
+		if (extracted_token != NULL) {
+			int authLen = 7 + strlen(extracted_token) + 1; // "Bearer " + token + null terminator
+			char *openframeAuthorization = (char*)malloc(authLen);
+			if (openframeAuthorization != NULL) {
+				sprintf(openframeAuthorization, "Bearer %s", extracted_token);
+				ILibAddHeaderLine(req, "Authorization", 13, openframeAuthorization, (int)strlen(openframeAuthorization));
+				free(openframeAuthorization);
 			}
-			else {
-				printf("Failed to extract token for authorization header\n");
-			}
+			free(extracted_token);
 		}
-		else {
-			printf("Openframe secret is not available for authorization header\n");
-		}
-	} else {
-		printf("Use no JWT for not openframe mode\n");
 	}
 
 	free(path);
@@ -4661,8 +4631,6 @@ void MeshServer_ConnectEx(MeshAgentHostContainer *agent)
 	if (useproxy != 0 || meshServer.sin6_family != AF_UNSPEC)
 	{
 		if (useproxy == 0) { strcpy_s(agent->serverip, sizeof(agent->serverip), ILibRemoteLogging_ConvertAddress((struct sockaddr*)&meshServer)); }
-		printf("Connecting %sto: %s\n", useproxy!=0?"(via proxy) ":"", agent->serveruri);
-		ILIBLOGMESSAGEX("[CONNECT] Connecting %sto: %s (IP: %s)", useproxy != 0 ? "(via proxy) " : "", agent->serveruri, agent->serverip);
 
 		ILibWebClient_AddWebSocketRequestHeaders(req, 65535, MeshServer_OnSendOK);
 
@@ -4780,25 +4748,11 @@ void MeshServer_Agent_SelfTest(MeshAgentHostContainer *agent)
 	duk_pop(agent->meshCoreCtx);
 }
 
-// Helper to write directly to log file
+// Helper to write directly to log file (disabled for production)
 void MeshAgent_DirectLog(const char *format, ...)
 {
-	if (ILibCriticalLogFilename == NULL) return;
-	FILE *f = fopen(ILibCriticalLogFilename, "a");
-	if (f != NULL)
-	{
-		char timeStr[32];
-		time_t now = time(NULL);
-		strftime(timeStr, sizeof(timeStr), "%H:%M:%S", localtime(&now));
-		fprintf(f, "[%s] ", timeStr);
-		va_list args;
-		va_start(args, format);
-		vfprintf(f, format, args);
-		va_end(args);
-		fprintf(f, "\n");
-		fflush(f);
-		fclose(f);
-	}
+	// Debug logging disabled
+	(void)format;
 }
 
 void MeshServer_Connect(MeshAgentHostContainer *agent)
@@ -4873,7 +4827,6 @@ void MeshServer_Connect(MeshAgentHostContainer *agent)
 	if (agent->retryTime == 0)
 	{
 		agent->retryTime = (timeout % 1500) + 500;		// Random value between 500 and 2000
-		ILIBLOGMESSAGEX("[CONNECT] First connect attempt, retryTime=%d", agent->retryTime);
 		MeshServer_ConnectEx(agent);
 	}
 	else
@@ -4889,7 +4842,6 @@ void MeshServer_Connect(MeshAgentHostContainer *agent)
 			delay = agent->retryTime + (timeout % agent->retryTime);		// Random value between current value and double the current value
 		}
 		printf("AutoRetry Connect in %d milliseconds\n", delay);
-		ILIBLOGMESSAGEX("[CONNECT] Retry scheduled in %d ms", delay);
 		if (agent->timerLogging != 0) { agent->retryTimerSet = 1; }
 		ILibLifeTime_AddEx(ILibGetBaseTimer(agent->chain), agent, delay, (ILibLifeTime_OnCallback)MeshServer_ConnectEx, NULL);
 		agent->retryTime = delay;
@@ -5338,16 +5290,15 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 #endif
 
 	int ri;
-	for (ri = 0; ri < paramLen; ++ri) 
+	for (ri = 0; ri < paramLen; ++ri)
 	{
-		if (strcmp(param[ri], "-recovery") == 0) 
-		{ 
-			agentHost->capabilities |= MeshCommand_AuthInfo_CapabilitiesMask_RECOVERY; parseCommands = 0; 
+		if (strcmp(param[ri], "-recovery") == 0)
+		{
+			agentHost->capabilities |= MeshCommand_AuthInfo_CapabilitiesMask_RECOVERY; parseCommands = 0;
 		}
-		if (strcmp(param[ri], "--openframe-mode") == 0) 
-		{ 
-			agentHost->openFrameMode = true; parseCommands = 0; 
-			printf("OpenFrame Mode: %d\n", agentHost->openFrameMode);
+		if (strcmp(param[ri], "--openframe-mode") == 0)
+		{
+			agentHost->openFrameMode = true; parseCommands = 0;
 			enable_file_logging_simple();
 		}
 		if (strcmp(param[ri], "--openframe-secret") == 0 && ((ri + 1) < paramLen))
@@ -6944,10 +6895,7 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 			ILibCriticalLogFilename = ILibString_Copy(logPath, 0);
 		}
 	}
-	printf("[DEBUG] Log file path: %s\n", ILibCriticalLogFilename);
-	printf("[DEBUG] exePath: %s, appBundleMode: %d\n", agentHost->exePath, agentHost->appBundleMode);
-
-	// Force create log file and write initial entry
+	// Force create log file and write initial entry (no stdout output to avoid polluting -nodeid-base64)
 	{
 		FILE *logFile = fopen(ILibCriticalLogFilename, "a");
 		if (logFile != NULL)
@@ -6956,14 +6904,7 @@ int MeshAgent_Start(MeshAgentHostContainer *agentHost, int paramLen, char **para
 			fprintf(logFile, "[%s] exePath: %s\n", __TIME__, agentHost->exePath);
 			fprintf(logFile, "[%s] appBundleMode: %d\n", __TIME__, agentHost->appBundleMode);
 			fflush(logFile);
-			fprintf(logFile, "[%s] CHECKPOINT 1 - before fclose\n", __TIME__);
-			fflush(logFile);
 			fclose(logFile);
-			printf("[DEBUG] Log file created successfully\n");
-		}
-		else
-		{
-			printf("[DEBUG] ERROR: Failed to create log file: %s (errno=%d)\n", ILibCriticalLogFilename, errno);
 		}
 	}
 

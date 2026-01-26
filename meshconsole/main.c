@@ -444,7 +444,8 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 	}
 	if (argc > 1 && strcasecmp(argv[1], "-nodeid-base64") == 0 && integratedJavaScriptLen == 0)
 	{
-		char script[] = "console.log(Buffer.from(require('_agentNodeId')(), 'hex').toString('base64').replace(/\\+/g, '@').replace(/\\//g, '$'));process.exit();";
+		// Output only clean base64 NodeID, validate format to ensure no debug logs leak through
+		char script[] = "var _nid=Buffer.from(require('_agentNodeId')(),'hex').toString('base64').replace(/\\+/g,'@').replace(/\\//g,'$');if(/^[A-Za-z0-9@$=]+$/.test(_nid)){console.log(_nid);}process.exit();";
 		integratedJavaScript = ILibString_Copy(script, sizeof(script) - 1);
 		integratedJavaScriptLen = (int)sizeof(script) - 1;
 	}
@@ -645,6 +646,15 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 				if (serviceId != NULL)
 				{
 					printf("KVM: Discovered serviceId from LaunchAgent plist: %s\n", serviceId);
+
+					// Strip "-agent" suffix to match daemon's socket naming
+					// LaunchAgent Label is "meshagent-agent" but daemon uses "meshagent"
+					char *agentSuffix = strstr(serviceId, "-agent");
+					if (agentSuffix != NULL && strlen(agentSuffix) == 6) // "-agent" is exactly 6 chars
+					{
+						*agentSuffix = '\0';
+						printf("KVM: Stripped -agent suffix, using: %s\n", serviceId);
+					}
 				}
 				else
 				{
@@ -737,10 +747,7 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 #if defined(__APPLE__) && defined(_LINKVM)
 	// Clean up stale KVM session files from previous crash/unclean shutdown
 	// This prevents QueueDirectories from triggering LaunchAgent before socket is ready
-	// FIX: Without this cleanup, reinstall/upgrade leaves stale files which causes
-	// LaunchAgent to trigger immediately on bootstrap, fail to connect, and get stuck
-	printf("[DAEMON] Cleaning up stale KVM session files...\n");
-
+	// Note: No stdout output to avoid polluting -nodeid-base64 results
 	unlink("/tmp/meshagent.sock");
 	unlink("/var/run/meshagent/session-active");
 
@@ -773,7 +780,6 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 			}
 		}
 		closedir(dir);
-		printf("[DAEMON] KVM session cleanup complete\n");
 	}
 	// Errors are ignored - files might not exist and that's fine
 #endif

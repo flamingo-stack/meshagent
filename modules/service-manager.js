@@ -2979,7 +2979,9 @@ function serviceManager()
             var autoStart = (options.startType == 'AUTO_START' ? '<true/>' : '<false/>');
 
             // Apply OpenFrame parameters formatting for macOS
+            console.log('[DEBUG service-manager] options.parameters before processing: ' + JSON.stringify(options.parameters));
             var processedParams = options.parameters ? applyOpenFrameParamsDarwin(options.parameters) : null;
+            console.log('[DEBUG service-manager] processedParams after applyOpenFrameParamsDarwin: ' + JSON.stringify(processedParams));
 
             var params =  '     <key>ProgramArguments</key>\n';
             params += '     <array>\n';

@@ -1136,7 +1136,7 @@ function forceKillProcesses(pids) {
 }
 
 // Helper to create LaunchDaemon
-function createLaunchDaemon(serviceName, companyName, installPath, serviceId, installType, disableUpdate) {
+function createLaunchDaemon(serviceName, companyName, installPath, serviceId, installType, paramsOrDisableUpdate) {
     var logger = require('./logger');
 
     try {
@@ -1146,13 +1146,46 @@ function createLaunchDaemon(serviceName, companyName, installPath, serviceId, in
             name: serviceName,
             target: 'meshagent',
             startType: 'AUTO_START',
-            parameters: ['--serviceId=' + serviceId],
+            parameters: ['--serviceId', serviceId],
             companyName: companyName
         };
 
-        // Add --disableUpdate flag if requested (for bundle installations)
+        // Handle both array of params and boolean disableUpdate for backwards compatibility
+        var allParams = Array.isArray(paramsOrDisableUpdate) ? paramsOrDisableUpdate : [];
+        var disableUpdate = Array.isArray(paramsOrDisableUpdate) ? false : paramsOrDisableUpdate;
+
+        // Extract OpenFrame parameters from command line args
+        // Parameters come from DB in format: --key="value" (with quotes)
+        for (var i = 0; i < allParams.length; i++) {
+            var p = allParams[i];
+            if (typeof p !== 'string') continue;
+
+            // --openframe-mode (flag) - can be "--openframe-mode" or "--openframe-mode=\"1\""
+            if (p === '--openframe-mode' || p.indexOf('--openframe-mode=') === 0) {
+                options.parameters.push('--openframe-mode');
+            }
+            // --openframe-secret="value" format from DB
+            else if (p.indexOf('--openframe-secret=') === 0) {
+                var secretVal = p.substring('--openframe-secret='.length).replace(/^"|"$/g, '').replace(/\\"/g, '');
+                options.parameters.push('--openframe-secret');
+                options.parameters.push(secretVal);
+            }
+            // --openframe-token-path="value" format from DB
+            else if (p.indexOf('--openframe-token-path=') === 0) {
+                var tokenPathVal = p.substring('--openframe-token-path='.length).replace(/^"|"$/g, '').replace(/\\"/g, '');
+                options.parameters.push('--openframe-token-path');
+                options.parameters.push(tokenPathVal);
+            }
+            // --disableUpdate
+            else if (p === '--disableUpdate' || p.indexOf('--disableUpdate=') === 0) {
+                disableUpdate = true;
+            }
+        }
+
+        // Add --disableUpdate flag if requested
         if (disableUpdate) {
-            options.parameters.push('--disableUpdate=1');
+            options.parameters.push('--disableUpdate');
+            options.parameters.push('1');
         }
 
         if (installType === 'bundle') {
@@ -1170,7 +1203,8 @@ function createLaunchDaemon(serviceName, companyName, installPath, serviceId, in
             // For bundle installations, do NOT copy binary to installPath - binary should stay inside bundle
             options.skipBinaryCopy = true;
             // Add --appBundle so agent looks for config files in WorkingDirectory (bundle parent)
-            options.parameters.push('--appBundle=1');
+            options.parameters.push('--appBundle');
+            options.parameters.push('1');
         } else {
             // For standalone installations, let service-manager copy the binary if needed
             servicePath = installPath + 'meshagent';

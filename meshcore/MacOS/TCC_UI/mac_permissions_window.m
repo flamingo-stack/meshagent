@@ -614,8 +614,6 @@ int show_tcc_permissions_window(int show_reminder_checkbox) {
 // This spawns a child process with "-tccCheck" flag to show the UI
 // Returns file descriptor for reading result from child, or -1 on error
 int show_tcc_permissions_window_async(const char* exe_path, void* pipeManager, int uid) {
-    printf("[TCC-SPAWN] show_tcc_permissions_window_async called: exe_path=%s, uid=%d\n", exe_path ? exe_path : "NULL", uid);
-
     // CRITICAL SAFETY CHECK: NEVER spawn TCC UI during install/upgrade/uninstall operations
     // Check command line arguments for forbidden flags
     char*** argvPtr = _NSGetArgv();
@@ -625,8 +623,6 @@ int show_tcc_permissions_window_async(const char* exe_path, void* pipeManager, i
         char** argv = *argvPtr;
         int argc = *argcPtr;
 
-        printf("[TCC-SPAWN] Checking %d command line args for forbidden flags\n", argc);
-
         const char* forbidden_flags[] = {
             "-upgrade", "-install", "-fullinstall",
             "-uninstall", "-fulluninstall", "-update"
@@ -635,21 +631,16 @@ int show_tcc_permissions_window_async(const char* exe_path, void* pipeManager, i
         for (int i = 0; i < argc; i++) {
             for (int j = 0; j < 6; j++) {
                 if (strcmp(argv[i], forbidden_flags[j]) == 0) {
-                    printf("[TCC-SPAWN] BLOCKED: Found forbidden flag '%s' at argv[%d]\n", argv[i], i);
                     return -1; // Refuse to spawn during install/upgrade operations
                 }
             }
         }
-        printf("[TCC-SPAWN] No forbidden flags found\n");
     }
 
     // Check if TCC UI is already running
-    printf("[TCC-SPAWN] Checking if TCC UI is already running...\n");
     if (is_tcc_ui_running()) {
-        printf("[TCC-SPAWN] BLOCKED: TCC UI is already running\n");
         return -1; // Don't spawn another instance
     }
-    printf("[TCC-SPAWN] TCC UI is not running, proceeding\n");
 
     // Create pipe for IPC (child writes result, parent reads)
     int pipefd[2];
