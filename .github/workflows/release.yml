@@ -241,6 +241,12 @@ jobs:
           set -e
           mkdir -p final-artifacts/clients
 
+          # Debug: Show what was downloaded
+          echo "=== Downloaded artifacts structure ==="
+          ls -la release-artifacts/
+          echo "=== macOS universal artifact contents ==="
+          ls -laR release-artifacts/meshagent-mac-universal/ || echo "Directory not found"
+
           # macOS - reconstruct .app bundle from downloaded contents and archive
           if [ -d "release-artifacts/meshagent-mac-universal/Contents" ]; then
             mkdir -p release-artifacts/meshagent-mac-universal-app
