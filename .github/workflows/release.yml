@@ -96,7 +96,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifacts
-          
+
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             if [[ -f "Release/MeshService64.exe" ]]; then
               cp "Release/MeshService64.exe" "artifacts/${{ env.BINARY_NAME }}.exe"
@@ -108,9 +108,9 @@ jobs:
             fi
           elif [[ "${{ runner.os }}" == "macOS" ]]; then
             if [[ "${{ matrix.os_arch }}" == "arm64" ]]; then
-              BUILT_BINARY_NAME="meshagent_osx-arm-64"
+              BUILT_BINARY_NAME="build/output/meshagent_osx-arm-64"
             elif [[ "${{ matrix.os_arch }}" == "x86-64" ]]; then
-              BUILT_BINARY_NAME="meshagent_osx-x86-64"
+              BUILT_BINARY_NAME="build/output/meshagent_osx-x86-64"
             else
               echo "Unknown macOS architecture: ${{ matrix.os_arch }}"
               exit 1
@@ -120,14 +120,14 @@ jobs:
               echo "Copied macOS binary: $BUILT_BINARY_NAME"
             else
               echo "$BUILT_BINARY_NAME not found"
-              ls -la meshagent* || echo "No meshagent files found"
+              ls -la build/output/meshagent* || echo "No meshagent files found in build/output/"
               exit 1
             fi
           else
             echo "Unsupported OS: ${{ runner.os }}"
             exit 1
           fi
-          
+
           echo "Artifacts prepared:"
           ls -la artifacts/          
 
