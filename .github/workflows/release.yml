@@ -214,7 +214,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: meshagent-mac-universal
-          path: artifacts/MeshAgent.app
+          path: artifacts/MeshAgent.app/
+          include-hidden-files: true
           retention-days: 30
           compression-level: 9
   
@@ -234,17 +235,18 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: release-artifacts
-        continue-on-error: true
 
       - name: Prepare release artifacts
         run: |
           set -e
           mkdir -p final-artifacts/clients
 
-          # macOS - archive the .app bundle
-          if [ -d "release-artifacts/meshagent-mac-universal/MeshAgent.app" ]; then
+          # macOS - reconstruct .app bundle from downloaded contents and archive
+          if [ -d "release-artifacts/meshagent-mac-universal/Contents" ]; then
+            mkdir -p release-artifacts/meshagent-mac-universal-app
+            mv release-artifacts/meshagent-mac-universal release-artifacts/meshagent-mac-universal-app/MeshAgent.app
             tar -czvf "final-artifacts/clients/meshagent-macos-universal.tar.gz" \
-              -C "release-artifacts/meshagent-mac-universal" MeshAgent.app
+              -C "release-artifacts/meshagent-mac-universal-app" MeshAgent.app
           fi
           # Windows
           if [ -d "release-artifacts/meshagent-windows-amd64" ]; then
@@ -253,6 +255,21 @@ jobs:
           fi
 
           ls -lh final-artifacts/clients/
+
+          # Verify all expected artifacts exist
+          echo "Verifying release artifacts..."
+          MISSING=""
+          if [ ! -f "final-artifacts/clients/meshagent-macos-universal.tar.gz" ]; then
+            MISSING="$MISSING macOS"
+          fi
+          if [ ! -f "final-artifacts/clients/meshagent-windows-amd64.zip" ]; then
+            MISSING="$MISSING Windows"
+          fi
+          if [ -n "$MISSING" ]; then
+            echo "::error::Missing release artifacts:$MISSING"
+            exit 1
+          fi
+          echo "All release artifacts present"
 
       - name: Generate release header
         run: |
