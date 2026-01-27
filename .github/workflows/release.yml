@@ -173,15 +173,32 @@ jobs:
           echo "Creating universal macOS binary with lipo..."
           X64_BINARY="x64-artifacts/${{ env.BINARY_NAME }}"
           ARM64_BINARY="arm64-artifacts/${{ env.BINARY_NAME }}"
-          
+
           mkdir -p artifacts
           lipo -create "$X64_BINARY" "$ARM64_BINARY" -output ./artifacts/${{ env.BINARY_NAME }}
-          
+
           # Verify universal binary
           echo "Universal binary info:"
           lipo -info ./artifacts/${{ env.BINARY_NAME }}
           file ./artifacts/${{ env.BINARY_NAME }}
-          
+
+      - name: Create Application Bundle
+        run: |
+          echo "Creating MeshAgent.app bundle..."
+          BUILD_TIME=$(date +%y.%m.%d.%H.%M.%S)
+          BUILD_DATE=$(echo $BUILD_TIME | cut -d. -f1-3)
+          BUILD_TIME_ONLY=$(echo $BUILD_TIME | cut -d. -f4-6)
+
+          ./build/tools/macos_build/create-app-bundle.sh \
+            ./artifacts/${{ env.BINARY_NAME }} \
+            ./artifacts/MeshAgent.app \
+            meshagent \
+            $BUILD_DATE \
+            $BUILD_TIME_ONLY
+
+          echo "Bundle created at ./artifacts/MeshAgent.app"
+          ls -la ./artifacts/MeshAgent.app/Contents/MacOS/
+
       - name: Sign MacOS package
         uses: ./.github/steps/sign-macos-package
         with:
@@ -193,11 +210,11 @@ jobs:
           apple_team_id: ${{ secrets.APPLE_TEAM_ID }}
           binary_name: ${{ env.BINARY_NAME }}
 
-      - name: Upload Universal Binary
+      - name: Upload Universal App Bundle
         uses: actions/upload-artifact@v4
         with:
           name: meshagent-mac-universal
-          path: artifacts/
+          path: artifacts/MeshAgent.app
           retention-days: 30
           compression-level: 9
   
@@ -224,10 +241,10 @@ jobs:
           set -e
           mkdir -p final-artifacts/clients
 
-          # macOS
-          if [ -d "release-artifacts/meshagent-mac-universal" ]; then
-            tar -czf "final-artifacts/clients/meshagent-macos-universal.tar.gz" \
-              -C "release-artifacts/meshagent-mac-universal" ${{ env.BINARY_NAME }}
+          # macOS - archive the .app bundle
+          if [ -d "release-artifacts/meshagent-mac-universal/MeshAgent.app" ]; then
+            tar -czvf "final-artifacts/clients/meshagent-macos-universal.tar.gz" \
+              -C "release-artifacts/meshagent-mac-universal" MeshAgent.app
           fi
           # Windows
           if [ -d "release-artifacts/meshagent-windows-amd64" ]; then
@@ -241,7 +258,7 @@ jobs:
         run: |
           cat > RELEASE_HEADER.md <<EOF
           ## MeshAgent Clients
-          - **macOS** (Universal): \`meshagent-macos-universal.tar.gz\`
+          - **macOS** (Universal App Bundle): \`meshagent-macos-universal.tar.gz\` - Extract and run MeshAgent.app
           - **Windows** (amd64): \`meshagent-windows-amd64.zip\`
           EOF
 
