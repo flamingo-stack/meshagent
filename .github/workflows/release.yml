@@ -87,10 +87,7 @@ jobs:
 
       - name: Build MeshAgent for macOS ${{ matrix.os_arch }}
         if: runner.os == 'macOS'
-        run: |
-          echo "Building MeshAgent for macOS ${{ matrix.os_arch }}"
-          make macos ARCHID=${{ matrix.archid }}
-        shell: bash
+        run: make macos ARCHID=${{ matrix.archid }}
 
       - name: Prepare Artifacts
         shell: bash
@@ -98,38 +95,14 @@ jobs:
           mkdir -p artifacts
 
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            if [[ -f "Release/MeshService64.exe" ]]; then
-              cp "Release/MeshService64.exe" "artifacts/${{ env.BINARY_NAME }}.exe"
-              echo "Copied Windows binary"
-            else
-              echo "MeshService64.exe not found, checking available files:"
-              find . -name "*.exe" -type f | head -10
-              exit 1
-            fi
+            cp "Release/MeshService64.exe" "artifacts/${{ env.BINARY_NAME }}.exe"
           elif [[ "${{ runner.os }}" == "macOS" ]]; then
             if [[ "${{ matrix.os_arch }}" == "arm64" ]]; then
-              BUILT_BINARY_NAME="build/output/meshagent_osx-arm-64"
-            elif [[ "${{ matrix.os_arch }}" == "x86-64" ]]; then
-              BUILT_BINARY_NAME="build/output/meshagent_osx-x86-64"
+              cp "build/output/meshagent_osx-arm-64" "artifacts/${{ env.BINARY_NAME }}"
             else
-              echo "Unknown macOS architecture: ${{ matrix.os_arch }}"
-              exit 1
+              cp "build/output/meshagent_osx-x86-64" "artifacts/${{ env.BINARY_NAME }}"
             fi
-            if [[ -f "$BUILT_BINARY_NAME" ]]; then
-              cp "$BUILT_BINARY_NAME" "artifacts/${{ env.BINARY_NAME }}"
-              echo "Copied macOS binary: $BUILT_BINARY_NAME"
-            else
-              echo "$BUILT_BINARY_NAME not found"
-              ls -la build/output/meshagent* || echo "No meshagent files found in build/output/"
-              exit 1
-            fi
-          else
-            echo "Unsupported OS: ${{ runner.os }}"
-            exit 1
-          fi
-
-          echo "Artifacts prepared:"
-          ls -la artifacts/          
+          fi          
 
       - name: Upload client artifact
         uses: actions/upload-artifact@v4
@@ -170,34 +143,22 @@ jobs:
 
       - name: Create Universal Binary
         run: |
-          echo "Creating universal macOS binary with lipo..."
-          X64_BINARY="x64-artifacts/${{ env.BINARY_NAME }}"
-          ARM64_BINARY="arm64-artifacts/${{ env.BINARY_NAME }}"
-
           mkdir -p artifacts
-          lipo -create "$X64_BINARY" "$ARM64_BINARY" -output ./artifacts/${{ env.BINARY_NAME }}
-
-          # Verify universal binary
-          echo "Universal binary info:"
+          lipo -create "x64-artifacts/${{ env.BINARY_NAME }}" "arm64-artifacts/${{ env.BINARY_NAME }}" \
+            -output ./artifacts/${{ env.BINARY_NAME }}
           lipo -info ./artifacts/${{ env.BINARY_NAME }}
-          file ./artifacts/${{ env.BINARY_NAME }}
 
       - name: Create Application Bundle
         run: |
-          echo "Creating MeshAgent.app bundle..."
           BUILD_TIME=$(date +%y.%m.%d.%H.%M.%S)
           BUILD_DATE=$(echo $BUILD_TIME | cut -d. -f1-3)
           BUILD_TIME_ONLY=$(echo $BUILD_TIME | cut -d. -f4-6)
-
           ./build/tools/macos_build/create-app-bundle.sh \
             ./artifacts/${{ env.BINARY_NAME }} \
             ./artifacts/MeshAgent.app \
             meshagent \
             $BUILD_DATE \
             $BUILD_TIME_ONLY
-
-          echo "Bundle created at ./artifacts/MeshAgent.app"
-          ls -la ./artifacts/MeshAgent.app/Contents/MacOS/
 
       - name: Sign MacOS package
         uses: ./.github/steps/sign-macos-package
@@ -241,41 +202,28 @@ jobs:
           set -e
           mkdir -p final-artifacts/clients
 
-          # Debug: Show what was downloaded
-          echo "=== Downloaded artifacts structure ==="
-          ls -la release-artifacts/
-          echo "=== macOS universal artifact contents ==="
-          ls -laR release-artifacts/meshagent-mac-universal/ || echo "Directory not found"
-
-          # macOS - reconstruct .app bundle from downloaded contents and archive
+          # macOS - reconstruct .app bundle and archive
           if [ -d "release-artifacts/meshagent-mac-universal/Contents" ]; then
             mkdir -p release-artifacts/meshagent-mac-universal-app
             mv release-artifacts/meshagent-mac-universal release-artifacts/meshagent-mac-universal-app/MeshAgent.app
             tar -czvf "final-artifacts/clients/meshagent-macos-universal.tar.gz" \
               -C "release-artifacts/meshagent-mac-universal-app" MeshAgent.app
           fi
+
           # Windows
           if [ -d "release-artifacts/meshagent-windows-amd64" ]; then
             (cd "release-artifacts/meshagent-windows-amd64" && \
               zip "${GITHUB_WORKSPACE}/final-artifacts/clients/meshagent-windows-amd64.zip" ${{ env.BINARY_NAME }}.exe)
           fi
 
-          ls -lh final-artifacts/clients/
-
           # Verify all expected artifacts exist
-          echo "Verifying release artifacts..."
           MISSING=""
-          if [ ! -f "final-artifacts/clients/meshagent-macos-universal.tar.gz" ]; then
-            MISSING="$MISSING macOS"
-          fi
-          if [ ! -f "final-artifacts/clients/meshagent-windows-amd64.zip" ]; then
-            MISSING="$MISSING Windows"
-          fi
+          [ ! -f "final-artifacts/clients/meshagent-macos-universal.tar.gz" ] && MISSING="$MISSING macOS"
+          [ ! -f "final-artifacts/clients/meshagent-windows-amd64.zip" ] && MISSING="$MISSING Windows"
           if [ -n "$MISSING" ]; then
             echo "::error::Missing release artifacts:$MISSING"
             exit 1
           fi
-          echo "All release artifacts present"
 
       - name: Generate release header
         run: |
