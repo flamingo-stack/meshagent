@@ -96,7 +96,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifacts
-          
+
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             if [[ -f "Release/MeshService64.exe" ]]; then
               cp "Release/MeshService64.exe" "artifacts/${{ env.BINARY_NAME }}.exe"
@@ -127,9 +127,21 @@ jobs:
             echo "Unsupported OS: ${{ runner.os }}"
             exit 1
           fi
-          
+
           echo "Artifacts prepared:"
-          ls -la artifacts/          
+          ls -la artifacts/
+
+      - name: Sign Windows package
+        if: runner.os == 'Windows'
+        uses: ./.github/steps/sign-windows-package
+        with:
+          azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure_client_secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          signing_endpoint: ${{ secrets.SIGNING_ENDPOINT }}
+          code_signing_account_name: ${{ secrets.AZURE_CODE_SIGNING_ACCOUNT_NAME }}
+          certificate_profile_name: ${{ secrets.CERTIFICATE_PROFILE_NAME }}
+          binary_path: artifacts/${{ env.BINARY_NAME }}.exe
 
       - name: Upload client artifact
         uses: actions/upload-artifact@v4
@@ -207,7 +219,7 @@ jobs:
     needs: [build_client, create_universal_macos]
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_dispatch' && 
+      github.event_name == 'workflow_dispatch' &&
       inputs.version != ''
     steps:
       - name: Checkout
@@ -255,4 +267,5 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           body_path: RELEASE_HEADER.md
           files: |
-            final-artifacts/clients/*
+            final-artifacts/clients/*.zip
+            final-artifacts/clients/*.tar.gz
