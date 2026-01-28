@@ -1,0 +1,187 @@
+name: Build OpenSSL Windows (MSVC)
+
+on:
+  workflow_dispatch:
+    inputs:
+      openssl_version:
+        description: 'OpenSSL version to build'
+        required: false
+        default: '3.5.4'
+
+jobs:
+  build-windows:
+    strategy:
+      matrix:
+        arch:
+          - { name: 'x64', openssl: 'VC-WIN64A', platform: 'x64', lib_suffix: '64' }
+          - { name: 'x86', openssl: 'VC-WIN32', platform: 'x86', lib_suffix: '32' }
+          - { name: 'arm64', openssl: 'VC-WIN64-ARM', platform: 'amd64_arm64', lib_suffix: '64ARM' }
+        config:
+          - { name: 'Release', runtime: 'MT', suffix: 'MT' }
+          - { name: 'Debug', runtime: 'MTd', suffix: 'MTd' }
+      fail-fast: false
+
+    runs-on: windows-2022
+
+    name: Build ${{ matrix.arch.name }} ${{ matrix.config.name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch.platform }}
+
+      - name: Install Perl (Strawberry)
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.38'
+
+      - name: Install NASM
+        run: |
+          choco install nasm -y
+          echo "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Download OpenSSL source
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.openssl_version || '3.5.4' }}"
+          BUILD_DIR="openssl-build-${{ matrix.arch.name }}-${{ matrix.config.suffix }}"
+          curl -L "https://github.com/openssl/openssl/releases/download/openssl-$VERSION/openssl-$VERSION.tar.gz" -o openssl.tar.gz
+          mkdir -p "$BUILD_DIR"
+          tar -xzf openssl.tar.gz -C "$BUILD_DIR" --strip-components=1
+          rm openssl.tar.gz
+
+      - name: Configure OpenSSL
+        shell: cmd
+        working-directory: openssl-build-${{ matrix.arch.name }}-${{ matrix.config.suffix }}
+        run: |
+          perl Configure ${{ matrix.arch.openssl }} ^
+            no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic ^
+            no-threads no-dso no-shared no-asm no-rc5 no-idea ^
+            no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast ^
+            no-md2 no-mdc2 ^
+            --release
+
+      - name: Build OpenSSL
+        shell: cmd
+        working-directory: openssl-build-${{ matrix.arch.name }}-${{ matrix.config.suffix }}
+        run: |
+          nmake clean
+          nmake build_libs
+
+      - name: Rename libraries to match format
+        shell: bash
+        run: |
+          # OpenSSL 3.x with no-shared creates libcrypto.lib and libssl.lib
+          # We need to rename them to match the existing format
+          mkdir -p openssl/libstatic/windows/${{ matrix.arch.name }}
+
+          # Rename based on architecture and config
+          cp openssl-build-${{ matrix.arch.name }}-${{ matrix.config.suffix }}/libcrypto.lib "openssl/libstatic/windows/${{ matrix.arch.name }}/libcrypto${{ matrix.arch.lib_suffix }}${{ matrix.config.suffix }}.lib"
+          cp openssl-build-${{ matrix.arch.name }}-${{ matrix.config.suffix }}/libssl.lib "openssl/libstatic/windows/${{ matrix.arch.name }}/libssl${{ matrix.arch.lib_suffix }}${{ matrix.config.suffix }}.lib"
+
+      - name: Verify build
+        shell: bash
+        run: |
+          ls -lh openssl/libstatic/windows/${{ matrix.arch.name }}/
+          file openssl/libstatic/windows/${{ matrix.arch.name }}/*.lib || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openssl-windows-${{ matrix.arch.name }}-${{ matrix.config.suffix }}
+          path: openssl/libstatic/windows/${{ matrix.arch.name }}/*.lib
+          retention-days: 30
+
+  combine-artifacts:
+    needs: build-windows
+    runs-on: ubuntu-latest
+    name: Combine all Windows builds
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Combine into single structure
+        run: |
+          mkdir -p openssl-windows-libs/x64
+          mkdir -p openssl-windows-libs/x86
+          mkdir -p openssl-windows-libs/arm64
+
+          # Copy all libraries to their respective architecture folders
+          cp artifacts/openssl-windows-x64-MT/*.lib openssl-windows-libs/x64/ || true
+          cp artifacts/openssl-windows-x64-MTd/*.lib openssl-windows-libs/x64/ || true
+          cp artifacts/openssl-windows-x86-MT/*.lib openssl-windows-libs/x86/ || true
+          cp artifacts/openssl-windows-x86-MTd/*.lib openssl-windows-libs/x86/ || true
+          cp artifacts/openssl-windows-arm64-MT/*.lib openssl-windows-libs/arm64/ || true
+          cp artifacts/openssl-windows-arm64-MTd/*.lib openssl-windows-libs/arm64/ || true
+
+          # Display results
+          echo "=== Build Results ==="
+          find openssl-windows-libs -type f -exec ls -lh {} \;
+
+      - name: Upload combined artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openssl-3.5.4-windows-all
+          path: openssl-windows-libs/
+          retention-days: 90
+
+      - name: Create build report
+        run: |
+          cat > BUILD_REPORT.md << 'EOF'
+          # OpenSSL 3.5.4 Windows Build Report
+
+          ## Build Date
+          $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
+          ## Architectures Built
+          - **x64** (64-bit Intel/AMD)
+          - **x86** (32-bit Intel/AMD)
+          - **ARM64** (64-bit ARM)
+
+          ## Library Variants
+          Each architecture includes:
+          - **MT** (Multi-Threaded Release)
+          - **MTd** (Multi-Threaded Debug)
+
+          ## Libraries Created
+
+          ### x64
+          $(ls -lh openssl-windows-libs/x64/*.lib 2>/dev/null || echo "No files")
+
+          ### x86
+          $(ls -lh openssl-windows-libs/x86/*.lib 2>/dev/null || echo "No files")
+
+          ### ARM64
+          $(ls -lh openssl-windows-libs/arm64/*.lib 2>/dev/null || echo "No files")
+
+          ## Build Configuration
+          All builds use identical OpenSSL configure options:
+          ```
+          no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic
+          no-threads no-err no-dso no-shared no-asm no-rc5 no-idea
+          no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast
+          no-md2 no-mdc2
+          ```
+
+          ## Compiler
+          - Visual Studio 2022 (MSVC)
+          - Static runtime linking (/MT and /MTd)
+
+          ## GitHub Actions Workflow
+          Built using: `.github/workflows/build-openssl-windows.yml`
+
+          EOF
+
+      - name: Upload build report
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-report
+          path: BUILD_REPORT.md
+          retention-days: 90

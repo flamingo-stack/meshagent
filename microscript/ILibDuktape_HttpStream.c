@@ -122,8 +122,8 @@ typedef struct ILibDuktape_HttpStream_Data
 	int endPropagated;
 	int maxHeaderSize;
 
-	char entityHash[MD5_DIGEST_LENGTH];
-	MD5_CTX entityHashCtx;
+	char entityHash[16]; // MD5 digest length
+	EVP_MD_CTX *entityHashCtx;
 }ILibDuktape_HttpStream_Data;
 
 typedef struct ILibDuktape_HttpStream_ServerResponse_State
@@ -1612,7 +1612,7 @@ duk_ret_t ILibDuktape_HttpStream_http_server_upgradeWebsocket(duk_context *ctx)
 	char *key, *keyResult;
 	int keyResultLen;
 	duk_size_t keyLen;
-	SHA_CTX c;
+	EVP_MD_CTX *mdctx = NULL;
 	char shavalue[21];
 
 	duk_push_this(ctx);											// [socket]
@@ -1633,9 +1633,12 @@ duk_ret_t ILibDuktape_HttpStream_http_server_upgradeWebsocket(duk_context *ctx)
 	key = (char*)Duktape_GetBuffer(ctx, -1, &keyLen);
 	keyResult = ILibString_Cat(key, (int)keyLen, wsguid, sizeof(wsguid));
 
-	SHA1_Init(&c);
-	SHA1_Update(&c, keyResult, strnlen_s(keyResult, sizeof(wsguid) + keyLen));
-	SHA1_Final((unsigned char*)shavalue, &c);
+	mdctx = EVP_MD_CTX_new();
+	if (mdctx == NULL) { free(keyResult); return 0; }
+	EVP_DigestInit_ex(mdctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(mdctx, keyResult, strnlen_s(keyResult, sizeof(wsguid) + keyLen));
+	EVP_DigestFinal_ex(mdctx, (unsigned char*)shavalue, NULL);
+	EVP_MD_CTX_free(mdctx);
 	shavalue[20] = 0;
 	free(keyResult);
 	keyResult = NULL;
@@ -2972,7 +2975,7 @@ duk_ret_t ILibDuktape_HttpStream_IncomingMessage_Digest_ValidatePassword(duk_con
 	char result3[33];
 	char val[16];
 
-	MD5_CTX mctx;
+	EVP_MD_CTX *mdctx = NULL;
 
 	char *auth, *username, *password, *opaque, *response, *uri, *realm, *method, *qop, *nc, *cnonce;
 	duk_size_t authLen, passwordLen, methodLen;
@@ -3016,21 +3019,25 @@ duk_ret_t ILibDuktape_HttpStream_IncomingMessage_Digest_ValidatePassword(duk_con
 
 	ILibDuktape_Digest_CalculateNonce(ctx, hptr, 0, opaque, opaqueLen, nonce);
 
-	// Part 1
-	MD5_Init(&mctx);
-	MD5_Update(&mctx, username, usernameLen);
-	MD5_Update(&mctx, ":", 1);
-	MD5_Update(&mctx, realm, realmLen);
-	MD5_Update(&mctx, ":", 1);
-	MD5_Update(&mctx, password, passwordLen);
-	MD5_Final((unsigned char*)val, &mctx);
+	mdctx = EVP_MD_CTX_new();
+	if (mdctx == NULL) { duk_push_false(ctx); return(1); }
+
+	// Part 1: Hash username:realm:password
+	EVP_DigestInit_ex(mdctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(mdctx, username, usernameLen);
+	EVP_DigestUpdate(mdctx, ":", 1);
+	EVP_DigestUpdate(mdctx, realm, realmLen);
+	EVP_DigestUpdate(mdctx, ":", 1);
+	EVP_DigestUpdate(mdctx, password, passwordLen);
+	EVP_DigestFinal_ex(mdctx, (unsigned char*)val, NULL);
 	util_tohex_lower(val, 16, result1);
 
-	// Part 2
-	MD5_Init(&mctx);
-	MD5_Update(&mctx, method, methodLen);
-	MD5_Update(&mctx, ":", 1);
-	MD5_Update(&mctx, uri, uriLen);
+	// Part 2: Hash method:uri[:entity]
+	EVP_MD_CTX_reset(mdctx);
+	EVP_DigestInit_ex(mdctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(mdctx, method, methodLen);
+	EVP_DigestUpdate(mdctx, ":", 1);
+	EVP_DigestUpdate(mdctx, uri, uriLen);
 	if (qopLen == 8 && strncmp(qop, "auth-int", 8)==0)
 	{
 		// For QOP/auth-int, we need to add the hash of the entity body
@@ -3041,36 +3048,38 @@ duk_ret_t ILibDuktape_HttpStream_IncomingMessage_Digest_ValidatePassword(duk_con
 		duk_call_method(ctx, 1);						// [imsg][md5][hexString]
 		duk_prepare_method_call(ctx, -1, "toLowerCase");// [imsg][md5][hexString][toLowerCase][this]
 		duk_call_method(ctx, 0);						// [imsg][md5][hexString][lowercaseHexString]
-		MD5_Update(&mctx, ":", 1);
+		EVP_DigestUpdate(mdctx, ":", 1);
 
 		char *hexstring;
 		duk_size_t hexstringLen;
 		hexstring = (char*)duk_get_lstring(ctx, -1, &hexstringLen);
-		MD5_Update(&mctx, hexstring, hexstringLen);
+		EVP_DigestUpdate(mdctx, hexstring, hexstringLen);
 	}
-	MD5_Final((unsigned char*)val, &mctx);
+	EVP_DigestFinal_ex(mdctx, (unsigned char*)val, NULL);
 	util_tohex_lower(val, 16, result2);
 
-	// Part 3 
-	MD5_Init(&mctx);
-	MD5_Update(&mctx, result1, 32);
-	MD5_Update(&mctx, ":", 1);
-	MD5_Update(&mctx, nonce, 32);
-	MD5_Update(&mctx, ":", 1);
+	// Part 3: Hash result1:nonce[:nc:cnonce:qop]:result2
+	EVP_MD_CTX_reset(mdctx);
+	EVP_DigestInit_ex(mdctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(mdctx, result1, 32);
+	EVP_DigestUpdate(mdctx, ":", 1);
+	EVP_DigestUpdate(mdctx, nonce, 32);
+	EVP_DigestUpdate(mdctx, ":", 1);
 
 	if (qopLen > 0)
 	{
 		// QOP
-		MD5_Update(&mctx, nc, ncLen);
-		MD5_Update(&mctx, ":", 1);
-		MD5_Update(&mctx, cnonce, cnonceLen);
-		MD5_Update(&mctx, ":", 1);
-		MD5_Update(&mctx, qop, qopLen);
-		MD5_Update(&mctx, ":", 1);
+		EVP_DigestUpdate(mdctx, nc, ncLen);
+		EVP_DigestUpdate(mdctx, ":", 1);
+		EVP_DigestUpdate(mdctx, cnonce, cnonceLen);
+		EVP_DigestUpdate(mdctx, ":", 1);
+		EVP_DigestUpdate(mdctx, qop, qopLen);
+		EVP_DigestUpdate(mdctx, ":", 1);
 	}
 
-	MD5_Update(&mctx, result2, 32);
-	MD5_Final((unsigned char*)val, &mctx);
+	EVP_DigestUpdate(mdctx, result2, 32);
+	EVP_DigestFinal_ex(mdctx, (unsigned char*)val, NULL);
+	EVP_MD_CTX_free(mdctx);
 	util_tohex_lower(val, 16, result3);
 
 	retVal = (responseLen == 32 && strncmp(result3, response, 32)) == 0 ? 1 : 0;
@@ -3260,17 +3269,22 @@ void ILibDuktape_HttpStream_OnReceive(ILibWebClient_StateObject WebStateObject, 
 
 	if (data->bodyStream != NULL)
 	{
-		if (endPointer > 0) 
+		if (endPointer > 0)
 		{
-			MD5_Update(&(data->entityHashCtx), bodyBuffer + *beginPointer, endPointer);
-			ILibDuktape_readableStream_WriteData(data->bodyStream, bodyBuffer + *beginPointer, endPointer); 
-			*beginPointer = endPointer - data->bodyStream_unshiftedBytes; 
-			data->bodyStream_unshiftedBytes = 0; 
+			if (data->entityHashCtx != NULL) { EVP_DigestUpdate(data->entityHashCtx, bodyBuffer + *beginPointer, endPointer); }
+			ILibDuktape_readableStream_WriteData(data->bodyStream, bodyBuffer + *beginPointer, endPointer);
+			*beginPointer = endPointer - data->bodyStream_unshiftedBytes;
+			data->bodyStream_unshiftedBytes = 0;
 		}
-		if (recvStatus == ILibWebClient_ReceiveStatus_Complete) 
-		{ 
-			MD5_Final((unsigned char*)data->entityHash, &(data->entityHashCtx));
-			ILibDuktape_readableStream_WriteEnd(data->bodyStream); 
+		if (recvStatus == ILibWebClient_ReceiveStatus_Complete)
+		{
+			if (data->entityHashCtx != NULL)
+			{
+				EVP_DigestFinal_ex(data->entityHashCtx, (unsigned char*)data->entityHash, NULL);
+				EVP_MD_CTX_free(data->entityHashCtx);
+				data->entityHashCtx = NULL;
+			}
+			ILibDuktape_readableStream_WriteEnd(data->bodyStream);
 			if (ILibMemory_CanaryOK(data)) { data->bodyStream = NULL; }
 		}
 		return;
@@ -3288,7 +3302,12 @@ void ILibDuktape_HttpStream_OnReceive(ILibWebClient_StateObject WebStateObject, 
 		return;
 	}
 
-	MD5_Init(&(data->entityHashCtx)); // Initialize an MD5 Hash for the Entity Body
+	// Initialize an MD5 Hash for the Entity Body
+	data->entityHashCtx = EVP_MD_CTX_new();
+	if (data->entityHashCtx != NULL)
+	{
+		EVP_DigestInit_ex(data->entityHashCtx, EVP_md5(), NULL);
+	}
 
 	if (header->Directive != NULL)
 	{
@@ -3433,7 +3452,7 @@ void ILibDuktape_HttpStream_OnReceive(ILibWebClient_StateObject WebStateObject, 
 
 					if (bodyBuffer != NULL && endPointer > 0)
 					{
-						MD5_Update(&(data->entityHashCtx), bodyBuffer + *beginPointer, endPointer);
+						if (data->entityHashCtx != NULL) { EVP_DigestUpdate(data->entityHashCtx, bodyBuffer + *beginPointer, endPointer); }
 						ILibDuktape_readableStream_WriteData(data->bodyStream, bodyBuffer + *beginPointer, endPointer);
 					}
 				}
@@ -3522,7 +3541,12 @@ void ILibDuktape_HttpStream_OnReceive(ILibWebClient_StateObject WebStateObject, 
 
 	if (data->bodyStream != NULL && recvStatus == ILibWebClient_ReceiveStatus_Complete)
 	{
-		MD5_Final((unsigned char*)data->entityHash, &(data->entityHashCtx));
+		if (data->entityHashCtx != NULL)
+		{
+			EVP_DigestFinal_ex(data->entityHashCtx, (unsigned char*)data->entityHash, NULL);
+			EVP_MD_CTX_free(data->entityHashCtx);
+			data->entityHashCtx = NULL;
+		}
 		ILibDuktape_readableStream_WriteEnd(data->bodyStream);
 		data->endPropagated = 1;
 	}

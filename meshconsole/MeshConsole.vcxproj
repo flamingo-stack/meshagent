@@ -360,7 +360,7 @@
       <ExceptionHandling>Async</ExceptionHandling>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>SetupAPI.lib;Crypt32.lib;Ncrypt.lib;DbgHelp.lib;Gdiplus.lib;Iphlpapi.lib;ws2_32.lib;..\openssl\libstatic\libcrypto32MTd.lib;..\openssl\libstatic\libssl32MTd.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>SetupAPI.lib;Crypt32.lib;Ncrypt.lib;DbgHelp.lib;Gdiplus.lib;Iphlpapi.lib;ws2_32.lib;..\openssl\libstatic\windows\x86\libcrypto32MTd.lib;..\openssl\libstatic\windows\x86\libssl32MTd.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions> /ignore:4099 %(AdditionalOptions)</AdditionalOptions>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
     </Link>
@@ -432,7 +432,7 @@
       <ExceptionHandling>Async</ExceptionHandling>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>SetupAPI.lib;Crypt32.lib;Ncrypt.lib;DbgHelp.lib;Gdiplus.lib;Iphlpapi.lib;ws2_32.lib;..\openssl\libstatic\libcrypto32MT.lib;..\openssl\libstatic\libssl32MT.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>SetupAPI.lib;Crypt32.lib;Ncrypt.lib;DbgHelp.lib;Gdiplus.lib;Iphlpapi.lib;ws2_32.lib;..\openssl\libstatic\windows\x86\libcrypto32MT.lib;..\openssl\libstatic\windows\x86\libssl32MT.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions> /ignore:4099 %(AdditionalOptions)</AdditionalOptions>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
     </Link>
@@ -513,7 +513,7 @@
       <ExceptionHandling>Async</ExceptionHandling>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>SetupAPI.lib;Crypt32.lib;Ncrypt.lib;DbgHelp.lib;Gdiplus.lib;Iphlpapi.lib;ws2_32.lib;..\openssl\libstatic\libcrypto64MTd.lib;..\openssl\libstatic\libssl64MTd.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>SetupAPI.lib;Crypt32.lib;Ncrypt.lib;DbgHelp.lib;Gdiplus.lib;Iphlpapi.lib;ws2_32.lib;..\openssl\libstatic\windows\x64\libcrypto64MTd.lib;..\openssl\libstatic\windows\x64\libssl64MTd.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
       <AdditionalOptions> /ignore:4099 %(AdditionalOptions)</AdditionalOptions>
     </Link>
@@ -585,7 +585,7 @@
       <ExceptionHandling>Async</ExceptionHandling>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>SetupAPI.lib;DbgHelp.lib;Gdiplus.lib;Iphlpapi.lib;Crypt32.lib;Ncrypt.lib;ws2_32.lib;..\openssl\libstatic\libcrypto64MT.lib;..\openssl\libstatic\libssl64MT.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>SetupAPI.lib;DbgHelp.lib;Gdiplus.lib;Iphlpapi.lib;Crypt32.lib;Ncrypt.lib;ws2_32.lib;..\openssl\libstatic\windows\x64\libcrypto64MT.lib;..\openssl\libstatic\windows\x64\libssl64MT.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
       <AdditionalOptions> /ignore:4099 %(AdditionalOptions)</AdditionalOptions>
     </Link>

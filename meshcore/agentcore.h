@@ -189,7 +189,7 @@ typedef struct MeshAgentHostContainer
 	char* exePath;
 	ILibWebClient_RequestManager httpClientManager;
 	ILibSimpleDataStore masterDb;
-	int configPathUsesCWD;
+	int appBundleMode;
 	ILibWebClient_StateObject controlChannel;
 	struct sockaddr_in6* proxyServer;
 	int proxyFailed;
@@ -263,6 +263,8 @@ typedef struct MeshAgentHostContainer
 	int updaterVersion;
 	char **execparams;
 	char *meshServiceName;
+	char *companyName;
+	char *serviceID;
 	char *displayName;
 	int serviceReserved;
 	long consoleText_timeStamp;
