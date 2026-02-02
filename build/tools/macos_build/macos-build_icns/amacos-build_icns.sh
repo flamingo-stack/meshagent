@@ -1,5 +1,5 @@
 #!/bin/bash
-name=meshagent
+name=openframe
 
 mkdir $name.iconset
 rm -rf $name.iconset/*
