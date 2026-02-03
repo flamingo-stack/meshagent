@@ -75,10 +75,10 @@ sed -e "s/BUNDLE_IDENTIFIER/$BUNDLE_ID/g" \
 echo "  Generated Info.plist (date: $BUILD_TIMESTAMP_DATE, time: $BUILD_TIMESTAMP_TIME)"
 
 # Copy icon
-ICON_PATH="$PROJECT_ROOT/build/resources/icon/meshagent.icns"
+ICON_PATH="$PROJECT_ROOT/build/resources/icon/openframe.icns"
 if [ -f "$ICON_PATH" ]; then
-    cp "$ICON_PATH" "$BUNDLE_NAME/Contents/Resources/meshagent.icns"
-    echo "  Copied icon: meshagent.icns"
+    cp "$ICON_PATH" "$BUNDLE_NAME/Contents/Resources/openframe.icns"
+    echo "  Copied icon: openframe.icns"
 else
     echo "  Warning: Icon not found at $ICON_PATH"
     echo "  Bundle will be created without icon"
