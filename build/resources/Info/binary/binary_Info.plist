@@ -10,5 +10,7 @@
     <string>BUILD_TIMESTAMP_DATE</string>
     <key>CFBundleVersion</key>
 	<string>BUILD_TIMESTAMP_TIME</string>
+    <key>CFBundleIconFile</key>
+    <string>openframe.icns</string>
 </dict>
 </plist>

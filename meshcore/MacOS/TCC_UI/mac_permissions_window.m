@@ -657,7 +657,7 @@ int show_tcc_permissions_window_async(const char* exe_path, void* pipeManager, i
 
     // Build argv for child process
     char* const argv[] = {
-        "meshagent",     // argv[0] (program name)
+        (char*)exe_path, // argv[0] (full path so macOS resolves .app bundle icon)
         "-tccCheck",     // argv[1] (flag)
         fd_str,          // argv[2] (pipe write-end fd)
         NULL             // argv terminator
