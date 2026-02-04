@@ -371,7 +371,7 @@ function findInstallation(installPath, serviceName, companyName) {
     // Try to find service by name
     if (serviceName || companyName) {
         try {
-            var serviceId = macOSHelpers.buildServiceId(serviceName || 'meshagent', companyName);
+            var serviceId = macOSHelpers ? macOSHelpers.buildServiceId(serviceName || 'meshagent', companyName) : (serviceName || 'meshagent');
 
             var svc = require('service-manager').manager.getService(serviceId);
             var path = svc.appWorkingDirectory();
@@ -1557,13 +1557,13 @@ function installServiceUnified(params) {
 
         // Build serviceId if not already set
         if (!currentServiceId) {
-            currentServiceId = macOSHelpers.buildServiceId(currentServiceName, currentCompanyName);
+            currentServiceId = macOSHelpers ? macOSHelpers.buildServiceId(currentServiceName, currentCompanyName) : currentServiceName;
         }
     } else {
         // FRESH INSTALL mode: Use provided params or defaults
         currentServiceName = newServiceName || 'meshagent';
         currentCompanyName = newCompanyName || null;
-        currentServiceId = newServiceId || macOSHelpers.buildServiceId(currentServiceName, currentCompanyName);
+        currentServiceId = newServiceId || (macOSHelpers ? macOSHelpers.buildServiceId(currentServiceName, currentCompanyName) : currentServiceName);
     }
 
     logger.info('Current Service ID: ' + currentServiceId);
@@ -2361,7 +2361,7 @@ function uninstallServiceUnified(params) {
     // Parse parameters
     var serviceName = parms.getParameter('meshServiceName', process.platform == 'win32' ? 'Mesh Agent' : 'meshagent');
     var companyName = parms.getParameter('companyName', null);
-    var serviceId = macOSHelpers.buildServiceId(serviceName, companyName);
+    var serviceId = macOSHelpers ? macOSHelpers.buildServiceId(serviceName, companyName) : serviceName;
     var installPathParam = parms.getParameter('installPath', null);
     var skipDeleteBinary = parms.includes('__skipBinaryDelete');
     var deleteData = parms.includes('--_deleteData="1"');
@@ -2662,7 +2662,7 @@ function fullInstallEx(parms, gOptions)
     var explicitServiceId = parms.getParameter('serviceId', null);
 
     // Build composite service identifier to match installation naming convention
-    var serviceId = macOSHelpers.buildServiceId(name, companyName, { explicitServiceId: explicitServiceId });
+    var serviceId = macOSHelpers ? macOSHelpers.buildServiceId(name, companyName, { explicitServiceId: explicitServiceId }) : (explicitServiceId || name);
 
     // No-op console.log() if verbose is not specified, otherwise set the verbosity level to level 1
     if (parseInt(parms.getParameter('verbose', 0)) == 0)
@@ -3172,7 +3172,7 @@ function upgradeAgent(params) {
     }
 
     // Build CURRENT service identifier (for stopping old services)
-    var currentServiceId = macOSHelpers.buildServiceId(currentServiceName, currentCompanyName, { explicitServiceId: newServiceId });
+    var currentServiceId = macOSHelpers ? macOSHelpers.buildServiceId(currentServiceName, currentCompanyName, { explicitServiceId: newServiceId }) : (newServiceId || currentServiceName);
 
     console.log('Current Service ID: ' + currentServiceId);
     console.log('');
@@ -3592,7 +3592,7 @@ function sys_update(isservice, b64)
         var companyName = parm != null ? parm.getParameter('companyName', null) : null;
 
         // Build composite service identifier to match installation naming convention (macOS only)
-        var serviceId = macOSHelpers.buildServiceId(servicename, companyName);
+        var serviceId = macOSHelpers ? macOSHelpers.buildServiceId(servicename, companyName) : servicename;
 
         try
         {
