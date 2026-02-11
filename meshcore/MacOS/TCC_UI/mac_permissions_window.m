@@ -14,6 +14,8 @@
 #include <errno.h>
 #include <execinfo.h>
 #include <crt_externs.h>
+#include <dlfcn.h>  // For dlsym
+#include <sqlite3.h>  // For TCC database check
 #import "../mac_ui_helpers.h"  // Shared UI helpers
 
 // Lock file to prevent multiple TCC UI processes
@@ -385,23 +387,110 @@ static void remove_lock_file(void) {
     [[NSWorkspace sharedWorkspace] openURL:url];
 }
 
-- (void)openScreenRecordingSettings:(id)sender {
-    // Trigger the system permission prompt to add MeshAgent to the Screen Recording list
-    if (__builtin_available(macOS 10.15, *)) {
-        // Check current permission status
-        Boolean hasPermission = CGPreflightScreenCaptureAccess();
+// Function pointer type for CGWindowListCreateImage (deprecated in macOS 15 but still works)
+typedef CGImageRef (*CGWindowListCreateImageFunc)(CGRect, CGWindowListOption, CGWindowID, CGWindowImageOption);
 
-        if (!hasPermission) {
-            // Call on background thread to avoid blocking UI (API blocks until user responds)
-            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-                @autoreleasepool {
-                    CGRequestScreenCaptureAccess();
-                }
-            });
-        }
+static BOOL isAppInScreenRecordingTCCList(void) {
+    NSBundle* mainBundle = [NSBundle mainBundle];
+    NSString* bundleId = [mainBundle bundleIdentifier];
+    if (!bundleId) {
+        return NO;
     }
 
-    // Also open System Settings so user can see MeshAgent was added to the list
+    sqlite3 *db = NULL;
+    int rc = sqlite3_open_v2("/Library/Application Support/com.apple.TCC/TCC.db", &db, SQLITE_OPEN_READONLY, NULL);
+    if (rc != SQLITE_OK) {
+        if (__builtin_available(macOS 10.15, *)) {
+            return CGPreflightScreenCaptureAccess();
+        }
+        return NO;
+    }
+
+    sqlite3_stmt *stmt = NULL;
+    const char *sql = "SELECT auth_value FROM access WHERE service='kTCCServiceScreenCapture' AND client=?";
+    rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        sqlite3_close(db);
+        return NO;
+    }
+
+    sqlite3_bind_text(stmt, 1, [bundleId UTF8String], -1, SQLITE_STATIC);
+
+    BOOL existsInList = NO;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        existsInList = YES;
+    }
+
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+
+    return existsInList;
+}
+
+- (void)openScreenRecordingSettings:(id)sender {
+    BOOL alreadyInList = isAppInScreenRecordingTCCList();
+
+    if (!alreadyInList) {
+        BOOL triggered = NO;
+
+        if (@available(macOS 12.3, *)) {
+            Class SCShareableContentClass = NSClassFromString(@"SCShareableContent");
+            if (SCShareableContentClass) {
+                SEL selector = NSSelectorFromString(@"getShareableContentWithCompletionHandler:");
+                if ([SCShareableContentClass respondsToSelector:selector]) {
+                    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+
+                    void (^completionHandler)(id, NSError*) = ^(id content, NSError *error) {
+                        dispatch_semaphore_signal(semaphore);
+                    };
+
+                    NSMethodSignature *sig = [SCShareableContentClass methodSignatureForSelector:selector];
+                    NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:sig];
+                    [invocation setTarget:SCShareableContentClass];
+                    [invocation setSelector:selector];
+                    [invocation setArgument:&completionHandler atIndex:2];
+                    [invocation invoke];
+
+                    dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC));
+                    dispatch_release(semaphore);
+
+                    triggered = YES;
+                }
+            }
+        }
+
+        // Fallback to CGWindowListCreateImage for older macOS or if ScreenCaptureKit failed
+        if (!triggered) {
+            if (__builtin_available(macOS 10.15, *)) {
+                // Load CGWindowListCreateImage dynamically since it's marked unavailable in macOS 15 SDK
+                CGWindowListCreateImageFunc createImageFunc = (CGWindowListCreateImageFunc)dlsym(RTLD_DEFAULT, "CGWindowListCreateImage");
+
+                if (createImageFunc) {
+                    CGImageRef screenshot = createImageFunc(
+                        CGRectMake(0, 0, 1, 1),
+                        kCGWindowListOptionOnScreenOnly,
+                        kCGNullWindowID,
+                        kCGWindowImageDefault
+                    );
+
+                    if (screenshot) {
+                        CGImageRelease(screenshot);
+                    }
+                    triggered = YES;
+                }
+            }
+        }
+
+        // Fallback on unrelaible older APIs.
+        if (!triggered) {
+            if (__builtin_available(macOS 10.15, *)) {
+                CGRequestScreenCaptureAccess();
+            }
+        }
+    }
+    // If already in list, just open Settings - user can toggle manually
+
+    // Open System Settings so user can toggle the permission
     NSURL* url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"];
     [[NSWorkspace sharedWorkspace] openURL:url];
 }
