@@ -693,9 +693,12 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 	int written = 0;
 	struct sockaddr_un serveraddr;
 
+	ILIBLOGMESSAGEX("KVM_MAINLOOP: kvm_server_mainloop started, param=%p, serviceID=%s", param, serviceID ? serviceID : "NULL");
+
 	if (param == NULL)
 	{
 		// This is doing I/O via StdIn/StdOut
+		ILIBLOGMESSAGEX("KVM_MAINLOOP: Running in StdIn/StdOut mode (param=NULL)");
 
 		int flags;
 		flags = fcntl(STDOUT_FILENO, F_GETFL, 0);
@@ -705,10 +708,12 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 	{
 		// REVERSED ARCHITECTURE: -kvm1 now CONNECTS to main agent's listener socket
 		// This fixes the bootstrap namespace issue and null data problem
+		ILIBLOGMESSAGEX("KVM_MAINLOOP: Running in socket connection mode (REVERSED ARCHITECTURE)");
 
 		// Build dynamic paths using serviceID (passed from command-line parameter)
 		if (KVM_Listener_Path == NULL)
 		{
+			ILIBLOGMESSAGEX("KVM_MAINLOOP: Building dynamic paths for -kvm1...");
 			// -kvm1 child process: Get binary path for fallback (backward compatibility)
 			char kvmExePath[1024];
 			uint32_t pathSize = sizeof(kvmExePath);

@@ -638,12 +638,20 @@ typedef struct kvm_data_handler
 
 // Feed network data into the KVM. Return the number of bytes consumed.
 // This method consumes as many input commands as it can.
+static int g_feeddata_log_count = 0;
 int kvm_relay_feeddata(char* buf, int len, ILibKVM_WriteHandler writeHandler, void *reserved)
 {
+	g_feeddata_log_count++;
+	// Log first 5 calls and then every 1000th call
+	if (g_feeddata_log_count <= 5 || g_feeddata_log_count % 1000 == 0) {
+		ILIBLOGMESSAGEX("KVM_FEEDDATA_WIN: kvm_relay_feeddata called (len=%d, gChildProcess=%p, callCount=%d)", len, gChildProcess, g_feeddata_log_count);
+	}
+
 	if (gChildProcess != NULL)
 	{
 		if (len >= 2 && ntohs(((unsigned short*)buf)[0]) == MNG_CTRLALTDEL)
 		{
+			ILIBLOGMESSAGEX("KVM_FEEDDATA_WIN: Ctrl+Alt+Del requested");
 			HANDLE ht = CreateThread(NULL, 0, kvm_ctrlaltdel, 0, 0, 0);
 			if (ht != NULL) CloseHandle(ht);
 		}
@@ -653,6 +661,9 @@ int kvm_relay_feeddata(char* buf, int len, ILibKVM_WriteHandler writeHandler, vo
 	}
 	else
 	{
+		if (g_feeddata_log_count <= 5) {
+			ILIBLOGMESSAGEX("KVM_FEEDDATA_WIN: No child process, processing locally");
+		}
 		int len2 = 0;
 		int ptr = 0;
 		//while ((len2 = kvm_server_inputdata(buf + ptr, len - ptr, kvm_relay_feeddata_ex, (void*[]) {writeHandler, reserved})) != 0) { ptr += len2; }
@@ -1186,6 +1197,8 @@ void kvm_relay_StdErrHandler(ILibProcessPipe_Process sender, char *buffer, size_
 
 int kvm_relay_restart(int paused, void *pipeMgr, char *exePath, ILibKVM_WriteHandler writeHandler, void *reserved)
 {
+	ILIBLOGMESSAGEX("KVM_RESTART_WIN: kvm_relay_restart called (paused=%d, pipeMgr=%p, exePath=%s)", paused, pipeMgr, exePath ? exePath : "NULL");
+
 	char * parms0[] = { " -kvm0", g_ILibCrashDump_path != NULL ? "-coredump" : NULL, NULL, NULL };
 	char * parms1[] = { " -kvm1", g_ILibCrashDump_path != NULL ? "-coredump" : NULL, NULL, NULL };
 	void **user = (void**)ILibMemory_Allocate(4 * sizeof(void*), 0, NULL, NULL);
@@ -1205,18 +1218,25 @@ int kvm_relay_restart(int paused, void *pipeMgr, char *exePath, ILibKVM_WriteHan
 	user[1] = reserved;
 	user[2] = pipeMgr;
 	user[3] = exePath;
-	
+
 	KVMDEBUG("kvm_relay_restart / start", paused);
 
 	// If we are re-launching the child process, wait a bit. The computer may be switching desktop, etc.
 	if (paused == 0) Sleep(500);
 	if (gProcessSpawnType == ILibProcessPipe_SpawnTypes_SPECIFIED_USER && gProcessTSID < 0) { gProcessSpawnType = ILibProcessPipe_SpawnTypes_USER; }
 
+	ILIBLOGMESSAGEX("KVM_RESTART_WIN: Spawning child process (gProcessSpawnType=%d, gProcessTSID=%d)", gProcessSpawnType, gProcessTSID);
 	ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM [Master]: Spawning Slave as %s", gProcessSpawnType == ILibProcessPipe_SpawnTypes_USER ? "USER":"WIN_LOGON");
 	gChildProcess = ILibProcessPipe_Manager_SpawnProcessEx3(pipeMgr, exePath, paused == 0 ? parms0 : parms1, gProcessSpawnType, (void*)(ULONG_PTR)gProcessTSID, 0);
+
+	if (gChildProcess == NULL) {
+		ILIBLOGMESSAGEX("KVM_RESTART_WIN_FAIL: ILibProcessPipe_Manager_SpawnProcessEx3 returned NULL!");
+	}
+
 	gProcessSpawnType = (gProcessSpawnType == ILibProcessPipe_SpawnTypes_SPECIFIED_USER || gProcessSpawnType == ILibProcessPipe_SpawnTypes_USER) ? ILibProcessPipe_SpawnTypes_WINLOGON : (gProcessTSID < 0 ? ILibProcessPipe_SpawnTypes_USER : ILibProcessPipe_SpawnTypes_SPECIFIED_USER);
 
 	g_slavekvm = ILibProcessPipe_Process_GetPID(gChildProcess);
+	ILIBLOGMESSAGEX("KVM_RESTART_WIN: Child process spawned (pid=%d)", g_slavekvm);
 	char tmp[255];
 	sprintf_s(tmp, sizeof(tmp), "Child KVM (pid: %d)", g_slavekvm);
 	ILibProcessPipe_Process_ResetMetadata(gChildProcess, tmp);
@@ -1236,21 +1256,31 @@ int kvm_relay_restart(int paused, void *pipeMgr, char *exePath, ILibKVM_WriteHan
 // Setup the KVM session. Return 1 if ok, 0 if it could not be setup.
 int kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler writeHandler, void *reserved, int tsid)
 {
+	ILIBLOGMESSAGEX("KVM_SETUP_WIN: kvm_relay_setup called (exePath=%s, processPipeMgr=%p, tsid=%d, ThreadRunning=%d, g_shutdown=%d)",
+		exePath ? exePath : "NULL", processPipeMgr, tsid, ThreadRunning, g_shutdown);
+
 	if (processPipeMgr != NULL)
 	{
 #ifdef _WINSERVICE
-		if (ThreadRunning == 1 && g_shutdown == 0) { KVMDEBUG("kvm_relay_setup() session already exists", 0); return 0; }
+		if (ThreadRunning == 1 && g_shutdown == 0) {
+			ILIBLOGMESSAGEX("KVM_SETUP_WIN: Session already exists (ThreadRunning=1, g_shutdown=0)");
+			KVMDEBUG("kvm_relay_setup() session already exists", 0);
+			return 0;
+		}
 		g_restartcount = 0;
 		gProcessSpawnType = ILibProcessPipe_SpawnTypes_SPECIFIED_USER;
 		gProcessTSID = tsid;
+		ILIBLOGMESSAGEX("KVM_SETUP_WIN: Starting WINSERVICE mode session (gProcessTSID=%d)", gProcessTSID);
 		KVMDEBUG("kvm_relay_setup() session starting", 0);
 		return kvm_relay_restart(1, processPipeMgr, exePath, writeHandler, reserved);
 #else
+		ILIBLOGMESSAGEX("KVM_SETUP_WIN: WINSERVICE not defined, returning 0");
 		return(0);
 #endif
 	}
 	else
 	{
+		ILIBLOGMESSAGEX("KVM_SETUP_WIN: Console mode (processPipeMgr=NULL)");
 		// if (kvmthread != NULL && g_shutdown == 0) return 0;
 		void **parms = (void**)ILibMemory_Allocate((2 * sizeof(void*)) + sizeof(int), 0, NULL, NULL);
 		parms[0] = writeHandler;
@@ -1258,9 +1288,20 @@ int kvm_relay_setup(char *exePath, void *processPipeMgr, ILibKVM_WriteHandler wr
 		((int*)(&parms[2]))[0] = 1;
 		kvmConsoleMode = 1;
 
-		if (ThreadRunning == 1 && g_shutdown == 0) { KVMDEBUG("kvm_relay_setup() session already exists", 0); free(parms); return 0; }
+		if (ThreadRunning == 1 && g_shutdown == 0) {
+			ILIBLOGMESSAGEX("KVM_SETUP_WIN: Console session already exists (ThreadRunning=1, g_shutdown=0)");
+			KVMDEBUG("kvm_relay_setup() session already exists", 0);
+			free(parms);
+			return 0;
+		}
+		ILIBLOGMESSAGEX("KVM_SETUP_WIN: Creating KVM thread");
 		kvmthread = CreateThread(NULL, 0, kvm_server_mainloop, (void*)parms, 0, 0);
-		if (kvmthread != 0) { CloseHandle(kvmthread); }
+		if (kvmthread != 0) {
+			ILIBLOGMESSAGEX("KVM_SETUP_WIN: Thread created successfully");
+			CloseHandle(kvmthread);
+		} else {
+			ILIBLOGMESSAGEX("KVM_SETUP_WIN: Thread creation FAILED!");
+		}
 		return 1;
 	}
 }
@@ -1279,16 +1320,20 @@ void kvm_relay_reset(ILibKVM_WriteHandler writeHandler, void *reserved)
 void kvm_cleanup()
 {
 	//ILIBMESSAGE("KVMBREAK-CLEAN\r\n");
+	ILIBLOGMESSAGEX("KVM_CLEANUP_WIN: kvm_cleanup called (gChildProcess=%p, g_slavekvm=%d, ThreadRunning=%d)", gChildProcess, g_slavekvm, ThreadRunning);
 	KVMDEBUG("kvm_cleanup", 0);
 	g_shutdown = 1;
-	if (gChildProcess != NULL) 
-	{ 
+	if (gChildProcess != NULL)
+	{
+		ILIBLOGMESSAGEX("KVM_CLEANUP_WIN: Killing child process (pid=%d)", g_slavekvm);
 		ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM.c/kvm_cleanup: Attempting to kill child process");
 		ILibProcessPipe_Process_SoftKill(gChildProcess);
 		gChildProcess = NULL;
+		ILIBLOGMESSAGEX("KVM_CLEANUP_WIN: Child process killed");
 	}
 	else
 	{
+		ILIBLOGMESSAGEX("KVM_CLEANUP_WIN: No child process to kill (gChildProcess=NULL)");
 		ILibRemoteLogging_printf(ILibChainGetLogger(gILibChain), ILibRemoteLogging_Modules_Agent_KVM, ILibRemoteLogging_Flags_VerbosityLevel_1, "KVM.c/kvm_cleanup: gChildProcess = NULL");
 	}
 }
