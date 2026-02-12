@@ -73,9 +73,17 @@ static char *KVM_Session_Signal_File = NULL;
 
 
 int KVM_AGENT_FD = -1;
+static int g_kvm_send_count = 0;
 int KVM_SEND(char *buffer, int bufferLen)
 {
 	int retVal = -1;
+	g_kvm_send_count++;
+	if (g_kvm_send_count <= 10) {
+		char tmp[255];
+		int tmpLen = sprintf_s(tmp, sizeof(tmp), "KVM_SEND[%d]: Sending %d bytes to fd=%d\n", g_kvm_send_count, bufferLen, KVM_AGENT_FD == -1 ? STDOUT_FILENO : KVM_AGENT_FD);
+		write(STDOUT_FILENO, tmp, tmpLen);
+		fsync(STDOUT_FILENO);
+	}
 	retVal = write(KVM_AGENT_FD == -1 ? STDOUT_FILENO : KVM_AGENT_FD, buffer, bufferLen);
 	if (KVM_AGENT_FD == -1) { fsync(STDOUT_FILENO); }
 	else
@@ -83,7 +91,14 @@ int KVM_SEND(char *buffer, int bufferLen)
 		if (retVal < 0)
 		{
 			char tmp[255];
-			int tmpLen = sprintf_s(tmp, sizeof(tmp), "Write Error: %d on %d\n", errno, KVM_AGENT_FD);
+			int tmpLen = sprintf_s(tmp, sizeof(tmp), "KVM_SEND[%d]: Write Error: errno=%d on fd=%d\n", g_kvm_send_count, errno, KVM_AGENT_FD);
+			write(STDOUT_FILENO, tmp, tmpLen);
+			fsync(STDOUT_FILENO);
+		}
+		else if (g_kvm_send_count <= 10)
+		{
+			char tmp[255];
+			int tmpLen = sprintf_s(tmp, sizeof(tmp), "KVM_SEND[%d]: SUCCESS wrote %d bytes\n", g_kvm_send_count, retVal);
 			write(STDOUT_FILENO, tmp, tmpLen);
 			fsync(STDOUT_FILENO);
 		}
@@ -837,11 +852,17 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 	g_shutdown = 0;
 	{
 		char tmp[256];
-		int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Starting main capture loop...\n");
+		int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Starting main capture loop (g_shutdown=%d, KVM_AGENT_FD=%d)...\n", g_shutdown, KVM_AGENT_FD);
 		write(STDOUT_FILENO, tmp, tmplen);
 		fsync(STDOUT_FILENO);
 	}
 	pthread_create(&kvmthread, NULL, kvm_mainloopinput, param);
+	{
+		char tmp[256];
+		int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Input thread created, entering main while(!g_shutdown) loop\n");
+		write(STDOUT_FILENO, tmp, tmplen);
+		fsync(STDOUT_FILENO);
+	}
 
 	while (!g_shutdown) 
 	{
@@ -927,8 +948,15 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 		screen_height = CGDisplayPixelsHigh(screen_num) * SCREEN_SCALE;
 		screen_width = CGDisplayPixelsWide(screen_num) * SCREEN_SCALE;
 		
-		if ((SCREEN_HEIGHT != screen_height || (SCREEN_WIDTH != screen_width) || SCREEN_NUM != screen_num)) 
+		if ((SCREEN_HEIGHT != screen_height || (SCREEN_WIDTH != screen_width) || SCREEN_NUM != screen_num))
 		{
+			static int resolution_change_count = 0;
+			resolution_change_count++;
+			char tmp[256];
+			int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Resolution change #%d detected! (current=%dx%d, new=%dx%d) - calling kvm_init()\n",
+				resolution_change_count, SCREEN_WIDTH, SCREEN_HEIGHT, screen_width, screen_height);
+			write(STDOUT_FILENO, tmp, tmplen);
+			fsync(STDOUT_FILENO);
 			kvm_init();
 			continue;
 		}
@@ -964,7 +992,27 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 		}
 		else {
 			//senddebug(100);
+			static int frame_count = 0;
+			frame_count++;
+			if (frame_count <= 5) {
+				char tmp[256];
+				int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Frame #%d - calling getScreenBuffer()\n", frame_count);
+				write(STDOUT_FILENO, tmp, tmplen);
+				fsync(STDOUT_FILENO);
+			}
+
 			getScreenBuffer((unsigned char **)&desktop, &desktopsize, image);
+
+			if (frame_count <= 5) {
+				char tmp[256];
+				int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Frame #%d - getScreenBuffer done (desktop=%p, desktopsize=%lld, tiles=%dx%d)\n",
+					frame_count, desktop, desktopsize, TILE_WIDTH_COUNT, TILE_HEIGHT_COUNT);
+				write(STDOUT_FILENO, tmp, tmplen);
+				fsync(STDOUT_FILENO);
+			}
+
+			int tiles_sent = 0;
+			int tiles_skipped = 0;
 
 			for (y = 0; y < TILE_HEIGHT_COUNT; y++)
 			{
@@ -973,10 +1021,18 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 					width = TILE_WIDTH * x;
 					if (!g_shutdown && (g_pause)) { usleep(100000); g_pause = 0; } //HACK: Change this
 
-					if (g_shutdown) { x = TILE_WIDTH_COUNT; y = TILE_HEIGHT_COUNT; break; }
+					if (g_shutdown) {
+						if (frame_count <= 5) {
+							char tmp[256];
+							int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Frame #%d - g_shutdown=1 at tile (%d,%d)\n", frame_count, x, y);
+							write(STDOUT_FILENO, tmp, tmplen);
+							fsync(STDOUT_FILENO);
+						}
+						x = TILE_WIDTH_COUNT; y = TILE_HEIGHT_COUNT; break;
+					}
 
-					if (g_tileInfo[y][x].flag == TILE_SENT) continue;
-					if (g_tileInfo[y][x].flag == TILE_DONT_SEND) continue;
+					if (g_tileInfo[y][x].flag == TILE_SENT) { tiles_skipped++; continue; }
+					if (g_tileInfo[y][x].flag == TILE_DONT_SEND) { tiles_skipped++; continue; }
 
 					getTileAt(width, height, &buf, &tilesize, desktop, desktopsize, y, x);
 
@@ -986,6 +1042,12 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 						written = KVM_SEND(buf, tilesize);
 						if (written == -1)
 						{
+							if (frame_count <= 5) {
+								char tmp[256];
+								int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Frame #%d - KVM_SEND FAILED errno=%d fd=%d\n", frame_count, errno, KVM_AGENT_FD);
+								write(STDOUT_FILENO, tmp, tmplen);
+								fsync(STDOUT_FILENO);
+							}
 							/*ILIBMESSAGE("KVMBREAK-K2\r\n");*/
 							if(KVM_AGENT_FD == -1)
 							{
@@ -993,9 +1055,21 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 								g_shutdown = 1; height = SCREEN_HEIGHT; width = SCREEN_WIDTH; break;
 							}
 						}
+						else
+						{
+							tiles_sent++;
+						}
 						free(buf);
 					}
 				}
+			}
+
+			if (frame_count <= 5) {
+				char tmp[256];
+				int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Frame #%d complete (sent=%d, skipped=%d, g_shutdown=%d)\n",
+					frame_count, tiles_sent, tiles_skipped, g_shutdown);
+				write(STDOUT_FILENO, tmp, tmplen);
+				fsync(STDOUT_FILENO);
 			}
 
 		}
