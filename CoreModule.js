@@ -720,26 +720,6 @@ var net = require('net');
 var fs = require('fs');
 var rtc = require('ILibWebRTC');
 var amt = null;
-
-// DEBUG: File-based logging for tunnel/KVM diagnostics
-var _debugLogPath = null;
-function debugLogToFile(msg) {
-    try {
-        if (_debugLogPath === null) {
-            // Determine log path based on platform
-            if (process.platform === 'win32') {
-                _debugLogPath = process.env['TEMP'] + '\\meshagent-debug.log';
-            } else if (process.platform === 'darwin') {
-                _debugLogPath = '/tmp/meshagent-debug.log';
-            } else {
-                _debugLogPath = '/tmp/meshagent-debug.log';
-            }
-        }
-        var timestamp = new Date().toISOString();
-        var logLine = '[' + timestamp + '] ' + msg + '\n';
-        fs.appendFileSync(_debugLogPath, logLine);
-    } catch (ex) { /* ignore logging errors */ }
-}
 var processManager = require('process-manager');
 var wifiScannerLib = null;
 var wifiScanner = null;
@@ -2069,8 +2049,6 @@ function tunnel_onIdleTimeout()
 // Tunnel callback operations
 function onTunnelUpgrade(response, s, head)
 {
-    debugLogToFile('TUNNEL_UPGRADE: onTunnelUpgrade called, index=' + this.index + ', tcpport=' + this.tcpport + ', udpport=' + this.udpport);
-    debugLogToFile('TUNNEL_UPGRADE: response.statusCode=' + (response ? response.statusCode : 'null') + ', head=' + (head ? head.length : 'null'));
 
     this.s = s;
     s.once('~', tunnel_s_finalized);
@@ -2079,17 +2057,13 @@ function onTunnelUpgrade(response, s, head)
     s.tunnel = this;
     s.descriptorMetadata = "MeshAgent_relayTunnel";
 
-
     if (require('MeshAgent').idleTimeout != null)
     {
         s.setTimeout(require('MeshAgent').idleTimeout * 1000);
         s.on('timeout', tunnel_onIdleTimeout);
     }
 
-    debugLogToFile('TUNNEL_UPGRADE: Tunnel setup complete, assigning data handler');
-
     if (this.tcpport != null) {
-        debugLogToFile('TUNNEL_UPGRADE: TCP relay mode, tcpport=' + this.tcpport);
         // This is a TCP relay connection, pause now and try to connect to the target.
         s.pause();
         s.data = onTcpRelayServerTunnelData;
@@ -2127,10 +2101,8 @@ function onTunnelUpgrade(response, s, head)
     }
     else {
         // This is a normal connect for KVM/Terminal/Files
-        debugLogToFile('TUNNEL_UPGRADE: Normal KVM/Terminal/Files mode, setting data handler to onTunnelData');
         s.data = onTunnelData;
     }
-    debugLogToFile('TUNNEL_UPGRADE: onTunnelUpgrade completed for index=' + this.index);
 }
 
 // If the HTTP Request has a guest name, we need to form a userid that includes the guest name in hex.
@@ -2172,12 +2144,10 @@ function onTcpRelayServerTunnelData(data) {
 
 function onTunnelClosed()
 {
-    debugLogToFile('TUNNEL_CLOSED: onTunnelClosed called, protocol=' + (this.httprequest ? this.httprequest.protocol : 'null') + ', index=' + (this.httprequest ? this.httprequest.index : 'null'));
 
     if (this.httprequest._dispatcher != null && this.httprequest.term == null)
     {
         // Windows Dispatcher was created to spawn a child connection, but the child didn't connect yet, so we have to shutdown the dispatcher, otherwise the child may end up hanging
-        debugLogToFile('TUNNEL_CLOSED: Closing dispatcher');
         if (this.httprequest._dispatcher.close) { this.httprequest._dispatcher.close(); }
         this.httprequest._dispatcher = null;
     }
@@ -2186,7 +2156,6 @@ function onTunnelClosed()
     {
         if (tunnels[this.httprequest.index] == null)
         {
-            debugLogToFile('TUNNEL_CLOSED: Tunnel already removed from tunnels array');
             this.tunnel.s = null;
             this.tunnel = null;
             return;
@@ -2194,7 +2163,7 @@ function onTunnelClosed()
     }
 
     var tunnel = tunnels[this.httprequest.index];
-    if (tunnel == null) { debugLogToFile('TUNNEL_CLOSED: Duplicate close call, tunnel already null'); return; } // Stop duplicate calls.
+    if (tunnel == null) { return; } // Stop duplicate calls.
 
     // Perform display locking on disconnect
     if ((this.httprequest.protocol == 2) && (this.httprequest.autolock === true)) {
@@ -2629,13 +2598,11 @@ function terminal_promise_consent_resolved()
 }
 function tunnel_kvm_end()
 {
-    debugLogToFile('KVM_END: tunnel_kvm_end called, connectionCount=' + (this.desktop && this.desktop.kvm ? this.desktop.kvm.connectionCount : 'null'));
     --this.desktop.kvm.connectionCount;
 
     // Remove ourself from the list of remote desktop session
     var i = this.desktop.kvm.tunnels.indexOf(this);
     if (i >= 0) { this.desktop.kvm.tunnels.splice(i, 1); }
-    debugLogToFile('KVM_END: Remaining tunnel count=' + (this.desktop.kvm.tunnels ? this.desktop.kvm.tunnels.length : 0));
 
     // Send a metadata update to all desktop sessions
     var users = {};
@@ -2734,7 +2701,6 @@ function kvm_tunnel_consentpromise_closehandler()
 
 function kvm_consent_ok(ws) {
     // User Consent Prompt is not required because no user is present
-    debugLogToFile('KVM_CONSENT_OK: Consent granted/not required, ws=' + (ws ? 'valid' : 'null'));
     if (ws.httprequest.consent && (ws.httprequest.consent & 1)){
         // User Notifications is required
         MeshServerLogEx(35, null, "Started remote desktop with toast notification (" + ws.httprequest.remoteaddr + ")", ws.httprequest);
@@ -2780,16 +2746,13 @@ function kvm_consent_ok(ws) {
             });
         }
     }
-    debugLogToFile('KVM_CONSENT_OK: Piping KVM stream to tunnel websocket');
     ws.httprequest.desktop.kvm.pipe(ws, { dataTypeSkip: 1 });
-    debugLogToFile('KVM_CONSENT_OK: KVM pipe established, KVM data should start flowing now');
     if (ws.httprequest.autolock) {
         destopLockHelper_pipe(ws.httprequest);
     }
 }
 
 function kvm_consent_ask(ws){
-    debugLogToFile('KVM_CONSENT_ASK: Waiting for user consent');
     // Send a console message back using the console channel, "\n" is supported.
     ws.write(JSON.stringify({ ctrlChannel: '102938', type: 'console', msg: "Waiting for user to grant access...", msgid: 1 }));
     var consentMessage = currentTranslation['desktopConsent'].replace(/\{0\}/g, ws.httprequest.realname).replace(/\{1\}/g, ws.httprequest.username);
@@ -3021,12 +2984,6 @@ function files_tunnel_endhandler()
 function onTunnelData(data)
 {
     //sendConsoleText('OnTunnelData, ' + data.length + ', ' + typeof data + ', ' + data);
-    // DEBUG: Log tunnel data (only first call per state)
-    if (this.httprequest._debugLogCount === undefined) { this.httprequest._debugLogCount = 0; }
-    if (this.httprequest._debugLogCount < 10 || this.httprequest._debugLogCount % 1000 === 0) {
-        debugLogToFile('TUNNEL_DATA: onTunnelData called, state=' + this.httprequest.state + ', protocol=' + this.httprequest.protocol + ', dataLen=' + (data ? data.length : 0) + ', dataType=' + typeof data + ', count=' + this.httprequest._debugLogCount);
-    }
-    this.httprequest._debugLogCount++;
 
     // If this is upload data, save it to file
     if ((this.httprequest.uploadFile) && (typeof data == 'object') && (data[0] != 123)) {
@@ -3046,10 +3003,8 @@ function onTunnelData(data)
 
     if (this.httprequest.state == 0) {
         // Check if this is a relay connection
-        debugLogToFile('TUNNEL_DATA: state=0, checking for relay connection, data=' + (data ? data.toString().substring(0, 20) : 'null'));
         if ((data == 'c') || (data == 'cr')) {
             this.httprequest.state = 1;
-            debugLogToFile('TUNNEL_DATA: Relay connection confirmed, state set to 1');
             //sendConsoleText("Tunnel #" + this.httprequest.index + " now active", this.httprequest.sessionid);
         }
     }
@@ -3154,13 +3109,10 @@ function onTunnelData(data)
                 //
                 // Remote Desktop
                 //
-                debugLogToFile('KVM_TUNNEL: Protocol 2 (Remote Desktop) detected, starting KVM setup');
-                debugLogToFile('KVM_TUNNEL: rights=' + this.httprequest.rights + ', platform=' + process.platform);
 
                 // Check user access rights for desktop
                 if ((((this.httprequest.rights & MESHRIGHT_REMOTECONTROL) == 0) && ((this.httprequest.rights & MESHRIGHT_REMOTEVIEW) == 0)) || ((this.httprequest.rights != 0xFFFFFFFF) && ((this.httprequest.rights & MESHRIGHT_NODESKTOP) != 0))) {
                     // Disengage this tunnel, user does not have the rights to do this!!
-                    debugLogToFile('KVM_TUNNEL_FAIL: No Desktop Control Rights, disconnecting');
                     this.httprequest.protocol = 999999;
                     this.httprequest.s.end();
                     sendConsoleText("Error: No Desktop Control Rights.");
@@ -3174,7 +3126,6 @@ function onTunnelData(data)
                 if ((this.httprequest.xoptions != null) && (typeof this.httprequest.xoptions.tsid == 'number')) { tsid = this.httprequest.xoptions.tsid; }
                 require('MeshAgent')._tsid = tsid;
                 this.tsid = tsid;
-                debugLogToFile('KVM_TUNNEL: TSID=' + tsid);
 
                 // If MacOS, Wake up device with caffeinate
                 if(process.platform == 'darwin'){
@@ -3191,14 +3142,7 @@ function onTunnelData(data)
                     } catch(err) { }
                 }
                 // Remote desktop using native pipes
-                debugLogToFile('KVM_TUNNEL: Calling mesh.getRemoteDesktopStream(tsid=' + tsid + ')');
-                try {
-                    this.httprequest.desktop = { state: 0, kvm: mesh.getRemoteDesktopStream(tsid), tunnel: this };
-                    debugLogToFile('KVM_TUNNEL: getRemoteDesktopStream returned, kvm=' + (this.httprequest.desktop.kvm ? 'OK' : 'NULL'));
-                } catch (kvmEx) {
-                    debugLogToFile('KVM_TUNNEL_FAIL: getRemoteDesktopStream threw exception: ' + kvmEx);
-                    throw kvmEx;
-                }
+                this.httprequest.desktop = { state: 0, kvm: mesh.getRemoteDesktopStream(tsid), tunnel: this };
                 this.httprequest.desktop.kvm.parent = this.httprequest.desktop;
                 this.desktop = this.httprequest.desktop;
 
@@ -3243,13 +3187,11 @@ function onTunnelData(data)
                 if ((this.httprequest.desktopviewonly != true) && ((this.httprequest.rights == 0xFFFFFFFF) || (((this.httprequest.rights & MESHRIGHT_REMOTECONTROL) != 0) && ((this.httprequest.rights & MESHRIGHT_REMOTEVIEW) == 0))))
                 {
                     // If we have remote control rights, pipe the KVM input
-                    debugLogToFile('KVM_TUNNEL: Piping tunnel to KVM (remote control enabled)');
                     this.pipe(this.httprequest.desktop.kvm, { dataTypeSkip: 1, end: false }); // 0 = Binary, 1 = Text. Pipe the Browser --> KVM input.
                 }
                 else
                 {
                     // We need to only pipe non-mouse & non-keyboard inputs.
-                    debugLogToFile('KVM_TUNNEL: View-only mode (no remote control rights)');
                     // sendConsoleText('Warning: No Remote Desktop Input Rights.');
                     // TODO!!!
                 }

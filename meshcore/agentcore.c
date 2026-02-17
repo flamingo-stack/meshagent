@@ -1227,13 +1227,8 @@ void ILibDuktape_MeshAgent_DomainSocket_OnData(ILibAsyncSocket_SocketModule sock
 	unsigned short size;
 
 	static int frame_count = 0;
-	static int log_interval_count = 0;
 	if (++frame_count % 1000 == 0) {
 		fflush(stdout);
-	}
-	// Log every 5000 frames to avoid flooding
-	if (++log_interval_count == 1 || log_interval_count % 5000 == 0) {
-		ILIBLOGMESSAGEX("KVM_DATA_MAC: DomainSocket OnData called (frame_count=%d, bufferLen=%d, ptrs=%p)", frame_count, bufferLen, ptrs);
 	}
 
 	// Process all complete frames in the buffer
@@ -1296,11 +1291,9 @@ void ILibDuktape_MeshAgent_DomainSocket_OnData(ILibAsyncSocket_SocketModule sock
 void ILibDuktape_MeshAgent_DomainSocket_OnDisconnect(ILibAsyncSocket_SocketModule socketModule, void *user)
 {
 	RemoteDesktop_Ptrs *ptrs = (RemoteDesktop_Ptrs*)user;
-	ILIBLOGMESSAGEX("KVM_DISCONNECT_MAC: DomainSocket OnDisconnect called (ptrs=%p, socketModule=%p)", ptrs, socketModule);
 
 	if (ptrs != NULL && ptrs->ctx != NULL)
 	{
-		ILIBLOGMESSAGEX("KVM_DISCONNECT_MAC: Cleaning up KVM session (stream=%p)", ptrs->stream);
 		MeshAgent_sendConsoleText(ptrs->ctx, "KVM Domain Socket Disconnected");
 
 		// NEW ARCHITECTURE: LaunchAgent runs in both LoginWindow and Aqua contexts
@@ -1318,18 +1311,15 @@ void ILibDuktape_MeshAgent_DomainSocket_OnDisconnect(ILibAsyncSocket_SocketModul
 		ptrs->kvmDomainSocketModule = NULL;
 		ptrs->kvmDomainSocket = 0;
 	}
-	ILIBLOGMESSAGEX("KVM_DISCONNECT_MAC: Cleanup complete");
 }
 
 void ILibDuktape_MeshAgent_DomainSocket_OnConnect(ILibAsyncSocket_SocketModule socketModule, int Connected, void *user)
 {
 	RemoteDesktop_Ptrs *ptrs = (RemoteDesktop_Ptrs*)user;
-	ILIBLOGMESSAGEX("KVM_CONNECT_MAC: DomainSocket OnConnect called (Connected=%d, ptrs=%p, socketModule=%p)", Connected, ptrs, socketModule);
 
 	if (Connected == 0)
 	{
 		// Connection failed
-		ILIBLOGMESSAGEX("KVM_CONNECT_MAC_FAIL: Connection failed!");
 		if (ptrs != NULL && ptrs->ctx != NULL)
 		{
 			MeshAgent_sendConsoleText(ptrs->ctx, "KVM Domain Socket Connection Failed");
@@ -1342,7 +1332,6 @@ void ILibDuktape_MeshAgent_DomainSocket_OnConnect(ILibAsyncSocket_SocketModule s
 	else
 	{
 		// Connection established (should already be connected when using UseThisSocket)
-		ILIBLOGMESSAGEX("KVM_CONNECT_MAC_OK: Connection established successfully");
 		if (ptrs != NULL && ptrs->ctx != NULL)
 		{
 			MeshAgent_sendConsoleText(ptrs->ctx, "KVM Domain Socket Connected");
@@ -1487,13 +1476,11 @@ duk_ret_t ILibDuktape_MeshAgent_userChanged(duk_context *ctx)
 duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 {
 #ifndef _LINKVM
-	ILIBLOGMESSAGEX("KVM_SETUP: getRemoteDesktop called but _LINKVM not defined");
 	duk_push_null(ctx);
 	return 1;
 #else
 	RemoteDesktop_Ptrs *ptrs;
 	MeshAgentHostContainer *agent;
-	ILIBLOGMESSAGEX("KVM_SETUP: getRemoteDesktop() called - starting KVM session setup");
 
 #if defined(WIN32) || (defined(_POSIX) && !defined(__APPLE__))
 	int TSID = duk_is_number(ctx, 0) ? duk_require_int(ctx, 0) : -1;
@@ -1515,14 +1502,12 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 	duk_push_this(ctx);											// [MeshAgent]
 	if (duk_has_prop_string(ctx, -1, REMOTE_DESKTOP_STREAM))
 	{
-		ILIBLOGMESSAGEX("KVM_SETUP: REMOTE_DESKTOP_STREAM already exists - returning existing stream");
 		duk_get_prop_string(ctx, -1, REMOTE_DESKTOP_STREAM);	// [MeshAgent][RemoteDesktop]
 		duk_get_prop_string(ctx, -1, REMOTE_DESKTOP_ptrs);
 		ptrs = (RemoteDesktop_Ptrs*)Duktape_GetBuffer(ctx, -1, NULL);
 		duk_pop(ctx);
 		return 1;
 	}
-	ILIBLOGMESSAGEX("KVM_SETUP: Creating new RemoteDesktop stream");
 
 #ifdef __APPLE__
 	duk_peval_string_noresult(ctx, "require('power-monitor').wakeDisplay();");
@@ -1545,36 +1530,26 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 	ptrs->stream = ILibDuktape_DuplexStream_InitEx(ctx, ILibDuktape_MeshAgent_RemoteDesktop_WriteSink, ILibDuktape_MeshAgent_RemoteDesktop_EndSink, ILibDuktape_MeshAgent_RemoteDesktop_PauseSink, ILibDuktape_MeshAgent_RemoteDesktop_ResumeSink, ILibDuktape_MeshAgent_remoteDesktop_unshiftSink, ptrs);
 	ILibDuktape_CreateFinalizer(ctx, ILibDuktape_MeshAgent_RemoteDesktop_Finalizer);
 	ptrs->stream->readableStream->PipeHookHandler = ILibDuktape_MeshAgent_RemoteDesktop_PipeHook;
-	
+
 	// Setup Remote Desktop
-	ILIBLOGMESSAGEX("KVM_SETUP: DuplexStream initialized, now calling platform-specific kvm_relay_setup");
 #ifdef WIN32
-	ILIBLOGMESSAGEX("KVM_SETUP_WIN: Platform=Windows, TSID=%d, runningAsConsole=%d", TSID, agent->runningAsConsole);
 	#ifdef _WINSERVICE
-		ILIBLOGMESSAGEX("KVM_SETUP_WIN: Using WINSERVICE mode, pipeManager=%p", agent->pipeManager);
 		kvm_relay_setup(agent->exePath, agent->runningAsConsole ? NULL : agent->pipeManager, ILibDuktape_MeshAgent_RemoteDesktop_KVM_WriteSink, ptrs, TSID);
 	#else
-		ILIBLOGMESSAGEX("KVM_SETUP_WIN: Using non-service mode");
 		kvm_relay_setup(agent->exePath, NULL, ILibDuktape_MeshAgent_RemoteDesktop_KVM_WriteSink, ptrs, TSID);
-	#endif	
+	#endif
 #else
 	int console_uid = 0;
 	if (duk_peval_string(ctx, "require('user-sessions').consoleUid();") == 0) { console_uid = duk_get_int(ctx, -1); }
 	duk_pop(ctx);
-	ILIBLOGMESSAGEX("KVM_SETUP_POSIX: Platform=POSIX, console_uid=%d", console_uid);
 	#ifdef __APPLE__
 		// MacOS - REVERSED ARCHITECTURE with QueueDirectories
 		// Always use domain socket, regardless of console_uid
 		// LaunchAgent handles both LoginWindow (console_uid=0) and Aqua (console_uid!=0) via LimitLoadToSessionType
-		ILIBLOGMESSAGEX("KVM_SETUP_MAC: Platform=macOS, console_uid=%d, companyName=%s, meshServiceName=%s, serviceID=%s",
-			console_uid, agent->companyName ? agent->companyName : "NULL",
-			agent->meshServiceName ? agent->meshServiceName : "NULL",
-			agent->serviceID ? agent->serviceID : "NULL");
 
 		// Spawn TCC check before establishing KVM connection (non-blocking)
 		// The -tccCheck process will check permissions and decide whether to show UI
 		int should_spawn = 1;  // Default: spawn TCC check
-
 
 		// Check if user previously selected "Do not remind me again"
 		int len = ILibSimpleDataStore_Get(agent->masterDb, "tccPermissionsUIDisabled", ILibScratchPad, sizeof(ILibScratchPad));
@@ -1584,33 +1559,23 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 			if (strcmp(ILibScratchPad, "1") == 0)
 			{
 				should_spawn = 0;
-				ILIBLOGMESSAGEX("KVM_SETUP_MAC: TCC UI disabled by user preference");
 			}
 		}
 
 		if (should_spawn)
 		{
-			ILIBLOGMESSAGEX("KVM_SETUP_MAC: Spawning TCC check window (async)");
 			int tcc_pipe_fd = show_tcc_permissions_window_async(agent->exePath, agent->pipeManager, console_uid);
 			if (tcc_pipe_fd >= 0) {
 				// Create async monitor to read result from pipe
-				ILIBLOGMESSAGEX("KVM_SETUP_MAC: TCC pipe created, fd=%d", tcc_pipe_fd);
 				TCCPipeMonitor_Create(agent->chain, agent->masterDb, tcc_pipe_fd);
-			} else {
-				ILIBLOGMESSAGEX("KVM_SETUP_MAC: TCC pipe creation failed");
 			}
-		} else {
-			ILIBLOGMESSAGEX("KVM_SETUP_MAC: Skipping TCC check");
 		}
 
 		// Get the connected FD from kvm_relay_setup (daemon accepts connection from -kvm1)
-		ILIBLOGMESSAGEX("KVM_SETUP_MAC: Calling kvm_relay_setup() - this will BLOCK until -kvm1 connects...");
 		int client_fd = (int)(intptr_t)kvm_relay_setup(agent->exePath, agent->pipeManager, ILibDuktape_MeshAgent_RemoteDesktop_KVM_WriteSink, ptrs, console_uid, agent->companyName, agent->meshServiceName, agent->serviceID);
-		ILIBLOGMESSAGEX("KVM_SETUP_MAC: kvm_relay_setup() returned client_fd=%d", client_fd);
 
 		if (client_fd > 0)
 		{
-			ILIBLOGMESSAGEX("KVM_SETUP_MAC: Creating ILibAsyncSocket for domain socket connection");
 			// Create ILibAsyncSocket module to wrap the FD
 			ptrs->kvmDomainSocketModule = ILibCreateAsyncSocketModuleWithMemory(duk_ctx_chain(ctx), 65535,
 				ILibDuktape_MeshAgent_DomainSocket_OnData,
@@ -1622,15 +1587,16 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 			// Attach the already-connected FD to the socket module
 			ILibAsyncSocket_UseThisSocket(ptrs->kvmDomainSocketModule, client_fd, NULL, ptrs);
 
+			ILibAsyncSocket_Pause(ptrs->kvmDomainSocketModule);  // Sets PAUSE = 1
+			ILibAsyncSocket_Resume(ptrs->kvmDomainSocketModule); // Sets PAUSE = -1 and calls ForceUnBlockChain
+
 			// Store the FD
 			ptrs->kvmDomainSocket = client_fd;
 
-			ILIBLOGMESSAGEX("KVM_SETUP_MAC: Domain socket connection established successfully (client_fd=%d)", client_fd);
 			MeshAgent_sendConsoleText(ctx, "Domain socket connection established");
 		}
 		else
 		{
-			ILIBLOGMESSAGEX("KVM_SETUP_MAC_FAIL: Failed to establish domain socket connection (client_fd=%d)", client_fd);
 			MeshAgent_sendConsoleText(ctx, "Failed to establish domain socket connection");
 			ILibDuktape_DuplexStream_WriteEnd(ptrs->stream);
 		}
@@ -3845,9 +3811,6 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 			{
 				// There's no timeout, probably because the core is already running
 				printf("Meshcore already running (coreTimeout=%p)...\n", agent->coreTimeout);
-				// DEBUG: Log detailed state when core is already running
-				ILIBLOGMESSAGEX("CORE_RUNNING: Meshcore already running (coreTimeout=%p, serverConnectionState=%d, serverAuthState=%d, meshCoreCtx=%p)",
-					agent->coreTimeout, agent->serverConnectionState, agent->serverAuthState, agent->meshCoreCtx);
 			}
 			break;
 		}
@@ -4251,14 +4214,8 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 	// If there are no headers, this is a connection error. Log it and try again...
 	if (header == NULL)
 	{
-		int descriptorValue = ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject);
 		ILibRemoteLogging_printf(ILibChainGetLogger(ILibWebClient_GetChainFromWebStateObject(WebStateObject)), ILibRemoteLogging_Modules_Agent_GuardPost, ILibRemoteLogging_Flags_VerbosityLevel_1, "Agent Host Container: Mesh Server Connection Error, trying again later.");
-		printf("Mesh Server Connection Error [%d]\n", descriptorValue);
-
-		// DEBUG: Detailed connection error logging
-		ILIBLOGMESSAGEX("CONN_ERR: Mesh Server Connection Error [descriptor=%d, serverConnectionState=%d, serverAuthState=%d, recvStatus=%d]",
-			descriptorValue, agent->serverConnectionState, agent->serverAuthState, recvStatus);
-		ILIBLOGMESSAGEX("CONN_ERR: Error codes: -1=INVALID_FD, 0=NOT_CONNECTED, 11=EAGAIN/EWOULDBLOCK, 20=ENOTDIR, positive=socket_fd");
+		printf("Mesh Server Connection Error [%d]\n", ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
 
 		agent->autoproxy_status = 0;
 
@@ -5155,7 +5112,6 @@ void MeshAgent_RunScriptOnly_Finalizer(duk_context *ctx, void *user)
 void MeshAgent_CoreModule_UncaughtException(duk_context *ctx, char *msg, void *user)
 {
 	printf("UncaughtException: %s\n", msg);
-	ILIBLOGMESSAGEX("UNCAUGHT_EXCEPTION: %s", msg);
 }
 void MeshAgent_AgentMode_IPAddressChanged_Handler(ILibIPAddressMonitor sender, void *user)
 {
