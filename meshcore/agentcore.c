@@ -1317,7 +1317,6 @@ void ILibDuktape_MeshAgent_DomainSocket_OnConnect(ILibAsyncSocket_SocketModule s
 {
 	RemoteDesktop_Ptrs *ptrs = (RemoteDesktop_Ptrs*)user;
 
-
 	if (Connected == 0)
 	{
 		// Connection failed
@@ -1531,14 +1530,14 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 	ptrs->stream = ILibDuktape_DuplexStream_InitEx(ctx, ILibDuktape_MeshAgent_RemoteDesktop_WriteSink, ILibDuktape_MeshAgent_RemoteDesktop_EndSink, ILibDuktape_MeshAgent_RemoteDesktop_PauseSink, ILibDuktape_MeshAgent_RemoteDesktop_ResumeSink, ILibDuktape_MeshAgent_remoteDesktop_unshiftSink, ptrs);
 	ILibDuktape_CreateFinalizer(ctx, ILibDuktape_MeshAgent_RemoteDesktop_Finalizer);
 	ptrs->stream->readableStream->PipeHookHandler = ILibDuktape_MeshAgent_RemoteDesktop_PipeHook;
-	
+
 	// Setup Remote Desktop
 #ifdef WIN32
 	#ifdef _WINSERVICE
 		kvm_relay_setup(agent->exePath, agent->runningAsConsole ? NULL : agent->pipeManager, ILibDuktape_MeshAgent_RemoteDesktop_KVM_WriteSink, ptrs, TSID);
 	#else
 		kvm_relay_setup(agent->exePath, NULL, ILibDuktape_MeshAgent_RemoteDesktop_KVM_WriteSink, ptrs, TSID);
-	#endif	
+	#endif
 #else
 	int console_uid = 0;
 	if (duk_peval_string(ctx, "require('user-sessions').consoleUid();") == 0) { console_uid = duk_get_int(ctx, -1); }
@@ -1548,11 +1547,9 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 		// Always use domain socket, regardless of console_uid
 		// LaunchAgent handles both LoginWindow (console_uid=0) and Aqua (console_uid!=0) via LimitLoadToSessionType
 
-
 		// Spawn TCC check before establishing KVM connection (non-blocking)
 		// The -tccCheck process will check permissions and decide whether to show UI
 		int should_spawn = 1;  // Default: spawn TCC check
-
 
 		// Check if user previously selected "Do not remind me again"
 		int len = ILibSimpleDataStore_Get(agent->masterDb, "tccPermissionsUIDisabled", ILibScratchPad, sizeof(ILibScratchPad));
@@ -1571,14 +1568,11 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 			if (tcc_pipe_fd >= 0) {
 				// Create async monitor to read result from pipe
 				TCCPipeMonitor_Create(agent->chain, agent->masterDb, tcc_pipe_fd);
-			} else {
 			}
-		} else {
 		}
 
 		// Get the connected FD from kvm_relay_setup (daemon accepts connection from -kvm1)
 		int client_fd = (int)(intptr_t)kvm_relay_setup(agent->exePath, agent->pipeManager, ILibDuktape_MeshAgent_RemoteDesktop_KVM_WriteSink, ptrs, console_uid, agent->companyName, agent->meshServiceName, agent->serviceID);
-
 
 		if (client_fd > 0)
 		{
@@ -1592,6 +1586,9 @@ duk_ret_t ILibDuktape_MeshAgent_getRemoteDesktop(duk_context *ctx)
 
 			// Attach the already-connected FD to the socket module
 			ILibAsyncSocket_UseThisSocket(ptrs->kvmDomainSocketModule, client_fd, NULL, ptrs);
+
+			ILibAsyncSocket_Pause(ptrs->kvmDomainSocketModule);  // Sets PAUSE = 1
+			ILibAsyncSocket_Resume(ptrs->kvmDomainSocketModule); // Sets PAUSE = -1 and calls ForceUnBlockChain
 
 			// Store the FD
 			ptrs->kvmDomainSocket = client_fd;

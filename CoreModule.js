@@ -2057,14 +2057,11 @@ function onTunnelUpgrade(response, s, head)
     s.tunnel = this;
     s.descriptorMetadata = "MeshAgent_relayTunnel";
 
-
     if (require('MeshAgent').idleTimeout != null)
     {
         s.setTimeout(require('MeshAgent').idleTimeout * 1000);
         s.on('timeout', tunnel_onIdleTimeout);
     }
-
-    //sendConsoleText('onTunnelUpgrade - ' + this.tcpport + ' - ' + this.udpport);
 
     if (this.tcpport != null) {
         // This is a TCP relay connection, pause now and try to connect to the target.
@@ -2147,6 +2144,7 @@ function onTcpRelayServerTunnelData(data) {
 
 function onTunnelClosed()
 {
+
     if (this.httprequest._dispatcher != null && this.httprequest.term == null)
     {
         // Windows Dispatcher was created to spawn a child connection, but the child didn't connect yet, so we have to shutdown the dispatcher, otherwise the child may end up hanging
@@ -2165,7 +2163,7 @@ function onTunnelClosed()
     }
 
     var tunnel = tunnels[this.httprequest.index];
-    if (tunnel == null) return; // Stop duplicate calls.
+    if (tunnel == null) { return; } // Stop duplicate calls.
 
     // Perform display locking on disconnect
     if ((this.httprequest.protocol == 2) && (this.httprequest.autolock === true)) {
