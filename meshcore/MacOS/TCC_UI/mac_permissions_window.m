@@ -14,9 +14,9 @@
 #include <errno.h>
 #include <execinfo.h>
 #include <crt_externs.h>
-#include <dlfcn.h>  // For dlsym
-#include <sqlite3.h>  // For TCC database check
-#import "../mac_ui_helpers.h"  // Shared UI helpers
+#include <dlfcn.h>
+#include <sqlite3.h>
+#import "../mac_ui_helpers.h"
 
 // Lock file to prevent multiple TCC UI processes
 #define TCC_LOCK_FILE "/tmp/meshagent_tcccheck.lock"
@@ -26,6 +26,24 @@
 #define BUTTON_TAG_FDA 2
 #define BUTTON_TAG_SCREEN_RECORDING 3
 
+// ============ Design constants - OpenFrame redesign ============
+#define WINDOW_WIDTH 580
+#define WINDOW_HEIGHT 380
+#define WINDOW_CORNER_RADIUS 16
+#define CARD_CORNER_RADIUS 12
+#define BUTTON_CORNER_RADIUS 8
+
+// Colors
+#define COLOR_WINDOW_BG [NSColor colorWithRed:0x21/255.0 green:0x21/255.0 blue:0x21/255.0 alpha:1.0]
+#define COLOR_CARD_BG [NSColor colorWithRed:0x16/255.0 green:0x16/255.0 blue:0x16/255.0 alpha:1.0]
+#define COLOR_SEPARATOR [NSColor colorWithRed:0x44/255.0 green:0x44/255.0 blue:0x44/255.0 alpha:1.0]
+#define COLOR_ACCENT [NSColor colorWithRed:0xF5/255.0 green:0xA6/255.0 blue:0x23/255.0 alpha:1.0]
+#define COLOR_TEXT_PRIMARY [NSColor whiteColor]
+#define COLOR_TEXT_SECONDARY [NSColor colorWithRed:0x99/255.0 green:0x99/255.0 blue:0x99/255.0 alpha:1.0]
+#define COLOR_DISABLED_BG [NSColor colorWithRed:0x35/255.0 green:0x35/255.0 blue:0x35/255.0 alpha:1.0]
+#define COLOR_DISABLED_TEXT [NSColor colorWithRed:0x70/255.0 green:0x70/255.0 blue:0x70/255.0 alpha:1.0]
+#define COLOR_CLOSE_BUTTON [NSColor colorWithRed:0x88/255.0 green:0x88/255.0 blue:0x88/255.0 alpha:1.0]
+
 // Helper functions for lock file management
 static int is_process_running(pid_t pid) {
     return kill(pid, 0) == 0;
@@ -34,16 +52,15 @@ static int is_process_running(pid_t pid) {
 static int is_tcc_ui_running(void) {
     FILE* f = fopen(TCC_LOCK_FILE, "r");
     if (f == NULL) {
-        return 0; // No lock file
+        return 0;
     }
 
     pid_t pid;
     if (fscanf(f, "%d", &pid) == 1) {
         fclose(f);
         if (is_process_running(pid)) {
-            return 1; // Process is running
+            return 1;
         } else {
-            // Stale lock, remove it
             unlink(TCC_LOCK_FILE);
             return 0;
         }
@@ -65,21 +82,87 @@ static void remove_lock_file(void) {
     unlink(TCC_LOCK_FILE);
 }
 
+// ============ Custom Button with hover/press effects ============
+@interface HoverButton : NSButton
+@property (nonatomic, strong) NSColor *normalColor;
+@property (nonatomic, strong) NSColor *hoverColor;
+@property (nonatomic, strong) NSColor *pressedColor;
+@property (nonatomic, strong) NSTrackingArea *trackingArea;
+@end
+
+@implementation HoverButton
+
+- (void)updateTrackingAreas {
+    [super updateTrackingAreas];
+    if (self.trackingArea) {
+        [self removeTrackingArea:self.trackingArea];
+    }
+    self.trackingArea = [[NSTrackingArea alloc] initWithRect:self.bounds
+                                                     options:(NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways)
+                                                       owner:self
+                                                    userInfo:nil];
+    [self addTrackingArea:self.trackingArea];
+}
+
+- (void)mouseEntered:(NSEvent *)event {
+    if (self.isEnabled && self.hoverColor) {
+        self.layer.backgroundColor = [self.hoverColor CGColor];
+    }
+}
+
+- (void)mouseExited:(NSEvent *)event {
+    if (self.isEnabled && self.normalColor) {
+        self.layer.backgroundColor = [self.normalColor CGColor];
+    }
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    if (self.isEnabled && self.pressedColor) {
+        self.layer.backgroundColor = [self.pressedColor CGColor];
+    }
+    [super mouseDown:event];
+}
+
+- (void)mouseUp:(NSEvent *)event {
+    if (self.isEnabled && self.normalColor) {
+        self.layer.backgroundColor = [self.normalColor CGColor];
+    }
+    [super mouseUp:event];
+}
+
+- (void)dealloc {
+    if (self.trackingArea) {
+        [self removeTrackingArea:self.trackingArea];
+    }
+    // ARC handles [super dealloc] automatically
+}
+
+@end
+
+// Forward declaration
+@class TCCPermissionsWindowDelegate;
+
+@interface TCCPermissionsWindowDelegate : NSObject <NSWindowDelegate>
+@property (nonatomic, assign) BOOL doNotRemindAgain;
+@property (nonatomic, assign) BOOL windowClosed;
+@property (nonatomic, strong) id buttonHandler;
+@property (nonatomic, strong) HoverButton *continueButton;
+- (void)checkboxToggled:(NSButton*)sender;
+- (void)updateContinueButtonState;
+@end
+
 // Button action handler class
 @interface TCCButtonHandler : NSObject
 @property (nonatomic, assign) NSView *contentView;
 @property (nonatomic, strong) NSTimer *updateTimer;
-@property (nonatomic, assign) BOOL cancelled;  // Flag to indicate handler is being deallocated
+@property (nonatomic, assign) BOOL cancelled;
+@property (nonatomic, weak) TCCPermissionsWindowDelegate *windowDelegate;
 
 - (instancetype)initWithContentView:(NSView*)view;
 - (void)openAccessibilitySettings:(id)sender;
 - (void)openFullDiskAccessSettings:(id)sender;
 - (void)openScreenRecordingSettings:(id)sender;
 - (void)updatePermissionStatus;
-- (void)updateButtonsWithAccessibility:(TCC_PermissionStatus)accessibility
-                                    fda:(TCC_PermissionStatus)fda
-                         screenRecording:(TCC_PermissionStatus)screenRecording
-                         updateAllButtons:(BOOL)updateAll;
 - (void)startPeriodicUpdates;
 - (void)stopPeriodicUpdates;
 @end
@@ -97,53 +180,73 @@ static void remove_lock_file(void) {
 }
 
 - (void)dealloc {
-    self.cancelled = YES;  // Signal to async blocks that handler is being deallocated
+    self.cancelled = YES;
     [self stopPeriodicUpdates];
-    [super dealloc];
+    // ARC handles [super dealloc] automatically
 }
 
-/**
- * Shared helper to update permission buttons based on status
- * Eliminates duplication across updatePermissionStatus, accessibilityPermissionChanged, and checkScreenRecordingAndFDA
- *
- * @param accessibility Accessibility permission status (or TCC_PERMISSION_NOT_DETERMINED to skip)
- * @param fda FDA permission status (or TCC_PERMISSION_NOT_DETERMINED to skip)
- * @param screenRecording Screen Recording permission status (or TCC_PERMISSION_NOT_DETERMINED to skip)
- * @param updateAll If YES, update all buttons; if NO, only update buttons with non-NOT_DETERMINED status
- */
-- (void)updateButtonsWithAccessibility:(TCC_PermissionStatus)accessibility
-                                    fda:(TCC_PermissionStatus)fda
-                         screenRecording:(TCC_PermissionStatus)screenRecording
-                         updateAllButtons:(BOOL)updateAll {
+- (void)replaceButtonWithSuccessIcon:(NSButton*)button {
+    if ([[button title] isEqualToString:@"✓"]) return;
+
+    [button setEnabled:NO];
+    [button setBordered:NO];
+    [button setWantsLayer:YES];
+    button.layer.backgroundColor = [[NSColor clearColor] CGColor];
+
+    // Green checkmark icon
+    if (@available(macOS 11.0, *)) {
+        NSImageSymbolConfiguration* config = [NSImageSymbolConfiguration configurationWithPointSize:24 weight:NSFontWeightMedium];
+        NSImage* checkmark = [NSImage imageWithSystemSymbolName:@"checkmark.circle.fill" accessibilityDescription:@"Done"];
+        checkmark = [checkmark imageWithSymbolConfiguration:config];
+        [button setImage:checkmark];
+        [button setImagePosition:NSImageOnly];
+        [button setContentTintColor:[NSColor colorWithRed:0x7F/255.0 green:0xFF/255.0 blue:0x00/255.0 alpha:1.0]];
+    }
+    [button setTitle:@"✓"];
+}
+
+- (void)showButton:(NSButton*)button {
+    if ([[button title] isEqualToString:@"Setup"] && [button isEnabled]) return;
+
+    [button setEnabled:YES];
+    [button setBordered:NO];
+    [button setWantsLayer:YES];
+    button.layer.backgroundColor = [COLOR_ACCENT CGColor];
+    button.layer.cornerRadius = BUTTON_CORNER_RADIUS;
+
+    NSMutableAttributedString* attrTitle = [[NSMutableAttributedString alloc] initWithString:@"Setup"];
+    [attrTitle addAttribute:NSForegroundColorAttributeName value:[NSColor blackColor] range:NSMakeRange(0, attrTitle.length)];
+    [attrTitle addAttribute:NSFontAttributeName value:[NSFont systemFontOfSize:13 weight:NSFontWeightBold] range:NSMakeRange(0, attrTitle.length)];
+    [button setAttributedTitle:attrTitle];
+    [button setTitle:@"Setup"];
+}
+
+- (void)updatePermissionStatus {
     if (self.cancelled || !self.contentView) {
         return;
     }
 
-    // Snapshot subviews to avoid issues if view hierarchy changes during iteration
+    TCC_PermissionStatus accessibility = check_accessibility_permission();
+    TCC_PermissionStatus fda = check_fda_permission();
+    TCC_PermissionStatus screen_recording = check_screen_recording_permission();
+
     NSArray *subviews = [self.contentView subviews];
     for (NSView *subview in subviews) {
         if ([subview isKindOfClass:[NSButton class]]) {
             NSButton *button = (NSButton*)subview;
             NSInteger tag = [button tag];
 
-            // Map button tag to corresponding permission status
             TCC_PermissionStatus status = TCC_PERMISSION_NOT_DETERMINED;
             if (tag == BUTTON_TAG_ACCESSIBILITY) {
                 status = accessibility;
             } else if (tag == BUTTON_TAG_FDA) {
                 status = fda;
             } else if (tag == BUTTON_TAG_SCREEN_RECORDING) {
-                status = screenRecording;
+                status = screen_recording;
             } else {
-                continue; // Not a permission button
-            }
-
-            // Skip if we're not updating this button and updateAll is NO
-            if (!updateAll && status == TCC_PERMISSION_NOT_DETERMINED) {
                 continue;
             }
 
-            // Update button display based on status
             if (status == TCC_PERMISSION_GRANTED_USER || status == TCC_PERMISSION_GRANTED_MDM) {
                 [self replaceButtonWithSuccessIcon:button];
             } else {
@@ -151,117 +254,18 @@ static void remove_lock_file(void) {
             }
         }
     }
-}
 
-- (void)replaceButtonWithSuccessIcon:(NSButton*)button {
-    // Check if button is already showing checkmark (avoid re-applying transformation)
-    if ([button image] != nil) {
-        return; // Already converted to checkmark
-    }
-
-    if (@available(macOS 11.0, *)) {
-        // Get button's tag to determine original position
-        NSInteger tag = [button tag];
-        CGFloat yPos;
-        if (tag == BUTTON_TAG_ACCESSIBILITY) {
-            yPos = 235;
-        } else if (tag == BUTTON_TAG_FDA) {
-            yPos = 165;
-        } else if (tag == BUTTON_TAG_SCREEN_RECORDING) {
-            yPos = 100;
-        } else {
-            return;
-        }
-
-        // Create checkmark icon (32×32 with 28pt icon)
-        NSImageSymbolConfiguration* config = [NSImageSymbolConfiguration configurationWithPointSize:28 weight:NSFontWeightRegular];
-        NSImage* icon = [NSImage imageWithSystemSymbolName:@"checkmark.circle.fill" accessibilityDescription:@"Permission Granted"];
-        NSImage* configuredIcon = [icon imageWithSymbolConfiguration:config];
-
-        // Change button to show checkmark icon instead of text
-        [button setImage:configuredIcon];
-        [button setImagePosition:NSImageOnly];
-        [button setContentTintColor:[NSColor systemGreenColor]];
-        [button setTitle:@""];
-        [button setBordered:NO];
-        [button setBezelStyle:NSBezelStyleRegularSquare];
-
-        // Center checkmark where the button used to be (shifted down 12px)
-        // Button was at x=440 with width=140, so center is at 440 + 70 = 510
-        // Checkmark is 32 wide, so center it: 510 - 16 = 494
-        [button setFrame:NSMakeRect(494, yPos - 20 + (28 - 32) / 2, 32, 32)];
-    } else {
-        // Fallback for older macOS
-        [button setTitle:@"✓ Granted"];
-    }
-}
-
-- (void)showButton:(NSButton*)button {
-    // Check if button is already showing "Open Settings" (avoid re-applying transformation)
-    if ([button image] == nil && [[button title] isEqualToString:@"Open Settings"]) {
-        return; // Already showing button
-    }
-
-    // Restore button to original "Open Settings" appearance
-    [button setTitle:@"Open Settings"];
-    [button setImage:nil];
-    [button setImagePosition:NSImageLeft];
-    [button setBordered:YES];
-    [button setBezelStyle:NSBezelStyleRounded];
-
-    // Restore original size and position
-    NSInteger tag = [button tag];
-    CGFloat yPos;
-    if (tag == BUTTON_TAG_ACCESSIBILITY) {
-        yPos = 235;
-    } else if (tag == BUTTON_TAG_FDA) {
-        yPos = 165;
-    } else if (tag == BUTTON_TAG_SCREEN_RECORDING) {
-        yPos = 100;
-    } else {
-        return;
-    }
-
-    [button setFrame:NSMakeRect(440, yPos - 20, 140, 28)];
-}
-
-- (void)updatePermissionStatus {
-    // Retain self for block's lifetime to prevent use-after-free
-    __block TCCButtonHandler *blockSelf = [self retain];
-
-    // Check permissions on background thread to avoid blocking UI
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        @autoreleasepool {
-            // Check if handler was cancelled
-            if (blockSelf.cancelled) {
-                [blockSelf release];
-                return;
-            }
-
-            // Check all permissions for the calling process
-            TCC_PermissionStatus accessibility = check_accessibility_permission();
-            TCC_PermissionStatus fda = check_fda_permission();
-            TCC_PermissionStatus screen_recording = check_screen_recording_permission();
-
-            // Update UI on main thread
-            dispatch_async(dispatch_get_main_queue(), ^{
-                // Update all buttons using shared helper
-                [blockSelf updateButtonsWithAccessibility:accessibility
-                                                       fda:fda
-                                            screenRecording:screen_recording
-                                           updateAllButtons:YES];
-                [blockSelf release];  // Release after UI update
-            });
-        }
-    });
+    [self.windowDelegate updateContinueButtonState];
 }
 
 - (void)startPeriodicUpdates {
-    // Check immediately
+    // Initial state
     [self updatePermissionStatus];
 
-    // Use NSDistributedNotificationCenter to get real-time updates for Accessibility
-    // This is how Splashtop and other apps do it - no polling needed!
+    // Listen for the accessibility change notification so we can update the
+    // button faster than waiting for the timer.  This notification only fires
+    // once we have invoked AXIsProcessTrustedWithOptions, which is why the
+    // call in openAccessibilitySettings is now synchronous again.
     [[NSDistributedNotificationCenter defaultCenter]
         addObserver:self
         selector:@selector(accessibilityPermissionChanged:)
@@ -269,84 +273,73 @@ static void remove_lock_file(void) {
         object:nil
         suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
 
-    // For Screen Recording and FDA, we need light polling since there's no notification
-    // Use 3-second interval since we have real-time updates for Accessibility via notification
-    __block TCCButtonHandler *blockSelf = [self retain];
-    self.updateTimer = [NSTimer timerWithTimeInterval:3.0
+    // Also refresh when the application becomes active; users often leave the
+    // helper window open while toggling a preference and then switch back.
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+        selector:@selector(applicationDidBecomeActive:)
+        name:NSApplicationDidBecomeActiveNotification
+        object:nil];
+
+    // Timer for all permissions (we previously split this up, but polling every
+    // couple of seconds is cheap and keeps the code simple).  The 2‑second
+    // interval gives the accessibility change some breathing room.
+    __weak typeof(self) weakSelf = self;
+    self.updateTimer = [NSTimer timerWithTimeInterval:2.0
                                                repeats:YES
                                                  block:^(NSTimer *timer) {
-        if (!blockSelf.cancelled) {
-            // Only check Screen Recording and FDA (Accessibility updated via notification)
-            [blockSelf checkScreenRecordingAndFDA];
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (strongSelf && !strongSelf.cancelled) {
+            [strongSelf updatePermissionStatus];
         } else {
             [timer invalidate];
-            [blockSelf release];
         }
     }];
 
     [[NSRunLoop currentRunLoop] addTimer:self.updateTimer forMode:NSRunLoopCommonModes];
 }
 
-// Called when Accessibility permission changes (real-time notification)
 - (void)accessibilityPermissionChanged:(NSNotification *)notification {
-    // Retain self for block's lifetime to prevent use-after-free
-    __block TCCButtonHandler *blockSelf = [self retain];
+    // The notification may fire before the trusted state is fully updated.  We
+    // do a delayed check on a background queue, then jump back to the main
+    // thread to update only the accessibility button.  Use a weak/strong
+    // reference pattern to avoid retain cycles under ARC.
+    __weak typeof(self) weakSelf = self;
 
-    // Small delay to let the change settle, then check on background thread
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)),
+                   dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         @autoreleasepool {
-            // Check if handler was cancelled
-            if (blockSelf.cancelled) {
-                [blockSelf release];
-                return;
-            }
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf || strongSelf.cancelled) return;
 
             TCC_PermissionStatus accessibility = check_accessibility_permission();
 
-            // Update UI on main thread
             dispatch_async(dispatch_get_main_queue(), ^{
-                // Update only accessibility button using shared helper
-                [blockSelf updateButtonsWithAccessibility:accessibility
-                                                       fda:TCC_PERMISSION_NOT_DETERMINED
-                                            screenRecording:TCC_PERMISSION_NOT_DETERMINED
-                                           updateAllButtons:NO];
-                [blockSelf release];  // Release after UI update
-            });
-        }
-    });
-}
-
-// Check only Screen Recording and FDA (called by timer)
-- (void)checkScreenRecordingAndFDA {
-    // Retain self for block's lifetime to prevent use-after-free
-    __block TCCButtonHandler *blockSelf = [self retain];
-
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        @autoreleasepool {
-            // Check if handler was cancelled before doing expensive work
-            if (blockSelf.cancelled) {
-                [blockSelf release];
-                return;
-            }
-
-            TCC_PermissionStatus fda = check_fda_permission();
-            TCC_PermissionStatus screen_recording = check_screen_recording_permission();
-
-            dispatch_async(dispatch_get_main_queue(), ^{
-                // Update FDA and Screen Recording buttons using shared helper
-                [blockSelf updateButtonsWithAccessibility:TCC_PERMISSION_NOT_DETERMINED
-                                                       fda:fda
-                                            screenRecording:screen_recording
-                                           updateAllButtons:NO];
-                [blockSelf release];  // Release after UI update
+                if (!strongSelf.cancelled && strongSelf.contentView) {
+                    NSArray *subviews = [strongSelf.contentView subviews];
+                    for (NSView *subview in subviews) {
+                        if ([subview isKindOfClass:[NSButton class]]) {
+                            NSButton *button = (NSButton*)subview;
+                            if ([button tag] == BUTTON_TAG_ACCESSIBILITY) {
+                                if (accessibility == TCC_PERMISSION_GRANTED_USER ||
+                                    accessibility == TCC_PERMISSION_GRANTED_MDM) {
+                                    [strongSelf replaceButtonWithSuccessIcon:button];
+                                } else {
+                                    [strongSelf showButton:button];
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
             });
         }
     });
 }
 
 - (void)stopPeriodicUpdates {
-    // Remove notification observer
     [[NSDistributedNotificationCenter defaultCenter] removeObserver:self];
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 
     if (self.updateTimer) {
         [self.updateTimer invalidate];
@@ -355,29 +348,27 @@ static void remove_lock_file(void) {
 }
 
 - (void)openAccessibilitySettings:(id)sender {
-    // Trigger the system permission prompt to add MeshAgent to the Accessibility list
+    // Calling AXIsProcessTrustedWithOptions synchronously is important;
+    // it not only prompts the user but also registers our process with the
+    // accessibility system so notifications will be delivered when the
+    // checkbox is toggled.  The async dispatch added during the redesign
+    // sometimes executed after the user had already granted permission,
+    // which meant we never received the update and the button never flipped.
     if (__builtin_available(macOS 10.9, *)) {
-        // Call on background thread to avoid blocking UI (API blocks until user responds)
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            @autoreleasepool {
-                const void *keys[] = { kAXTrustedCheckOptionPrompt };
-                const void *values[] = { kCFBooleanTrue };
-                CFDictionaryRef options = CFDictionaryCreate(
-                    kCFAllocatorDefault,
-                    keys,
-                    values,
-                    1,
-                    &kCFCopyStringDictionaryKeyCallBacks,
-                    &kCFTypeDictionaryValueCallBacks);
+        const void *keys[] = { kAXTrustedCheckOptionPrompt };
+        const void *values[] = { kCFBooleanTrue };
+        CFDictionaryRef options = CFDictionaryCreate(
+            kCFAllocatorDefault,
+            keys,
+            values,
+            1,
+            &kCFCopyStringDictionaryKeyCallBacks,
+            &kCFTypeDictionaryValueCallBacks);
 
-                // This will show the system dialog: "MeshAgent.app would like to control this computer using accessibility features"
-                AXIsProcessTrustedWithOptions(options);
-                CFRelease(options);
-            }
-        });
+        AXIsProcessTrustedWithOptions(options);
+        CFRelease(options);
     }
 
-    // Also open System Settings so user can see MeshAgent was added to the list
     NSURL* url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"];
     [[NSWorkspace sharedWorkspace] openURL:url];
 }
@@ -387,7 +378,6 @@ static void remove_lock_file(void) {
     [[NSWorkspace sharedWorkspace] openURL:url];
 }
 
-// Function pointer type for CGWindowListCreateImage (deprecated in macOS 15 but still works)
 typedef CGImageRef (*CGWindowListCreateImageFunc)(CGRect, CGWindowListOption, CGWindowID, CGWindowImageOption);
 
 static BOOL isAppInScreenRecordingTCCList(void) {
@@ -427,6 +417,16 @@ static BOOL isAppInScreenRecordingTCCList(void) {
     return existsInList;
 }
 
+// Called when the application becomes active (e.g. user switches back from
+// System Preferences).  We schedule a short delay to allow the system to
+// propagate any TCC changes before re‑checking.
+- (void)applicationDidBecomeActive:(NSNotification *)notification {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [self updatePermissionStatus];
+    });
+}
+
 - (void)openScreenRecordingSettings:(id)sender {
     BOOL alreadyInList = isAppInScreenRecordingTCCList();
 
@@ -452,17 +452,15 @@ static BOOL isAppInScreenRecordingTCCList(void) {
                     [invocation invoke];
 
                     dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC));
-                    dispatch_release(semaphore);
+                    // ARC manages dispatch objects automatically (macOS 10.8+)
 
                     triggered = YES;
                 }
             }
         }
 
-        // Fallback to CGWindowListCreateImage for older macOS or if ScreenCaptureKit failed
         if (!triggered) {
             if (__builtin_available(macOS 10.15, *)) {
-                // Load CGWindowListCreateImage dynamically since it's marked unavailable in macOS 15 SDK
                 CGWindowListCreateImageFunc createImageFunc = (CGWindowListCreateImageFunc)dlsym(RTLD_DEFAULT, "CGWindowListCreateImage");
 
                 if (createImageFunc) {
@@ -481,30 +479,20 @@ static BOOL isAppInScreenRecordingTCCList(void) {
             }
         }
 
-        // Fallback on unrelaible older APIs.
         if (!triggered) {
             if (__builtin_available(macOS 10.15, *)) {
                 CGRequestScreenCaptureAccess();
             }
         }
     }
-    // If already in list, just open Settings - user can toggle manually
 
-    // Open System Settings so user can toggle the permission
     NSURL* url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"];
     [[NSWorkspace sharedWorkspace] openURL:url];
 }
 
 @end
 
-// Window delegate to handle events
-@interface TCCPermissionsWindowDelegate : NSObject <NSWindowDelegate>
-@property (nonatomic, assign) BOOL doNotRemindAgain;
-@property (nonatomic, assign) BOOL windowClosed;
-@property (nonatomic, strong) TCCButtonHandler *buttonHandler;
-- (void)checkboxToggled:(NSButton*)sender;
-@end
-
+// Window delegate implementation
 @implementation TCCPermissionsWindowDelegate
 
 - (id)init {
@@ -526,172 +514,304 @@ static BOOL isAppInScreenRecordingTCCList(void) {
     self.doNotRemindAgain = ([sender state] == NSControlStateValueOn);
 }
 
+- (void)updateContinueButtonState {
+    // Continue button is always yellow, no state change needed
+}
+
 @end
 
-// Helper function to create section with permission name, description, and button
-static void createPermissionSection(NSView* contentView, NSString* title, NSString* description, CGFloat yPos, SEL action, id target, NSInteger buttonTag) {
-    // Title label (bold)
-    NSTextField* titleLabel = mesh_createLabel(title, NSMakeRect(40, yPos, 380, 20), YES);
-    [contentView addSubview:titleLabel];
+// Helper function to create permission row
+static void createPermissionRow(NSView* container, NSString* title, NSString* description, CGFloat yPos, SEL action, id target, NSInteger buttonTag, BOOL addSeparator) {
+    CGFloat containerWidth = container.frame.size.width;
+    CGFloat rowPadding = 20;
+    CGFloat rowHeight = 70;
 
-    // Description label (gray, wrapped)
-    NSTextField* descLabel = mesh_createLabel(description, NSMakeRect(40, yPos - 35, 380, 32), NO);
+    // Title label
+    NSTextField* titleLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(rowPadding, yPos + rowHeight - 38, containerWidth - 140, 24)];
+    [titleLabel setStringValue:title];
+    [titleLabel setBezeled:NO];
+    [titleLabel setDrawsBackground:NO];
+    [titleLabel setEditable:NO];
+    [titleLabel setSelectable:NO];
+    [titleLabel setFont:[NSFont systemFontOfSize:16 weight:NSFontWeightBold]];
+    [titleLabel setTextColor:COLOR_TEXT_PRIMARY];
+    [container addSubview:titleLabel];
+
+    // Description label
+    NSTextField* descLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(rowPadding, yPos + 2, containerWidth - 140, 32)];
+    [descLabel setStringValue:description];
+    [descLabel setBezeled:NO];
+    [descLabel setDrawsBackground:NO];
+    [descLabel setEditable:NO];
+    [descLabel setSelectable:NO];
+    [descLabel setFont:[NSFont systemFontOfSize:13]];
+    [descLabel setTextColor:COLOR_TEXT_SECONDARY];
     [descLabel setLineBreakMode:NSLineBreakByWordWrapping];
     [[descLabel cell] setWraps:YES];
-    [contentView addSubview:descLabel];
+    [container addSubview:descLabel];
 
-    // "Open Settings" button (shifted down 12px from text)
-    NSButton* settingsButton = [[NSButton alloc] initWithFrame:NSMakeRect(440, yPos - 20, 140, 28)];
-    [settingsButton setTitle:@"Open Settings"];
-    [settingsButton setBezelStyle:NSBezelStyleRounded];
-    [settingsButton setTarget:target];
-    [settingsButton setAction:action];
-    [settingsButton setTag:buttonTag];
-    [contentView addSubview:settingsButton];
+    // Setup button with hover effects
+    CGFloat rowHeightForButton = 70;
+    HoverButton* setupButton = [[HoverButton alloc] initWithFrame:NSMakeRect(containerWidth - 100, yPos + (rowHeightForButton - 36) / 2, 80, 36)];
+    [setupButton setTitle:@"Setup"];
+    [setupButton setBezelStyle:NSBezelStyleRounded];
+    [setupButton setBordered:NO];
+    [setupButton setTarget:target];
+    [setupButton setAction:action];
+    [setupButton setTag:buttonTag];
+    [setupButton setWantsLayer:YES];
+
+    setupButton.normalColor = COLOR_ACCENT;
+    setupButton.hoverColor = [NSColor colorWithRed:0xFF/255.0 green:0xB8/255.0 blue:0x40/255.0 alpha:1.0];
+    setupButton.pressedColor = [NSColor colorWithRed:0xD9/255.0 green:0x8C/255.0 blue:0x1D/255.0 alpha:1.0];
+
+    setupButton.layer.backgroundColor = [COLOR_ACCENT CGColor];
+    setupButton.layer.cornerRadius = BUTTON_CORNER_RADIUS;
+
+    NSMutableAttributedString* attrTitle = [[NSMutableAttributedString alloc] initWithString:@"Setup"];
+    [attrTitle addAttribute:NSForegroundColorAttributeName value:[NSColor blackColor] range:NSMakeRange(0, attrTitle.length)];
+    [attrTitle addAttribute:NSFontAttributeName value:[NSFont systemFontOfSize:13 weight:NSFontWeightBold] range:NSMakeRange(0, attrTitle.length)];
+    [setupButton setAttributedTitle:attrTitle];
+    [container addSubview:setupButton];
+
+    // Separator
+    if (addSeparator) {
+        NSView* separator = [[NSView alloc] initWithFrame:NSMakeRect(0, yPos, containerWidth, 1)];
+        [separator setWantsLayer:YES];
+        separator.layer.backgroundColor = [COLOR_SEPARATOR CGColor];
+        [container addSubview:separator];
+    }
 }
 
 int show_tcc_permissions_window(int show_reminder_checkbox) {
     @autoreleasepool {
-        // Create lock file to prevent multiple instances
         create_lock_file();
 
-        // Create the application if it doesn't exist
         [NSApplication sharedApplication];
-
-        // Set activation policy to allow window to show
         [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
 
-        // Create window
-        NSRect frame = NSMakeRect(0, 0, 600, 355);
+        // Create borderless window
+        NSRect frame = NSMakeRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
         NSWindow* window = [[NSWindow alloc]
             initWithContentRect:frame
-            styleMask:(NSWindowStyleMaskTitled |
-                      NSWindowStyleMaskClosable)
+            styleMask:NSWindowStyleMaskBorderless
             backing:NSBackingStoreBuffered
             defer:NO];
 
-        [window setTitle:@"MeshAgent - Security & Privacy Settings"];
+        [window setTitle:@"OpenFrame – Setup Required"];
+        [window setBackgroundColor:COLOR_WINDOW_BG];
+        [window setOpaque:YES];
+        [window setHasShadow:YES];
+        [window setMovableByWindowBackground:YES];
 
-        // Position in upper-right area to stay out of the way
+        // Rounded corners
+        if (@available(macOS 10.14, *)) {
+            [[window contentView] setWantsLayer:YES];
+            [window contentView].layer.cornerRadius = WINDOW_CORNER_RADIUS;
+            [window contentView].layer.masksToBounds = YES;
+        }
+
+        // Position in upper-right
         NSScreen* mainScreen = [NSScreen mainScreen];
         NSRect screenFrame = [mainScreen visibleFrame];
         NSRect windowFrame = [window frame];
-
-        // Position 20 pixels from right edge and 20 pixels from top
         CGFloat xPos = screenFrame.origin.x + screenFrame.size.width - windowFrame.size.width - 20;
         CGFloat yPos = screenFrame.origin.y + screenFrame.size.height - windowFrame.size.height - 20;
-
         [window setFrameOrigin:NSMakePoint(xPos, yPos)];
         [window setLevel:NSFloatingWindowLevel];
 
-        // Get content view
         NSView* contentView = [window contentView];
+        [contentView setWantsLayer:YES];
+        contentView.layer.backgroundColor = [COLOR_WINDOW_BG CGColor];
 
-        // Create button handler
-        TCCButtonHandler* buttonHandler = [[TCCButtonHandler alloc] initWithContentView:contentView];
+        // ============ HEADER ============
 
-        // Create delegate and link button handler
-        TCCPermissionsWindowDelegate* delegate = [[TCCPermissionsWindowDelegate alloc] init];
-        delegate.buttonHandler = buttonHandler;
-        [window setDelegate:delegate];
+        // Close button
+        HoverButton* closeButton = [[HoverButton alloc] initWithFrame:NSMakeRect(WINDOW_WIDTH - 40, WINDOW_HEIGHT - 40, 24, 24)];
+        [closeButton setTitle:@"×"];
+        [closeButton setBordered:NO];
+        [closeButton setTarget:window];
+        [closeButton setAction:@selector(close)];
+        [closeButton setWantsLayer:YES];
 
-        // Add icon using SF Symbols (macOS 11+)
-        if (@available(macOS 11.0, *)) {
-            NSImageView* iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(40, 295, 40, 40)];
-            NSImage* icon = [NSImage imageWithSystemSymbolName:@"checkmark.shield" accessibilityDescription:@"Security"];
-            [iconView setImage:icon];
-            [iconView setSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:32 weight:NSFontWeightRegular]];
-            [contentView addSubview:iconView];
+        closeButton.normalColor = [NSColor clearColor];
+        closeButton.hoverColor = [NSColor colorWithRed:0x50/255.0 green:0x50/255.0 blue:0x50/255.0 alpha:1.0];
+        closeButton.pressedColor = [NSColor colorWithRed:0x40/255.0 green:0x40/255.0 blue:0x40/255.0 alpha:1.0];
+        closeButton.layer.cornerRadius = 12;
+
+        NSMutableAttributedString* closeAttr = [[NSMutableAttributedString alloc] initWithString:@"×"];
+        [closeAttr addAttribute:NSForegroundColorAttributeName value:COLOR_CLOSE_BUTTON range:NSMakeRange(0, 1)];
+        [closeAttr addAttribute:NSFontAttributeName value:[NSFont systemFontOfSize:18 weight:NSFontWeightLight] range:NSMakeRange(0, 1)];
+        [closeButton setAttributedTitle:closeAttr];
+        [contentView addSubview:closeButton];
+
+        // App icon - load from bundle relative to executable
+        NSImageView* iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(20, WINDOW_HEIGHT - 68, 48, 48)];
+        NSImage* appIcon = nil;
+
+        // 1. Try main bundle (works when launched as .app)
+        NSString* bundleIconPath = [[NSBundle mainBundle] pathForResource:@"openframe" ofType:@"icns"];
+        if (bundleIconPath) {
+            appIcon = [[NSImage alloc] initWithContentsOfFile:bundleIconPath];
         }
 
-        // Add header title
-        NSTextField* titleLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(90, 315, 490, 24)];
-        [titleLabel setStringValue:@"Security & Privacy Settings"];
+        // 2. Build path relative to executable: ../Resources/openframe.icns
+        if (!appIcon) {
+            NSString* execPath = [[NSBundle mainBundle] executablePath];
+            if (execPath) {
+                // execPath: .../MeshAgent.app/Contents/MacOS/meshagent
+                // Go up to Contents, then into Resources
+                NSString* resourcesPath = [[[[execPath stringByDeletingLastPathComponent]  // MacOS
+                                              stringByDeletingLastPathComponent]            // Contents
+                                             stringByAppendingPathComponent:@"Resources"]
+                                            stringByAppendingPathComponent:@"openframe.icns"];
+                if ([[NSFileManager defaultManager] fileExistsAtPath:resourcesPath]) {
+                    appIcon = [[NSImage alloc] initWithContentsOfFile:resourcesPath];
+                }
+            }
+        }
+
+        // 3. Fallback to application icon
+        if (!appIcon) {
+            appIcon = [NSApp applicationIconImage];
+        }
+
+        if (appIcon) {
+            [iconView setImage:appIcon];
+        }
+        [iconView setImageScaling:NSImageScaleProportionallyUpOrDown];
+        [contentView addSubview:iconView];
+
+        // Title
+        NSTextField* titleLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(80, WINDOW_HEIGHT - 45, 500, 24)];
+        [titleLabel setStringValue:@"OpenFrame – Setup Required"];
         [titleLabel setBezeled:NO];
         [titleLabel setDrawsBackground:NO];
         [titleLabel setEditable:NO];
         [titleLabel setSelectable:NO];
-        [titleLabel setFont:[NSFont systemFontOfSize:16 weight:NSFontWeightBold]];
-        [titleLabel setTextColor:[NSColor labelColor]];
+        [titleLabel setFont:[NSFont systemFontOfSize:17 weight:NSFontWeightBold]];
+        [titleLabel setTextColor:COLOR_TEXT_PRIMARY];
         [contentView addSubview:titleLabel];
 
-        // Add header description
-        NSTextField* headerLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(90, 280, 490, 32)];
-        [headerLabel setStringValue:@"Please grant MeshAgent all the required permissions for complete access functionality."];
-        [headerLabel setBezeled:NO];
-        [headerLabel setDrawsBackground:NO];
-        [headerLabel setEditable:NO];
-        [headerLabel setSelectable:NO];
-        [headerLabel setFont:[NSFont systemFontOfSize:12]];
-        [headerLabel setTextColor:[NSColor secondaryLabelColor]];
-        [headerLabel setLineBreakMode:NSLineBreakByWordWrapping];
-        [[headerLabel cell] setWraps:YES];
-        [contentView addSubview:headerLabel];
+        // Subtitle
+        NSTextField* subtitleLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(80, WINDOW_HEIGHT - 68, 600, 20)];
+        [subtitleLabel setStringValue:@"Let's get OpenFrame ready to help manage your systems securely."];
+        [subtitleLabel setBezeled:NO];
+        [subtitleLabel setDrawsBackground:NO];
+        [subtitleLabel setEditable:NO];
+        [subtitleLabel setSelectable:NO];
+        [subtitleLabel setFont:[NSFont systemFontOfSize:13]];
+        [subtitleLabel setTextColor:COLOR_TEXT_SECONDARY];
+        [contentView addSubview:subtitleLabel];
 
-        // Add permission sections
-        createPermissionSection(
-            contentView,
+        // ============ CARDS CONTAINER ============
+
+        CGFloat cardsContainerY = 72;
+        CGFloat cardsContainerHeight = 210;
+        CGFloat cardsContainerWidth = WINDOW_WIDTH - 40;
+
+        NSView* cardsContainer = [[NSView alloc] initWithFrame:NSMakeRect(20, cardsContainerY, cardsContainerWidth, cardsContainerHeight)];
+        [cardsContainer setWantsLayer:YES];
+        cardsContainer.layer.backgroundColor = [COLOR_CARD_BG CGColor];
+        cardsContainer.layer.cornerRadius = CARD_CORNER_RADIUS;
+        [contentView addSubview:cardsContainer];
+
+        // Create delegate and handler
+        TCCPermissionsWindowDelegate* delegate = [[TCCPermissionsWindowDelegate alloc] init];
+        TCCButtonHandler* buttonHandler = [[TCCButtonHandler alloc] initWithContentView:cardsContainer];
+        buttonHandler.windowDelegate = delegate;
+        delegate.buttonHandler = buttonHandler;
+        [window setDelegate:delegate];
+
+        CGFloat rowHeight = 70;
+
+        createPermissionRow(
+            cardsContainer,
             @"Accessibility",
-            @"Accessibility permission is required for this computer to be controlled during a remote session.",
-            235,
+            @"Required to remotely manage and monitor your devices.",
+            rowHeight * 2,
             @selector(openAccessibilitySettings:),
             buttonHandler,
-            BUTTON_TAG_ACCESSIBILITY
+            BUTTON_TAG_ACCESSIBILITY,
+            YES
         );
 
-        createPermissionSection(
-            contentView,
+        createPermissionRow(
+            cardsContainer,
             @"Full Disk Access",
-            @"Full Disk Access permission is required for features such as file transfer and drag-and-drop.",
-            165,
+            @"Enables secure file transfers and system maintenance tasks.",
+            rowHeight * 1,
             @selector(openFullDiskAccessSettings:),
             buttonHandler,
-            BUTTON_TAG_FDA
+            BUTTON_TAG_FDA,
+            YES
         );
 
-        createPermissionSection(
-            contentView,
+        createPermissionRow(
+            cardsContainer,
             @"Screen & System Audio Recording",
-            @"Screen & System Audio Recording permission is required for this computer's screen to be viewed during a remote session.",
-            100,
+            @"Allows technical support and diagnostics when needed.",
+            0,
             @selector(openScreenRecordingSettings:),
             buttonHandler,
-            BUTTON_TAG_SCREEN_RECORDING
+            BUTTON_TAG_SCREEN_RECORDING,
+            NO
         );
 
-        // Add "Do not remind me again" checkbox (only if requested)
+        // ============ FOOTER ============
+
+        CGFloat footerCenterY = cardsContainerY / 2;
+
+        // Checkbox
         if (show_reminder_checkbox) {
-            NSButton* checkbox = [[NSButton alloc] initWithFrame:NSMakeRect(20, 15, 250, 20)];
+            NSButton* checkbox = [[NSButton alloc] initWithFrame:NSMakeRect(20, footerCenterY - 10, 250, 20)];
             [checkbox setButtonType:NSButtonTypeSwitch];
-            [checkbox setTitle:@"Do not remind me again"];
             [checkbox setTarget:delegate];
             [checkbox setAction:@selector(checkboxToggled:)];
+
+            NSMutableAttributedString* checkboxTitle = [[NSMutableAttributedString alloc] initWithString:@"Do not remind me again"];
+            [checkboxTitle addAttribute:NSForegroundColorAttributeName value:COLOR_TEXT_PRIMARY range:NSMakeRange(0, checkboxTitle.length)];
+            [checkboxTitle addAttribute:NSFontAttributeName value:[NSFont systemFontOfSize:13] range:NSMakeRange(0, checkboxTitle.length)];
+            [checkbox setAttributedTitle:checkboxTitle];
             [contentView addSubview:checkbox];
         }
 
-        // Add "Finish" button
-        NSButton* finishButton = [[NSButton alloc] initWithFrame:NSMakeRect(490, 15, 90, 32)];
-        [finishButton setTitle:@"Finish"];
-        [finishButton setBezelStyle:NSBezelStyleRounded];
-        [finishButton setKeyEquivalent:@"\r"]; // Enter key
-        [finishButton setTarget:window];
-        [finishButton setAction:@selector(close)];
-        [contentView addSubview:finishButton];
+        // Continue button - always yellow #FFC008
+        NSColor* continueYellow = [NSColor colorWithRed:0xFF/255.0 green:0xC0/255.0 blue:0x08/255.0 alpha:1.0];
 
-        // Start real-time monitoring using notifications + light polling
-        // Accessibility uses NSDistributedNotificationCenter (instant updates like Splashtop!)
-        // Screen Recording uses 5-second polling (no notification available)
+        HoverButton* continueButton = [[HoverButton alloc] initWithFrame:NSMakeRect(WINDOW_WIDTH - 120, footerCenterY - 18, 100, 36)];
+        [continueButton setBezelStyle:NSBezelStyleRounded];
+        [continueButton setBordered:NO];
+        [continueButton setKeyEquivalent:@"\r"];
+        [continueButton setTarget:window];
+        [continueButton setAction:@selector(close)];
+        [continueButton setWantsLayer:YES];
+
+        continueButton.normalColor = continueYellow;
+        continueButton.hoverColor = [NSColor colorWithRed:0xFF/255.0 green:0xCC/255.0 blue:0x33/255.0 alpha:1.0];
+        continueButton.pressedColor = [NSColor colorWithRed:0xE6/255.0 green:0xAD/255.0 blue:0x00/255.0 alpha:1.0];
+
+        continueButton.layer.backgroundColor = [continueYellow CGColor];
+        continueButton.layer.cornerRadius = BUTTON_CORNER_RADIUS;
+
+        NSMutableAttributedString* continueAttr = [[NSMutableAttributedString alloc] initWithString:@"Continue"];
+        [continueAttr addAttribute:NSForegroundColorAttributeName value:[NSColor blackColor] range:NSMakeRange(0, continueAttr.length)];
+        [continueAttr addAttribute:NSFontAttributeName value:[NSFont systemFontOfSize:13 weight:NSFontWeightSemibold] range:NSMakeRange(0, continueAttr.length)];
+        [continueButton setAttributedTitle:continueAttr];
+        [contentView addSubview:continueButton];
+
+        delegate.continueButton = continueButton;
+
+        // Start monitoring
         [buttonHandler startPeriodicUpdates];
 
-        // Show window and run modal
+        // Show window
         [window makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
         [NSApp runModalForWindow:window];
 
-        // Get result
         int result = delegate.doNotRemindAgain ? 1 : 0;
 
-        // Cleanup
         [window close];
         remove_lock_file();
 
@@ -699,12 +819,8 @@ int show_tcc_permissions_window(int show_reminder_checkbox) {
     }
 }
 
-// Async wrapper implementation using ILibProcessPipe for spawning as user
-// This spawns a child process with "-tccCheck" flag to show the UI
-// Returns file descriptor for reading result from child, or -1 on error
+// Async wrapper for spawning as user
 int show_tcc_permissions_window_async(const char* exe_path, void* pipeManager, int uid) {
-    // CRITICAL SAFETY CHECK: NEVER spawn TCC UI during install/upgrade/uninstall operations
-    // Check command line arguments for forbidden flags
     char*** argvPtr = _NSGetArgv();
     int* argcPtr = _NSGetArgc();
 
@@ -720,36 +836,31 @@ int show_tcc_permissions_window_async(const char* exe_path, void* pipeManager, i
         for (int i = 0; i < argc; i++) {
             for (int j = 0; j < 6; j++) {
                 if (strcmp(argv[i], forbidden_flags[j]) == 0) {
-                    return -1; // Refuse to spawn during install/upgrade operations
+                    return -1;
                 }
             }
         }
     }
 
-    // Check if TCC UI is already running
     if (is_tcc_ui_running()) {
-        return -1; // Don't spawn another instance
+        return -1;
     }
 
-    // Create pipe for IPC (child writes result, parent reads)
     int pipefd[2];
     if (pipe(pipefd) != 0) {
         return -1;
     }
 
-    // Set read end to non-blocking
     fcntl(pipefd[0], F_SETFL, O_NONBLOCK);
 
-    // Convert write-end fd to string for passing via argv
     char fd_str[16];
     snprintf(fd_str, sizeof(fd_str), "%d", pipefd[1]);
 
-    // Build argv for child process
     char* const argv[] = {
-        (char*)exe_path, // argv[0] (full path so macOS resolves .app bundle icon)
-        "-tccCheck",     // argv[1] (flag)
-        fd_str,          // argv[2] (pipe write-end fd)
-        NULL             // argv terminator
+        (char*)exe_path,
+        "-tccCheck",
+        fd_str,
+        NULL
     };
 
     if (pipeManager == NULL) {
@@ -758,15 +869,13 @@ int show_tcc_permissions_window_async(const char* exe_path, void* pipeManager, i
         return -1;
     }
 
-    // Spawn child process as specified user (same approach as old -kvm0)
-    // Note: Uses DEFAULT spawn type - ILibProcessPipe internally calls setuid() when uid != 0
     ILibProcessPipe_Process childProcess = ILibProcessPipe_Manager_SpawnProcessEx3(
         pipeManager,
         (char*)exe_path,
         argv,
-        ILibProcessPipe_SpawnTypes_DEFAULT,  // Same as original -kvm0 code
-        (void*)(intptr_t)uid,                // User ID to run as
-        0                                    // No extra memory
+        ILibProcessPipe_SpawnTypes_DEFAULT,
+        (void*)(intptr_t)uid,
+        0
     );
 
     if (childProcess == NULL) {
@@ -775,9 +884,7 @@ int show_tcc_permissions_window_async(const char* exe_path, void* pipeManager, i
         return -1;
     }
 
-    // Parent process: close write end (parent only reads)
     close(pipefd[1]);
 
-    // Return read-end file descriptor for parent to monitor
     return pipefd[0];
 }
