@@ -3015,8 +3015,9 @@ void MeshServer_ServerAuthenticated(ILibWebClient_StateObject WebStateObject, Me
 
 	// Inform JavaScript core module of the connection
 	// TODO: Verify with Bryan that only the core module will get this. No other modules should.
-	if (agent->serverAuthState == 3) 
+	if (agent->serverAuthState == 3)
 	{
+		printf("Server fully authenticated (authState=3)\n");
 		ILibDuktape_MeshAgent_PUSH(agent->meshCoreCtx, agent->chain);				// [agent]
 		duk_get_prop_string(agent->meshCoreCtx, -1, "emit");						// [agent][emit]
 		duk_swap_top(agent->meshCoreCtx, -2);										// [emit][this]
@@ -3025,7 +3026,7 @@ void MeshServer_ServerAuthenticated(ILibWebClient_StateObject WebStateObject, Me
 		if (duk_pcall_method(agent->meshCoreCtx, 2) != 0) { ILibDuktape_Process_UncaughtException(agent->meshCoreCtx); }
 		duk_pop(agent->meshCoreCtx);												// ...
 
-		if (agent->logUpdate != 0) 
+		if (agent->logUpdate != 0)
 		{
 			sprintf_s(ILibScratchPad, sizeof(ILibScratchPad), "Connection Established [%p]...", WebStateObject);
 			ILIBLOGMESSSAGE(ILibScratchPad);
@@ -3689,6 +3690,7 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 		}
 		case MeshCommand_CoreOk: // Message from the server indicating our meshcore is ok. No update needed.
 		{
+			printf("Received CoreOk from server (coreTimeout=%p)\n", agent->coreTimeout);
 
 			duk_eval_string(agent->meshCoreCtx, "_MSH().setuid;");
 			if (duk_is_null_or_undefined(agent->meshCoreCtx, -1) == 0)
@@ -4073,6 +4075,7 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 			}
 
 			agent->controlChannel = WebStateObject; // Set the agent MeshCentral server control channel
+			printf("Control channel established [fd=%d]\n", ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
 			ILibRemoteLogging_printf(ILibChainGetLogger(agent->chain), ILibRemoteLogging_Modules_Agent_GuardPost | ILibRemoteLogging_Modules_ConsolePrint, ILibRemoteLogging_Flags_VerbosityLevel_1, "Control Channel Idle Timeout = %d seconds", agent->controlChannel_idleTimeout_seconds);
 			ILibWebClient_SetTimeout(WebStateObject, agent->controlChannel_idleTimeout_seconds, MeshServer_ControlChannel_IdleTimeout, agent);
 			ILibWebClient_WebSocket_SetPingPongHandler(WebStateObject, MeshServer_ControlChannel_PingSink, MeshServer_ControlChannel_PongSink, agent);
@@ -4152,6 +4155,8 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 			break;
 		}
 		case ILibWebClient_ReceiveStatus_Complete: // Disconnection
+			printf("Control channel disconnected [fd=%d, authState=%d]\n",
+				ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject), agent->serverAuthState);
 			if (agent->controlChannelDebug != 0)
 			{
 				printf("Control Channel Disconnected [%d]...\n", ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
@@ -4215,7 +4220,9 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 	if (header == NULL)
 	{
 		ILibRemoteLogging_printf(ILibChainGetLogger(ILibWebClient_GetChainFromWebStateObject(WebStateObject)), ILibRemoteLogging_Modules_Agent_GuardPost, ILibRemoteLogging_Flags_VerbosityLevel_1, "Agent Host Container: Mesh Server Connection Error, trying again later.");
-		printf("Mesh Server Connection Error [%d]\n", ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
+		printf("Mesh Server Connection Error [%d] (recvStatus=%d, authState=%d, connState=%d)\n",
+			ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject),
+			recvStatus, agent->serverAuthState, agent->serverConnectionState);
 
 		agent->autoproxy_status = 0;
 
