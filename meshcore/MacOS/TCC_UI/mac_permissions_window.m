@@ -193,6 +193,10 @@ static void remove_lock_file(void) {
     [button setWantsLayer:YES];
     button.layer.backgroundColor = [[NSColor clearColor] CGColor];
 
+    // Clear attributed title from "Setup" state
+    NSMutableAttributedString* emptyAttr = [[NSMutableAttributedString alloc] initWithString:@""];
+    [button setAttributedTitle:emptyAttr];
+
     // Green checkmark icon
     if (@available(macOS 11.0, *)) {
         NSImageSymbolConfiguration* config = [NSImageSymbolConfiguration configurationWithPointSize:24 weight:NSFontWeightMedium];
@@ -208,17 +212,28 @@ static void remove_lock_file(void) {
 - (void)showButton:(NSButton*)button {
     if ([[button title] isEqualToString:@"Setup"] && [button isEnabled]) return;
 
+    // Clear any existing image and reset tint color FIRST (from checkmark state)
+    [button setImage:nil];
+    [button setImagePosition:NSNoImage];
+    if (@available(macOS 10.14, *)) {
+        [button setContentTintColor:[NSColor blackColor]];
+    }
+
     [button setEnabled:YES];
     [button setBordered:NO];
     [button setWantsLayer:YES];
     button.layer.backgroundColor = [COLOR_ACCENT CGColor];
     button.layer.cornerRadius = BUTTON_CORNER_RADIUS;
 
+    // Set title first, then attributed title to ensure color is applied
+    [button setTitle:@"Setup"];
     NSMutableAttributedString* attrTitle = [[NSMutableAttributedString alloc] initWithString:@"Setup"];
     [attrTitle addAttribute:NSForegroundColorAttributeName value:[NSColor blackColor] range:NSMakeRange(0, attrTitle.length)];
     [attrTitle addAttribute:NSFontAttributeName value:[NSFont systemFontOfSize:13 weight:NSFontWeightBold] range:NSMakeRange(0, attrTitle.length)];
     [button setAttributedTitle:attrTitle];
-    [button setTitle:@"Setup"];
+
+    // Force redraw
+    [button setNeedsDisplay:YES];
 }
 
 - (void)updatePermissionStatus {
