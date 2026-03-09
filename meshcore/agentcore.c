@@ -45,6 +45,7 @@ limitations under the License.
 #include "microscript/ILibDuktape_ScriptContainer.h"
 #include "../microstack/ILibIPAddressMonitor.h"
 #include "../openframe/token_extractor.h"
+#include "../openframe/machine_id_reader.h"
 
 #ifdef _POSIX
 #include <sys/stat.h>
@@ -2344,6 +2345,7 @@ void ILibDuktape_MeshAgent_PUSH(duk_context *ctx, void *chain)
 		ILibDuktape_CreateInstanceMethod(ctx, "DataPing", ILibDuktape_MeshAgent_DataPing, DUK_VARARGS);
 		ILibDuktape_CreateReadonlyProperty_int(ctx, "ARCHID", MESH_AGENTID);
 		ILibDuktape_CreateReadonlyProperty_int(ctx, "ConsoleTextMaxRate", agent->consoleText_maxRate);
+		ILibDuktape_CreateReadonlyProperty_int(ctx, "openFrameMode", agent->openFrameMode ? 1 : 0);
 #ifdef _LINKVM 
 		ILibDuktape_CreateReadonlyProperty_int(ctx, "hasKVM", 1);
 		ILibDuktape_EventEmitter_CreateEventEx(emitter, "kvmConnected");
@@ -4614,19 +4616,30 @@ void MeshServer_ConnectEx(MeshAgentHostContainer *agent)
 	strcat(combined, SOURCE_COMMIT_DATE);
 	ILibAddHeaderLine(req, "User-Agent", 10, combined, (int)strnlen_s(combined, 50));
 
-	// Add custom JWT for openframe mode
-	if (agent->openFrameMode && agent->openFrameSecret != NULL)
+	// Add custom headers for openframe mode
+	if (agent->openFrameMode)
 	{
-		char* extracted_token = extract_token(agent->openFrameSecret, agent->openFrameTokenPath);
-		if (extracted_token != NULL) {
-			int authLen = 7 + strlen(extracted_token) + 1; // "Bearer " + token + null terminator
-			char *openframeAuthorization = (char*)malloc(authLen);
-			if (openframeAuthorization != NULL) {
-				sprintf(openframeAuthorization, "Bearer %s", extracted_token);
-				ILibAddHeaderLine(req, "Authorization", 13, openframeAuthorization, (int)strlen(openframeAuthorization));
-				free(openframeAuthorization);
+		// Add x-machine-id header
+		char* machineId = read_machine_id();
+		if (machineId != NULL) {
+			ILibAddHeaderLine(req, "x-machine-id", 12, machineId, (int)strlen(machineId));
+			free(machineId);
+		}
+
+		// Add Authorization header with JWT
+		if (agent->openFrameSecret != NULL)
+		{
+			char* extracted_token = extract_token(agent->openFrameSecret, agent->openFrameTokenPath);
+			if (extracted_token != NULL) {
+				int authLen = 7 + strlen(extracted_token) + 1; // "Bearer " + token + null terminator
+				char *openframeAuthorization = (char*)malloc(authLen);
+				if (openframeAuthorization != NULL) {
+					sprintf(openframeAuthorization, "Bearer %s", extracted_token);
+					ILibAddHeaderLine(req, "Authorization", 13, openframeAuthorization, (int)strlen(openframeAuthorization));
+					free(openframeAuthorization);
+				}
+				free(extracted_token);
 			}
-			free(extracted_token);
 		}
 	}
 

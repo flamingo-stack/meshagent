@@ -719,6 +719,34 @@ var http = require('http');
 var net = require('net');
 var fs = require('fs');
 var rtc = require('ILibWebRTC');
+
+// OpenFrame: Read machine ID from shared location
+var openframeMachineId = null;
+function getOpenFrameMachineId() {
+    if (openframeMachineId != null) return openframeMachineId;
+    try {
+        var machineIdPath = (process.platform == 'win32')
+            ? (process.env['ProgramData'] + '\\OpenFrame\\machine_id')
+            : ((process.platform == 'darwin')
+                ? '/Library/Application Support/OpenFrame/machine_id'
+                : '/var/lib/openframe/machine_id');
+        openframeMachineId = fs.readFileSync(machineIdPath).toString().trim();
+    } catch (ex) { openframeMachineId = null; }
+    return openframeMachineId;
+}
+
+// OpenFrame: Add x-machine-id header to request options (only in openFrameMode)
+function addOpenFrameHeaders(options) {
+    // Only add header if running in OpenFrame mode
+    if (!mesh.openFrameMode) return options;
+
+    var machineId = getOpenFrameMachineId();
+    if (machineId) {
+        if (!options.headers) options.headers = {};
+        options.headers['x-machine-id'] = machineId;
+    }
+    return options;
+}
 var amt = null;
 var processManager = require('process-manager');
 var wifiScannerLib = null;
@@ -1169,6 +1197,7 @@ function handleServerCommand(data) {
                                 //sendConsoleText(JSON.stringify(woptions));
                                 //sendConsoleText('TUNNEL: ' + JSON.stringify(data, null, 2));
 
+                                addOpenFrameHeaders(woptions); // Add X-MACHINE-ID header
                                 var tunnel = http.request(woptions);
                                 tunnel.upgrade = onTunnelUpgrade;
                                 tunnel.on('error', tunnel_onError);
@@ -1812,6 +1841,7 @@ function downloadFile(downloadoptions) {
         if ((checkServerIdentity.servertlshash != null) && (checkServerIdentity.servertlshash.toLowerCase() != certs[0].digest.split(':').join('').toLowerCase())) { throw new Error('BadCert') }
     }
     //options.checkServerIdentity.servertlshash = downloadoptions.serverhash;
+    addOpenFrameHeaders(options); // Add X-MACHINE-ID header
     trustedDownloads[downloadoptions.name] = downloadoptions;
     trustedDownloads[downloadoptions.name].dl = require('https').get(options);
     trustedDownloads[downloadoptions.name].dl.on('error', function (e) { downloadoptions.func(downloadoptions, false); delete trustedDownloads[downloadoptions.name]; });
@@ -1864,6 +1894,7 @@ function serverFetchFile() {
     agentFileHttpOptions.checkServerIdentity.servertlshash = data.servertlshash;
 
     if (agentFileHttpOptions == null) return;
+    addOpenFrameHeaders(agentFileHttpOptions); // Add X-MACHINE-ID header
     var agentFileHttpRequest = http.request(agentFileHttpOptions,
         function (response) {
             response.xparent = this;
@@ -5773,6 +5804,7 @@ function agentUpdate_Start(updateurl, updateoptions) {
                 }
             }
             options.checkServerIdentity.servertlshash = (updateoptions != null ? updateoptions.tlshash : null);
+            addOpenFrameHeaders(options); // Add X-MACHINE-ID header
             agentUpdate_Start._selfupdate = require('https').get(options);
             agentUpdate_Start._selfupdate.on('error', function (e) {
                 sendConsoleText('Self Update failed, because there was a problem trying to download the update from ' + updateurl, sessionid);
