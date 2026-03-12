@@ -21,16 +21,25 @@ function getOpenFrameMachineId() {
     return openframeMachineId;
 }
 
-// OpenFrame: Add x-machine-id header to request options (only in openFrameMode)
+// OpenFrame: Add x-machine-id and Authorization headers to request options (only in openFrameMode)
 function addOpenFrameHeaders(options) {
     var mesh = require('MeshAgent');
     if (!mesh.openFrameMode) return options;
 
+    if (!options.headers) options.headers = {};
+
+    // Add x-machine-id header
     var machineId = getOpenFrameMachineId();
     if (machineId) {
-        if (!options.headers) options.headers = {};
         options.headers['x-machine-id'] = machineId;
     }
+
+    // Add Authorization header with JWT token
+    var token = mesh.authToken();
+    if (token) {
+        options.headers['Authorization'] = 'Bearer ' + token;
+    }
+
     return options;
 }
 

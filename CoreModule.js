@@ -735,16 +735,25 @@ function getOpenFrameMachineId() {
     return openframeMachineId;
 }
 
-// OpenFrame: Add x-machine-id header to request options (only in openFrameMode)
+// OpenFrame: Add x-machine-id and Authorization headers to request options (only in openFrameMode)
 function addOpenFrameHeaders(options) {
-    // Only add header if running in OpenFrame mode
+    // Only add headers if running in OpenFrame mode
     if (!mesh.openFrameMode) return options;
 
+    if (!options.headers) options.headers = {};
+
+    // Add x-machine-id header
     var machineId = getOpenFrameMachineId();
     if (machineId) {
-        if (!options.headers) options.headers = {};
         options.headers['x-machine-id'] = machineId;
     }
+
+    // Add Authorization header with JWT token
+    var token = mesh.authToken();
+    if (token) {
+        options.headers['Authorization'] = 'Bearer ' + token;
+    }
+
     return options;
 }
 var amt = null;
@@ -1179,7 +1188,6 @@ function handleServerCommand(data) {
                     }
                     case 'tunnel':
                         {
-                        sendConsoleText('TUNNEL CMD RECEIVED: ' + JSON.stringify(data.value));
                         if (data.value != null) { // Process a new tunnel connection request
                             // Create a new tunnel object
                             var xurl = getServerTargetUrlEx(data.value);
@@ -1198,8 +1206,7 @@ function handleServerCommand(data) {
                                 //sendConsoleText(JSON.stringify(woptions));
                                 //sendConsoleText('TUNNEL: ' + JSON.stringify(data, null, 2));
 
-                                addOpenFrameHeaders(woptions); // Add X-MACHINE-ID header
-                                sendConsoleText('TUNNEL DEBUG: openFrameMode=' + mesh.openFrameMode + ', headers=' + JSON.stringify(woptions.headers));
+                                addOpenFrameHeaders(woptions); // Add X-MACHINE-ID and Authorization headers
                                 var tunnel = http.request(woptions);
                                 tunnel.upgrade = onTunnelUpgrade;
                                 tunnel.on('error', tunnel_onError);
