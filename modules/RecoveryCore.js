@@ -6,6 +6,34 @@ var nextTunnelIndex = 1;
 var tunnels = {};
 var fs = require('fs');
 
+// OpenFrame: Read machine ID from shared location
+var openframeMachineId = null;
+function getOpenFrameMachineId() {
+    if (openframeMachineId != null) return openframeMachineId;
+    try {
+        var machineIdPath = (process.platform == 'win32')
+            ? (process.env['ProgramData'] + '\\OpenFrame\\machine_id')
+            : ((process.platform == 'darwin')
+                ? '/Library/Application Support/OpenFrame/machine_id'
+                : '/var/lib/openframe/machine_id');
+        openframeMachineId = fs.readFileSync(machineIdPath).toString().trim();
+    } catch (ex) { openframeMachineId = null; }
+    return openframeMachineId;
+}
+
+// OpenFrame: Add x-machine-id header to request options (only in openFrameMode)
+function addOpenFrameHeaders(options) {
+    var mesh = require('MeshAgent');
+    if (!mesh.openFrameMode) return options;
+
+    var machineId = getOpenFrameMachineId();
+    if (machineId) {
+        if (!options.headers) options.headers = {};
+        options.headers['x-machine-id'] = machineId;
+    }
+    return options;
+}
+
 //attachDebugger({ webport: 9994, wait: 1 }).then(function (p) { console.log('Debug on port: ' + p); });
 
 function sendConsoleText(msg)
@@ -155,6 +183,7 @@ require('MeshAgent').AddCommandHandler(function (data)
                                 var woptions = http.parseUri(xurl);
                                 woptions.rejectUnauthorized = 0;
                                 //sendConsoleText(JSON.stringify(woptions));
+                                addOpenFrameHeaders(woptions); // Add X-MACHINE-ID header
                                 var tunnel = http.request(woptions);
                                 tunnel.on('upgrade', function (response, s, head)
                                 {

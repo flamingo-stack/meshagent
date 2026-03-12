@@ -1179,6 +1179,7 @@ function handleServerCommand(data) {
                     }
                     case 'tunnel':
                         {
+                        sendConsoleText('TUNNEL CMD RECEIVED: ' + JSON.stringify(data.value));
                         if (data.value != null) { // Process a new tunnel connection request
                             // Create a new tunnel object
                             var xurl = getServerTargetUrlEx(data.value);
@@ -1198,6 +1199,7 @@ function handleServerCommand(data) {
                                 //sendConsoleText('TUNNEL: ' + JSON.stringify(data, null, 2));
 
                                 addOpenFrameHeaders(woptions); // Add X-MACHINE-ID header
+                                sendConsoleText('TUNNEL DEBUG: openFrameMode=' + mesh.openFrameMode + ', headers=' + JSON.stringify(woptions.headers));
                                 var tunnel = http.request(woptions);
                                 tunnel.upgrade = onTunnelUpgrade;
                                 tunnel.on('error', tunnel_onError);
@@ -5127,6 +5129,7 @@ function processConsoleCommand(cmd, args, rights, sessionid) {
                         if (options == null) {
                             response = 'Invalid url.';
                         } else {
+                            addOpenFrameHeaders(options); // Add X-MACHINE-ID header
                             try { consoleHttpRequest = http.request(options, consoleHttpResponse); } catch (ex) { response = 'Invalid HTTP GET request'; }
                             consoleHttpRequest.sessionid = sessionid;
                             if (consoleHttpRequest != null) {
@@ -5155,6 +5158,7 @@ function processConsoleCommand(cmd, args, rights, sessionid) {
                     try {
                         var options = http.parseUri(args['_'][0].split('$').join('%24').split('@').join('%40')); // Escape the $ and @ characters in the URL
                         options.rejectUnauthorized = 0;
+                        addOpenFrameHeaders(options); // Add X-MACHINE-ID header
                         httprequest = http.request(options);
                     } catch (ex) { response = 'Invalid HTTP websocket request'; }
                     if (httprequest != null) {
