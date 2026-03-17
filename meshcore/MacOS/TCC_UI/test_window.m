@@ -114,14 +114,19 @@ TCC_PermissionStatus check_screen_recording_permission(void) {
     if (self.isEnabled && self.pressedColor) {
         self.layer.backgroundColor = [self.pressedColor CGColor];
     }
-    [super mouseDown:event];
 }
 
 - (void)mouseUp:(NSEvent *)event {
     if (self.isEnabled && self.normalColor) {
         self.layer.backgroundColor = [self.normalColor CGColor];
     }
-    [super mouseUp:event];
+    // Manually trigger the action if mouse is still inside button
+    if (self.isEnabled) {
+        NSPoint locationInView = [self convertPoint:[event locationInWindow] fromView:nil];
+        if (NSPointInRect(locationInView, self.bounds)) {
+            [NSApp sendAction:self.action to:self.target from:self];
+        }
+    }
 }
 
 @end
@@ -131,9 +136,12 @@ TCC_PermissionStatus check_screen_recording_permission(void) {
 
 @interface TCCPermissionsWindowDelegate : NSObject <NSWindowDelegate>
 @property (nonatomic, assign) BOOL doNotRemindAgain;
+@property (nonatomic, assign) BOOL windowClosed;
 @property (nonatomic, strong) id buttonHandler;
 @property (nonatomic, strong) HoverButton *continueButton;
+@property (nonatomic, weak) NSWindow *window;
 - (void)updateContinueButtonState;
+- (void)closeWindow:(id)sender;
 @end
 
 // ============ Button Handler ============
@@ -258,7 +266,17 @@ TCC_PermissionStatus check_screen_recording_permission(void) {
 // ============ Window Delegate Implementation ============
 @implementation TCCPermissionsWindowDelegate
 
+- (id)init {
+    self = [super init];
+    if (self) {
+        _doNotRemindAgain = NO;
+        _windowClosed = NO;
+    }
+    return self;
+}
+
 - (void)windowWillClose:(NSNotification *)notification {
+    _windowClosed = YES;
     [self.buttonHandler stopPeriodicUpdates];
     [NSApp stopModal];
 }
@@ -269,6 +287,13 @@ TCC_PermissionStatus check_screen_recording_permission(void) {
 
 - (void)updateContinueButtonState {
     // Continue button always yellow #FFC008, only hover effect
+}
+
+- (void)closeWindow:(id)sender {
+    _windowClosed = YES;
+    [self.buttonHandler stopPeriodicUpdates];
+    [self.window close];
+    [NSApp stopModal];
 }
 
 @end
@@ -365,12 +390,17 @@ int show_tcc_permissions_window(int show_reminder_checkbox) {
         [contentView setWantsLayer:YES];
         contentView.layer.backgroundColor = [COLOR_WINDOW_BG CGColor];
 
+        // Create delegate early so we can use it for button targets
+        TCCPermissionsWindowDelegate* delegate = [[TCCPermissionsWindowDelegate alloc] init];
+        delegate.window = window;
+        [window setDelegate:delegate];
+
         // Close button
         HoverButton* closeButton = [[HoverButton alloc] initWithFrame:NSMakeRect(WINDOW_WIDTH - 40, WINDOW_HEIGHT - 40, 24, 24)];
         [closeButton setTitle:@"×"];
         [closeButton setBordered:NO];
-        [closeButton setTarget:window];
-        [closeButton setAction:@selector(close)];
+        [closeButton setTarget:delegate];
+        [closeButton setAction:@selector(closeWindow:)];
         [closeButton setWantsLayer:YES];
 
         closeButton.normalColor = [NSColor clearColor];
@@ -432,12 +462,10 @@ int show_tcc_permissions_window(int show_reminder_checkbox) {
         cardsContainer.layer.cornerRadius = CARD_CORNER_RADIUS;
         [contentView addSubview:cardsContainer];
 
-        // Setup delegate and handler
-        TCCPermissionsWindowDelegate* delegate = [[TCCPermissionsWindowDelegate alloc] init];
+        // Create handler (delegate was created earlier for close button)
         TCCButtonHandler* buttonHandler = [[TCCButtonHandler alloc] initWithContentView:cardsContainer];
         buttonHandler.windowDelegate = delegate;
         delegate.buttonHandler = buttonHandler;
-        [window setDelegate:delegate];
 
         CGFloat rowHeight = 70;
 
@@ -478,8 +506,8 @@ int show_tcc_permissions_window(int show_reminder_checkbox) {
         [continueButton setBezelStyle:NSBezelStyleRounded];
         [continueButton setBordered:NO];
         [continueButton setKeyEquivalent:@"\r"];
-        [continueButton setTarget:window];
-        [continueButton setAction:@selector(close)];
+        [continueButton setTarget:delegate];
+        [continueButton setAction:@selector(closeWindow:)];
         [continueButton setWantsLayer:YES];
 
         // Жёлтый цвет с hover эффектами
