@@ -114,7 +114,6 @@ TCC_PermissionStatus check_screen_recording_permission(void) {
     if (self.isEnabled && self.pressedColor) {
         self.layer.backgroundColor = [self.pressedColor CGColor];
     }
-    // Don't call [super mouseDown:] - it blocks until mouseUp and can interfere with borderless windows
 }
 
 - (void)mouseUp:(NSEvent *)event {
