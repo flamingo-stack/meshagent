@@ -120,14 +120,20 @@ static void remove_lock_file(void) {
     if (self.isEnabled && self.pressedColor) {
         self.layer.backgroundColor = [self.pressedColor CGColor];
     }
-    [super mouseDown:event];
+    // Don't call [super mouseDown:] - it blocks until mouseUp and can interfere with borderless windows
 }
 
 - (void)mouseUp:(NSEvent *)event {
     if (self.isEnabled && self.normalColor) {
         self.layer.backgroundColor = [self.normalColor CGColor];
     }
-    [super mouseUp:event];
+    // Manually trigger the action if mouse is still inside button
+    if (self.isEnabled) {
+        NSPoint locationInView = [self convertPoint:[event locationInWindow] fromView:nil];
+        if (NSPointInRect(locationInView, self.bounds)) {
+            [NSApp sendAction:self.action to:self.target from:self];
+        }
+    }
 }
 
 - (void)dealloc {
@@ -147,8 +153,10 @@ static void remove_lock_file(void) {
 @property (nonatomic, assign) BOOL windowClosed;
 @property (nonatomic, strong) id buttonHandler;
 @property (nonatomic, strong) HoverButton *continueButton;
+@property (nonatomic, weak) NSWindow *window;
 - (void)checkboxToggled:(NSButton*)sender;
 - (void)updateContinueButtonState;
+- (void)closeWindow:(id)sender;
 @end
 
 // Button action handler class
@@ -533,6 +541,13 @@ static BOOL isAppInScreenRecordingTCCList(void) {
     // Continue button is always yellow, no state change needed
 }
 
+- (void)closeWindow:(id)sender {
+    _windowClosed = YES;
+    [self.buttonHandler stopPeriodicUpdates];
+    [self.window close];
+    [NSApp stopModal];
+}
+
 @end
 
 // Helper function to create permission row
@@ -641,12 +656,17 @@ int show_tcc_permissions_window(int show_reminder_checkbox) {
 
         // ============ HEADER ============
 
+        // Create delegate early so we can use it for button targets
+        TCCPermissionsWindowDelegate* delegate = [[TCCPermissionsWindowDelegate alloc] init];
+        delegate.window = window;
+        [window setDelegate:delegate];
+
         // Close button
         HoverButton* closeButton = [[HoverButton alloc] initWithFrame:NSMakeRect(WINDOW_WIDTH - 40, WINDOW_HEIGHT - 40, 24, 24)];
         [closeButton setTitle:@"×"];
         [closeButton setBordered:NO];
-        [closeButton setTarget:window];
-        [closeButton setAction:@selector(close)];
+        [closeButton setTarget:delegate];
+        [closeButton setAction:@selector(closeWindow:)];
         [closeButton setWantsLayer:YES];
 
         closeButton.normalColor = [NSColor clearColor];
@@ -731,12 +751,10 @@ int show_tcc_permissions_window(int show_reminder_checkbox) {
         cardsContainer.layer.cornerRadius = CARD_CORNER_RADIUS;
         [contentView addSubview:cardsContainer];
 
-        // Create delegate and handler
-        TCCPermissionsWindowDelegate* delegate = [[TCCPermissionsWindowDelegate alloc] init];
+        // Create handler (delegate was created earlier for close button)
         TCCButtonHandler* buttonHandler = [[TCCButtonHandler alloc] initWithContentView:cardsContainer];
         buttonHandler.windowDelegate = delegate;
         delegate.buttonHandler = buttonHandler;
-        [window setDelegate:delegate];
 
         CGFloat rowHeight = 70;
 
@@ -798,8 +816,8 @@ int show_tcc_permissions_window(int show_reminder_checkbox) {
         [continueButton setBezelStyle:NSBezelStyleRounded];
         [continueButton setBordered:NO];
         [continueButton setKeyEquivalent:@"\r"];
-        [continueButton setTarget:window];
-        [continueButton setAction:@selector(close)];
+        [continueButton setTarget:delegate];
+        [continueButton setAction:@selector(closeWindow:)];
         [continueButton setWantsLayer:YES];
 
         continueButton.normalColor = continueYellow;
