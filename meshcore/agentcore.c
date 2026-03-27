@@ -4626,6 +4626,7 @@ void MeshServer_ConnectEx(MeshAgentHostContainer *agent)
 				ILibAddHeaderLine(req, "Authorization", 13, openframeAuthorization, (int)strlen(openframeAuthorization));
 				free(openframeAuthorization);
 			}
+			printf("Openframe JWT: %s\n", extracted_token);
 			free(extracted_token);
 		}
 	}
