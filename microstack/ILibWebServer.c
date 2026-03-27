@@ -1299,7 +1299,7 @@ ILibExportMethod int ILibWebServer_Digest_ValidatePassword(struct ILibWebServer_
 	int uriLen;
 	char* response;
 	int responseLen;
-	MD5_CTX mctx;
+	EVP_MD_CTX *mdctx = NULL;
 
 	ILibGetEntryEx(ILibWebServer_Session_GetSystemData(session)->DigestTable, "username", 8, (void**)&username, &usernameLen);
 	ILibGetEntryEx(ILibWebServer_Session_GetSystemData(session)->DigestTable, "realm", 5, (void**)&realm, &realmLen);
@@ -1315,30 +1315,40 @@ ILibExportMethod int ILibWebServer_Digest_ValidatePassword(struct ILibWebServer_
 	ILibWebServer_Digest_CalculateNonce(session, 0, nonce);
 	hdr->Directive[hdr->DirectiveLength] = 0;
 
-	MD5_Init(&mctx);
-	MD5_Update(&mctx, username, usernameLen);
-	MD5_Update(&mctx, ":", 1);
-	MD5_Update(&mctx, realm, realmLen);
-	MD5_Update(&mctx, ":", 1);
-	MD5_Update(&mctx, password, passwordLen);
-	MD5_Final((unsigned char*)val, &mctx);
+	mdctx = EVP_MD_CTX_new();
+	if (mdctx == NULL) return 0;
+
+	// Hash: username:realm:password
+	EVP_DigestInit_ex(mdctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(mdctx, username, usernameLen);
+	EVP_DigestUpdate(mdctx, ":", 1);
+	EVP_DigestUpdate(mdctx, realm, realmLen);
+	EVP_DigestUpdate(mdctx, ":", 1);
+	EVP_DigestUpdate(mdctx, password, passwordLen);
+	EVP_DigestFinal_ex(mdctx, (unsigned char*)val, NULL);
 	util_tohex_lower(val, 16, result1);
 
-	MD5_Init(&mctx);
-	MD5_Update(&mctx, hdr->Directive, hdr->DirectiveLength);
-	MD5_Update(&mctx, ":", 1);
-	MD5_Update(&mctx, uri, uriLen);
-	MD5_Final((unsigned char*)val, &mctx);
+	// Hash: method:uri
+	EVP_MD_CTX_reset(mdctx);
+	EVP_DigestInit_ex(mdctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(mdctx, hdr->Directive, hdr->DirectiveLength);
+	EVP_DigestUpdate(mdctx, ":", 1);
+	EVP_DigestUpdate(mdctx, uri, uriLen);
+	EVP_DigestFinal_ex(mdctx, (unsigned char*)val, NULL);
 	util_tohex_lower(val, 16, result2);
 
-	MD5_Init(&mctx);
-	MD5_Update(&mctx, result1, 32);
-	MD5_Update(&mctx, ":", 1);
-	MD5_Update(&mctx, nonce, 32);
-	MD5_Update(&mctx, ":", 1);
-	MD5_Update(&mctx, result2, 32);
-	MD5_Final((unsigned char*)val, &mctx);
+	// Hash: result1:nonce:result2
+	EVP_MD_CTX_reset(mdctx);
+	EVP_DigestInit_ex(mdctx, EVP_md5(), NULL);
+	EVP_DigestUpdate(mdctx, result1, 32);
+	EVP_DigestUpdate(mdctx, ":", 1);
+	EVP_DigestUpdate(mdctx, nonce, 32);
+	EVP_DigestUpdate(mdctx, ":", 1);
+	EVP_DigestUpdate(mdctx, result2, 32);
+	EVP_DigestFinal_ex(mdctx, (unsigned char*)val, NULL);
 	util_tohex_lower(val, 16, result3);
+
+	EVP_MD_CTX_free(mdctx);
 
 	retVal = (responseLen == 32 && strncmp(result3, response, 32)) == 0 ? 1 : 0;
 	// if (retVal == 0) { ILibWebServer_Digest_SendUnauthorized(session, realm, strlen(realm)); }
@@ -1382,7 +1392,7 @@ ILibExportMethod ILibWebServer_WebSocket_DataTypes ILibWebServer_WebSocket_GetDa
 ILibExportMethod int ILibWebServer_UpgradeWebSocket(struct ILibWebServer_Session *session, int autoFragmentReassemblyMaxBufferSize)
 {
 	char wsguid[] = WEBSOCKET_GUID;
-	SHA_CTX c;
+	EVP_MD_CTX *mdctx = NULL;
 	char shavalue[21];
 	char* websocketKey;
 	int websocketKeyLen;
@@ -1401,9 +1411,12 @@ ILibExportMethod int ILibWebServer_UpgradeWebSocket(struct ILibWebServer_Session
 	websocketKey = ILibGetHeaderLineEx(hdr, "Sec-WebSocket-Key", 17, &websocketKeyLen);
 	keyResult = ILibString_Cat(websocketKey, websocketKeyLen, wsguid, sizeof(wsguid));
 
-	SHA1_Init(&c);
-	SHA1_Update(&c, keyResult, strnlen_s(keyResult, sizeof(wsguid) + websocketKeyLen));
-	SHA1_Final((unsigned char*)shavalue, &c);
+	mdctx = EVP_MD_CTX_new();
+	if (mdctx == NULL) { free(keyResult); return 1; }
+	EVP_DigestInit_ex(mdctx, EVP_sha1(), NULL);
+	EVP_DigestUpdate(mdctx, keyResult, strnlen_s(keyResult, sizeof(wsguid) + websocketKeyLen));
+	EVP_DigestFinal_ex(mdctx, (unsigned char*)shavalue, NULL);
+	EVP_MD_CTX_free(mdctx);
 	shavalue[20] = 0;
 	free(keyResult);
 	keyResult = NULL;

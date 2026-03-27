@@ -1,0 +1,174 @@
+name: Test MeshAgent Linux Builds
+
+on:
+  workflow_dispatch:
+    inputs:
+      archid:
+        description: 'ARCHID to build (default: 6 for x86-64)'
+        required: false
+        default: '6'
+      branch:
+        description: 'Branch to build from (default: OpenSSL_Pipeline_3.5.4_Upgrade_v2)'
+        required: false
+        default: 'OpenSSL_Pipeline_3.5.4_Upgrade_v2'
+
+jobs:
+  test-build:
+    runs-on: ubuntu-latest
+    name: Build ARCHID ${{ github.event.inputs.archid || '6' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || 'OpenSSL_Pipeline_3.5.4_Upgrade_v2' }}
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential perl git libx11-dev libxext-dev libxfixes-dev libxrandr-dev libxinerama-dev libxtst-dev libjpeg-dev
+
+      - name: Install cross-compilation toolchains
+        run: |
+          ARCHID="${{ github.event.inputs.archid || '6' }}"
+
+          # Install toolchains based on ARCHID
+          case "$ARCHID" in
+            6|5|19|20|33|36)
+              # x86/x86-64/Alpine/OpenWrt - native or multilib
+              if [ "$ARCHID" = "5" ] || [ "$ARCHID" = "19" ]; then
+                sudo apt-get install -y -qq gcc-multilib g++-multilib
+              fi
+              echo "Native x86-64 build, no cross-compiler needed"
+              ;;
+            26)
+              # ARM64
+              sudo apt-get install -y -qq gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+              echo "Installed ARM64 cross-compiler"
+              ;;
+            25)
+              # ARMhf
+              sudo apt-get install -y -qq gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+              echo "Installed ARMhf cross-compiler"
+              ;;
+            28)
+              # MIPS24kc
+              sudo apt-get install -y -qq gcc-10-mips-linux-gnu g++-10-mips-linux-gnu
+              sudo ln -s /usr/bin/mips-linux-gnu-gcc-10 /usr/bin/mips-linux-gnu-gcc || true
+              sudo ln -s /usr/bin/mips-linux-gnu-g++-10 /usr/bin/mips-linux-gnu-g++ || true
+              echo "Installed MIPS cross-compiler"
+              ;;
+            40)
+              # MIPSEL24kc
+              sudo apt-get install -y -qq gcc-10-mipsel-linux-gnu g++-10-mipsel-linux-gnu
+              sudo ln -s /usr/bin/mipsel-linux-gnu-gcc-10 /usr/bin/mipsel-linux-gnu-gcc || true
+              sudo ln -s /usr/bin/mipsel-linux-gnu-g++-10 /usr/bin/mipsel-linux-gnu-g++ || true
+              echo "Installed MIPSEL cross-compiler"
+              ;;
+            41)
+              # aarch64-cortex-a53
+              sudo apt-get install -y -qq gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+              echo "Installed ARM64 Cortex-A53 cross-compiler"
+              ;;
+            45)
+              # riscv64
+              sudo apt-get install -y -qq gcc-riscv64-linux-gnu g++-riscv64-linux-gnu
+              echo "Installed RISC-V 64 cross-compiler"
+              ;;
+            *)
+              echo "Warning: No toolchain setup for ARCHID $ARCHID - build may fail"
+              ;;
+          esac
+
+      - name: Build MeshAgent
+        run: |
+          ARCHID="${{ github.event.inputs.archid || '6' }}"
+          echo "Building MeshAgent with ARCHID=$ARCHID"
+          make linux ARCHID=$ARCHID || {
+            echo "Build failed for ARCHID $ARCHID"
+            exit 1
+          }
+
+      - name: Verify build output
+        id: verify-build
+        run: |
+          ARCHID="${{ github.event.inputs.archid || '6' }}"
+
+          # Determine expected ARCHNAME based on ARCHID
+          case "$ARCHID" in
+            6|20) ARCHNAME="x86-64" ;;
+            5|19) ARCHNAME="x86" ;;
+            26) ARCHNAME="arm64" ;;
+            32) ARCHNAME="aarch64" ;;
+            25) ARCHNAME="armhf" ;;
+            28) ARCHNAME="mips24kc" ;;
+            40) ARCHNAME="mipsel24kc" ;;
+            41) ARCHNAME="aarch64-cortex-a53" ;;
+            45) ARCHNAME="riscv64" ;;
+            33) ARCHNAME="alpine-x86-64" ;;
+            36) ARCHNAME="openwrt_x86_64" ;;
+            *) ARCHNAME="unknown" ;;
+          esac
+
+          echo "Expected ARCHNAME: $ARCHNAME"
+          echo "archname=$ARCHNAME" >> $GITHUB_OUTPUT
+
+          # Look for built binary (builds to build/meshagent_$ARCHNAME)
+          BINARY="build/meshagent_$ARCHNAME"
+          if [ -f "$BINARY" ]; then
+            echo "✓ Binary found: $BINARY"
+            ls -lh "$BINARY"
+          else
+            echo "✗ Binary not found: $BINARY"
+            echo "Looking for any meshagent binaries:"
+            find build -name "meshagent_*" -type f 2>/dev/null || echo "No binaries found in build/"
+            exit 1
+          fi
+
+      - name: Verify OpenSSL version
+        run: |
+          ARCHID="${{ github.event.inputs.archid || '6' }}"
+
+          # Determine expected ARCHNAME and OpenSSL version
+          case "$ARCHID" in
+            6|20) ARCHNAME="x86-64"; EXPECTED_SSL="3.5.4" ;;
+            5|19) ARCHNAME="x86"; EXPECTED_SSL="3.5.4" ;;
+            26) ARCHNAME="arm64"; EXPECTED_SSL="3.5.4" ;;
+            32) ARCHNAME="aarch64"; EXPECTED_SSL="3.5.4" ;;
+            25) ARCHNAME="armhf"; EXPECTED_SSL="3.5.4" ;;
+            28) ARCHNAME="mips24kc"; EXPECTED_SSL="3.5.4" ;;
+            40) ARCHNAME="mipsel24kc"; EXPECTED_SSL="3.5.4" ;;
+            41) ARCHNAME="aarch64-cortex-a53"; EXPECTED_SSL="3.5.4" ;;
+            45) ARCHNAME="riscv64"; EXPECTED_SSL="3.5.4" ;;
+            33) ARCHNAME="alpine-x86-64"; EXPECTED_SSL="3.5.4" ;;
+            36) ARCHNAME="openwrt_x86_64"; EXPECTED_SSL="3.5.4" ;;
+            7|9|13|15|18|24|27|35|44) EXPECTED_SSL="1.1.1f" ;;
+            *) EXPECTED_SSL="unknown" ;;
+          esac
+
+          BINARY="build/meshagent_$ARCHNAME"
+
+          if [ -f "$BINARY" ]; then
+            echo "Checking OpenSSL version in $BINARY"
+            echo "Expected: OpenSSL $EXPECTED_SSL"
+
+            # Search for OpenSSL version string
+            if strings "$BINARY" | grep -i "openssl.*$EXPECTED_SSL"; then
+              echo "✓ Correct OpenSSL version ($EXPECTED_SSL) found in binary"
+            else
+              echo "✗ Expected OpenSSL $EXPECTED_SSL not found"
+              echo "OpenSSL strings found in binary:"
+              strings "$BINARY" | grep -i openssl || echo "No OpenSSL strings found"
+              exit 1
+            fi
+          else
+            echo "Binary not found, skipping OpenSSL version check"
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: meshagent_${{ steps.verify-build.outputs.archname }}
+          path: build/meshagent_*
+          retention-days: 7

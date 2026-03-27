@@ -999,13 +999,13 @@ function getServerTargetUrl(path) {
     if (x == null) { return null; }
     if (path == null) { path = ''; }
     x = http.parseUri(x);
-    if (x == null) return null;
+    if (x == null) { return null; }
     var url = x.protocol + '//' + x.host + '/ws/tools/agent/meshcentral-server/' + path;
 
     // Inject Openframe JWT token
-    console.log("Inject Openframe JWT token")
+    var token = mesh.authToken();
     var separator = path.indexOf('?') !== -1 ? '&' : '?';
-    url += separator + 'authorization=' + mesh.authToken();
+    url += separator + 'authorization=' + token;
 
     return url;
 }
@@ -1151,12 +1151,9 @@ function handleServerCommand(data) {
                     }
                     case 'tunnel':
                         {
-                        console.log("Process tunnel request")
                         if (data.value != null) { // Process a new tunnel connection request
                             // Create a new tunnel object
                             var xurl = getServerTargetUrlEx(data.value);
-                            // TODO: remove
-                            console.log("Connect to " + xurl)
                             if (xurl != null) {
                                 xurl = xurl.split('$').join('%24').split('@').join('%40'); // Escape the $ and @ characters
 
@@ -2060,14 +2057,11 @@ function onTunnelUpgrade(response, s, head)
     s.tunnel = this;
     s.descriptorMetadata = "MeshAgent_relayTunnel";
 
-
     if (require('MeshAgent').idleTimeout != null)
     {
         s.setTimeout(require('MeshAgent').idleTimeout * 1000);
         s.on('timeout', tunnel_onIdleTimeout);
     }
-
-    //sendConsoleText('onTunnelUpgrade - ' + this.tcpport + ' - ' + this.udpport);
 
     if (this.tcpport != null) {
         // This is a TCP relay connection, pause now and try to connect to the target.
@@ -2150,6 +2144,7 @@ function onTcpRelayServerTunnelData(data) {
 
 function onTunnelClosed()
 {
+
     if (this.httprequest._dispatcher != null && this.httprequest.term == null)
     {
         // Windows Dispatcher was created to spawn a child connection, but the child didn't connect yet, so we have to shutdown the dispatcher, otherwise the child may end up hanging
@@ -2168,7 +2163,7 @@ function onTunnelClosed()
     }
 
     var tunnel = tunnels[this.httprequest.index];
-    if (tunnel == null) return; // Stop duplicate calls.
+    if (tunnel == null) { return; } // Stop duplicate calls.
 
     // Perform display locking on disconnect
     if ((this.httprequest.protocol == 2) && (this.httprequest.autolock === true)) {

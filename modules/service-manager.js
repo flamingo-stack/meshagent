@@ -15,6 +15,8 @@ limitations under the License.
 */
 var promise = require('promise');
 var systemd_escape = null;
+var macOSHelpers = process.platform === 'darwin' ? require('./macOSHelpers') : null;
+var securityPermissions = process.platform === 'darwin' ? require('./security-permissions') : null;
 
 function failureActionToInteger(action)
 {
@@ -527,6 +529,11 @@ if (process.platform == 'darwin')
                 if(uid!=null && uid!=0)
                 {
                     throw ('LaunchDaemon must run as root');
+                }
+                // Use modern bootstrap command for LaunchDaemons on macOS 10.10+
+                if(ver.compareTo('10.10') >= 0)
+                {
+                    command = 'bootstrap system';
                 }
             }
             else
@@ -2367,6 +2374,19 @@ function serviceManager()
     }
     this.installService = function installService(options)
     {
+        // Sanitize companyName and service name for macOS to follow reverse DNS naming conventions
+        // Only allow alphanumeric, hyphens, and underscores
+        if (process.platform == 'darwin' && options.companyName) {
+            options.companyName = macOSHelpers.sanitizeIdentifier(options.companyName);
+        }
+        if (process.platform == 'darwin' && options.name) {
+            var originalName = options.name;
+            options.name = macOSHelpers.sanitizeIdentifier(options.name);
+            if (!options.name) {
+                throw ('Service name "' + originalName + '" contains no valid characters. Use alphanumeric, hyphens, or underscores only.');
+            }
+        }
+
         if (process.platform == 'linux') { options.name = this.escape(options.name); }
         if (!options.target) { options.target = options.name; }
         if (!options.displayName) { options.displayName = options.name; }
@@ -2564,15 +2584,22 @@ function serviceManager()
             }
             else
             {
-                if (options.servicePath != (options.installPath + options.target))
-                {
+
+                if (options.skipBinaryCopy) {
+                } else if (options.servicePath != (options.installPath + options.target)) {
                     require('fs').copyFileSync(options.servicePath, options.installPath + options.target);
+                } else {
                 }
             }
             console.info1('Files Copied');
-            var m = require('fs').statSync(options.installPath + options.target).mode;
-            m |= (require('fs').CHMOD_MODES.S_IXUSR | require('fs').CHMOD_MODES.S_IXGRP | require('fs').CHMOD_MODES.S_IXOTH);
-            require('fs').chmodSync(options.installPath + options.target, m);
+
+            // Only chmod the binary if we copied it (for bundle installations, binary is inside .app)
+            if (!options.skipBinaryCopy) {
+                var m = require('fs').statSync(options.installPath + options.target).mode;
+                m |= (require('fs').CHMOD_MODES.S_IXUSR | require('fs').CHMOD_MODES.S_IXGRP | require('fs').CHMOD_MODES.S_IXOTH);
+                require('fs').chmodSync(options.installPath + options.target, m);
+            } else {
+            }
         }
         if (process.platform == 'freebsd')
         {
@@ -2938,15 +2965,27 @@ function serviceManager()
             if (!this.isAdmin()) { throw ('Installing as Service, requires root'); }
 
             // Mac OS
-            var stdoutpath = (options.stdout ? ('<key>StandardOutPath</key>\n<string>' + options.stdout + '</string>') : '');
+            // Validate service name before proceeding
+            var sanitizedServiceName = macOSHelpers.sanitizeIdentifier(options.name);
+            if (!sanitizedServiceName) {
+                throw ('Service name is required and must contain valid characters (alphanumeric, hyphens, underscores)');
+            }
+
+            // Build composite service identifier from companyName and service name
+            var serviceId = macOSHelpers.buildServiceId(options.name, options.companyName, { explicitServiceId: options.serviceId });
+
+            var stdoutpath = (options.stdout ? ('<key>StandardOutPath</key>\n<string>' + options.stdout + '</string>') : ('<key>StandardOutPath</key>\n<string>/tmp/' + serviceId + '-daemon.log</string>'));
+            var stderrpath = (options.stderr ? ('<key>StandardErrorPath</key>\n<string>' + options.stderr + '</string>') : ('<key>StandardErrorPath</key>\n<string>/tmp/' + serviceId + '-daemon.log</string>'));
             var autoStart = (options.startType == 'AUTO_START' ? '<true/>' : '<false/>');
 
             // Apply OpenFrame parameters formatting for macOS
+            console.log('[DEBUG service-manager] options.parameters before processing: ' + JSON.stringify(options.parameters));
             var processedParams = options.parameters ? applyOpenFrameParamsDarwin(options.parameters) : null;
+            console.log('[DEBUG service-manager] processedParams after applyOpenFrameParamsDarwin: ' + JSON.stringify(processedParams));
 
             var params =  '     <key>ProgramArguments</key>\n';
             params += '     <array>\n';
-            params += ('         <string>' + options.installPath + options.target + '</string>\n');
+            params += ('         <string>' + (options.servicePath || (options.installPath + options.target)) + '</string>\n');
             if(processedParams)
             {
                 for(var itm in processedParams)
@@ -2960,41 +2999,38 @@ function serviceManager()
             plist += '<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n';
             plist += '<plist version="1.0">\n';
             plist += '  <dict>\n';
+            plist += '      <key>Disabled</key>\n';
+            plist += '      <false/>\n';
+            plist += '      <key>KeepAlive</key>\n';
+            plist += '      <true/>\n';
             plist += '      <key>Label</key>\n';
-            plist += ('     <string>' + options.name + '</string>\n');
+            plist += ('     <string>' + serviceId + '</string>\n');
             plist += (params + '\n');
-            plist += '      <key>WorkingDirectory</key>\n';
-            plist += ('     <string>' + options.installPath + '</string>\n');
-            plist += (stdoutpath + '\n');
             plist += '      <key>RunAtLoad</key>\n';
             plist += (autoStart + '\n');
-            plist += '      <key>KeepAlive</key>\n';
-            if(options.failureRestart == null || options.failureRestart > 0)
-            {
-                plist += '      <dict>\n';
-                plist += '         <key>Crashed</key>\n';
-                plist += '         <true/>\n';
-                plist += '      </dict>\n';
-            }
-            else
-            {
-                plist += '      <false/>\n';
-            }
-            if(options.failureRestart != null)
-            {
-                plist += '      <key>ThrottleInterval</key>\n';
-                plist += '      <integer>' + (options.failureRestart / 1000) + '</integer>\n';
-            }
+            plist += (stderrpath + '\n');
+            plist += (stdoutpath + '\n');
+            plist += '      <key>WorkingDirectory</key>\n';
+            plist += ('     <string>' + options.installPath.replace(/\/$/, '') + '</string>\n');
 
             plist += '  </dict>\n';
             plist += '</plist>';
-            if (!require('fs').existsSync('/Library/LaunchDaemons/' + options.name + '.plist'))
+            var plistPath = macOSHelpers.getPlistPath(serviceId, 'daemon');
+            if (!require('fs').existsSync(plistPath))
             {
-                require('fs').writeFileSync('/Library/LaunchDaemons/' + options.name + '.plist', plist);
+                require('fs').writeFileSync(plistPath, plist);
+
+                // Set secure permissions on LaunchDaemon plist
+                if (securityPermissions) {
+                    var plistResult = securityPermissions.setSecurePermissions(plistPath, 'plist');
+                    if (!plistResult.success) {
+                        console.log('WARNING: Could not set plist permissions: ' + plistResult.errors.join(', '));
+                    }
+                }
             }
             else
             {
-                throw ('Service: ' + options.name + ' already exists');
+                throw ('Service: ' + serviceId + ' already exists');
             }
         }
 
@@ -3025,13 +3061,26 @@ function serviceManager()
                 throw ('Installing a Global Agent/Daemon, requires admin');
             }
 
-            var servicePathTokens = options.servicePath.split('/');
-            servicePathTokens.pop();
-            if (servicePathTokens.peek() == '.') { servicePathTokens.pop(); }
-            options.workingDirectory = servicePathTokens.join('/');
+            // Validate service name before proceeding
+            var sanitizedServiceName = macOSHelpers.sanitizeIdentifier(options.name);
+            if (!sanitizedServiceName) {
+                throw ('Service name is required and must contain valid characters (alphanumeric, hyphens, underscores)');
+            }
+
+            // Build composite service identifier from companyName and service name
+            var serviceId = macOSHelpers.buildServiceId(options.name, options.companyName, { explicitServiceId: options.serviceId });
+
+            // Use provided workingDirectory if set (for bundle installations), otherwise derive from servicePath
+            if (!options.workingDirectory) {
+                var servicePathTokens = options.servicePath.split('/');
+                servicePathTokens.pop();
+                if (servicePathTokens.peek() == '.') { servicePathTokens.pop(); }
+                options.workingDirectory = servicePathTokens.join('/');
+            }
 
             var autoStart = (options.startType == 'AUTO_START' ? '<true/>' : '<false/>');
-            var stdoutpath = (options.stdout ? ('<key>StandardOutPath</key>\n<string>' + options.stdout + '</string>') : '');
+            var stdoutpath = (options.stdout ? ('<key>StandardOutPath</key>\n<string>' + options.stdout + '</string>') : ('<key>StandardOutPath</key>\n<string>/tmp/' + serviceId + '-agent.log</string>'));
+            var stderrpath = (options.stderr ? ('<key>StandardErrorPath</key>\n<string>' + options.stderr + '</string>') : ('<key>StandardErrorPath</key>\n<string>/tmp/' + serviceId + '-agent.log</string>'));
 
             // Apply OpenFrame parameters formatting for macOS
             var processedParams = options.parameters ? applyOpenFrameParamsDarwin(options.parameters) : null;
@@ -3051,14 +3100,15 @@ function serviceManager()
             plist += '<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n';
             plist += '<plist version="1.0">\n';
             plist += '  <dict>\n';
+            plist += '      <key>Disabled</key>\n';
+            plist += '      <false/>\n';
             plist += '      <key>Label</key>\n';
-            plist += ('     <string>' + options.name + '-launchagent</string>\n');
+            plist += ('     <string>' + serviceId + '-agent</string>\n');
             plist += (params + '\n');
             plist += '      <key>WorkingDirectory</key>\n';
             plist += ('     <string>' + options.workingDirectory + '</string>\n');
+            plist += (stderrpath + '\n');
             plist += (stdoutpath + '\n');
-            plist += '      <key>RunAtLoad</key>\n';
-            plist += (autoStart + '\n');
             if (options.sessionTypes && options.sessionTypes.length > 0)
             {
                 plist += '      <key>LimitLoadToSessionType</key>\n';
@@ -3070,19 +3120,11 @@ function serviceManager()
                 plist += '      </array>\n';
             }
             plist += '      <key>KeepAlive</key>\n';
-            if (options.failureRestart == null || options.failureRestart > 0) {
-                plist += '      <dict>\n';
-                plist += '         <key>Crashed</key>\n';
-                plist += '         <true/>\n';
-                plist += '      </dict>\n';
-            }
-            else {
-                plist += '      <false/>\n';
-            }
-            if (options.failureRestart != null) {
-                plist += '      <key>ThrottleInterval</key>\n';
-                plist += '      <integer>' + (options.failureRestart / 1000) + '</integer>\n';
-            }
+            plist += '      <false/>\n';
+            plist += '      <key>QueueDirectories</key>\n';
+            plist += '      <array>\n';
+            plist += ('         <string>/var/run/' + serviceId + '</string>\n');
+            plist += '      </array>\n';
 
             plist += '  </dict>\n';
             plist += '</plist>';
@@ -3099,10 +3141,21 @@ function serviceManager()
                 require('fs').mkdirSync(folder);
                 require('fs').chownSync(folder, options.uid, options.gid);
             }
-            require('fs').writeFileSync(folder + options.name + '.plist', plist);
+            var agentPlistPath = folder + serviceId + '-agent.plist';
+            require('fs').writeFileSync(agentPlistPath, plist);
+
+            // Set secure permissions on LaunchAgent plist
+            if (securityPermissions) {
+                var plistResult = securityPermissions.setSecurePermissions(agentPlistPath, 'plist');
+                if (!plistResult.success) {
+                    console.log('WARNING: Could not set agent plist permissions: ' + plistResult.errors.join(', '));
+                }
+            }
+
+            // For user-owned agents, also set user ownership
             if(options.user)
             {
-                require('fs').chownSync(folder + options.name + '.plist', options.uid, options.gid);
+                require('fs').chownSync(agentPlistPath, options.uid, options.gid);
             }
         };
     }
@@ -3281,27 +3334,9 @@ function serviceManager()
         }
         else if(process.platform == 'darwin')
         {
-            service.unload();
-            try
-            {
-                require('fs').unlinkSync(service.plist);
-                if (!options || !options.skipDeleteBinary)
-                {
-                    require('fs').unlinkSync(servicePath);
-                }
-            }
-            catch (e)
-            {
-                throw ('Error uninstalling service: ' + name + ' => ' + e);
-            }
-
-            try
-            {
-                require('fs').rmdirSync(workingPath);
-            }
-            catch (e)
-            {
-            }
+            // macOS uninstall is now handled by uninstallServiceUnified() in agent-installer.js
+            // This code path should not be reached for normal agent uninstalls
+            throw ('macOS uninstall should use uninstallServiceUnified() in agent-installer.js');
         }
         else if(process.platform == 'freebsd')
         {

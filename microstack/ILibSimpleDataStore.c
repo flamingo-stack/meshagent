@@ -268,7 +268,7 @@ uint64_t ILibSimpleDataStore_WriteRecord(FILE *f, char* key, int keyLen, char* v
 // Read the next record in the file
 ILibSimpleDataStore_RecordHeader_NG* ILibSimpleDataStore_ReadNextRecord(ILibSimpleDataStore_Root *root, int legacySize)
 {
-	SHA512_CTX c;
+	EVP_MD_CTX *mdctx = NULL;
 	char data[4096];
 	char result[SHA384HASHSIZE];
 	int i, bytesLeft;
@@ -328,15 +328,22 @@ ILibSimpleDataStore_RecordHeader_NG* ILibSimpleDataStore_ReadNextRecord(ILibSimp
 	bytesLeft = node->valueLength;
 
 	// Hash SHA384 the data
-	SHA384_Init(&c);
+	mdctx = EVP_MD_CTX_new();
+	if (mdctx == NULL)
+	{
+		ILibSimpleDataStore_SeekPosition(root->dataFile, currentOffset, SEEK_SET);
+		return NULL;
+	}
+	EVP_DigestInit_ex(mdctx, EVP_sha384(), NULL);
 	while (bytesLeft > 0)
 	{
 		i = (int)fread(data, 1, bytesLeft > 4096 ? 4096 : bytesLeft, root->dataFile);
 		if (i <= 0) { bytesLeft = 0; break; }
-		SHA384_Update(&c, data, i);
+		EVP_DigestUpdate(mdctx, data, i);
 		bytesLeft -= i;
 	}
-	SHA384_Final((unsigned char*)result, &c);
+	EVP_DigestFinal_ex(mdctx, (unsigned char*)result, NULL);
+	EVP_MD_CTX_free(mdctx);
 	if (node->valueLength > 0)
 	{
 		// Check the hash
@@ -550,6 +557,7 @@ FILE* ILibSimpleDataStore_OpenFileEx3(char* filePath, int forceTruncateIfNonZero
 
 	if (forceTruncateIfNonZero != 0 || (f = fopen(filePath, flag)) == NULL)
 	{
+		if (readonly != 0) { return NULL; }  // Don't create file in readonly mode
 		if (created != NULL) { *created = 1; }
 		f = fopen(filePath, "wb+");
 	}

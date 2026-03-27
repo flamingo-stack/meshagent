@@ -21,42 +21,39 @@ char* base64_decode(const char* input, size_t* output_len);
 char* extract_token(const char* secret, const char* token_path) {
     // Use provided path or default to /etc/openframe/token.txt
     const char* filename = (token_path && strlen(token_path) > 0) ? token_path : "/etc/openframe/token.txt";
-    
+
     if (!secret || strlen(secret) != 32) {
-        printf("Secret must be exactly 32 bytes for AES-256\n");
         return NULL; // Secret must be exactly 32 bytes for AES-256
     }
-    
+
     size_t file_size;
     char* file_data = read_token_file(filename, &file_size);
     if (!file_data) {
-        printf("Failed to read token file\n");
         return NULL;
     }
 
     size_t decoded_len;
     char* encrypted_data = base64_decode(file_data, &decoded_len);
+    free(file_data);
 
     if (!encrypted_data) {
-        printf("Failed to base64 decode token file\n");
         return NULL;
     }
 
     // For GCM, the nonce is at the beginning of the ciphertext
     // GCM nonce size is typically 12 bytes
     const int GCM_NONCE_SIZE = 12;
-    
+
     if (decoded_len < GCM_NONCE_SIZE) {
-        printf("Decoded data size (%zu) is less than GCM nonce size (%d)\n", decoded_len, GCM_NONCE_SIZE);
         free(encrypted_data);
         return NULL;
     }
-    
+
     size_t ciphertext_len = decoded_len; // Full decoded data for GCM decryption
-    
     size_t plaintext_len;
     char* decrypted_token = decrypt_aes_gcm((const unsigned char*)encrypted_data, ciphertext_len, (const unsigned char*)secret, &plaintext_len);
     free(encrypted_data);
+
     return decrypted_token;
 }
 
