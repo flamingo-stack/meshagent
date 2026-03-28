@@ -186,7 +186,7 @@ SOURCES += $(ADDITIONALSOURCES)
 ADDITIONALOBJECTS ?=
 
 # Mesh Agent core
-SOURCES += meshcore/agentcore.c meshconsole/main.c meshcore/meshinfo.c openframe/token_extractor.c
+SOURCES += meshcore/agentcore.c meshconsole/main.c meshcore/meshinfo.c openframe/token_extractor.c openframe/machine_id_reader.c
 
 # Mesh Agent settings
 MESH_VER = 194
