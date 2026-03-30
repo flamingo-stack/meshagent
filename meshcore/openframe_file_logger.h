@@ -382,18 +382,55 @@ static inline void unlock_log(void) {
 #endif
 }
 
+static volatile int g_at_line_start = 1;
+
+static inline int openframe_printf_timestamp(char *buf, int bufsize)
+{
+#ifdef WIN32
+    SYSTEMTIME st;
+    GetSystemTime(&st);
+    return snprintf(buf, bufsize, "[%04d-%02d-%02dT%02d:%02d:%02d.%03dZ] ",
+        st.wYear, st.wMonth, st.wDay,
+        st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+#else
+    struct timespec ts;
+    struct tm tm_info;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    gmtime_r(&ts.tv_sec, &tm_info);
+    return snprintf(buf, bufsize, "[%04d-%02d-%02dT%02d:%02d:%02d.%03ldZ] ",
+        tm_info.tm_year + 1900, tm_info.tm_mon + 1, tm_info.tm_mday,
+        tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec,
+        ts.tv_nsec / 1000000);
+#endif
+}
+
 static inline int openframe_printf(const char *format, ...)
 {
     va_list args;
-    char buffer[4096];
-    int len;
+    char raw[4096];
+    char buffer[8192];
+    int raw_len;
+    int len = 0;
     int success = 0;
     
     va_start(args, format);
-    len = vsnprintf(buffer, sizeof(buffer), format, args);
+    raw_len = vsnprintf(raw, sizeof(raw), format, args);
     va_end(args);
     
-    if (len <= 0) return len;
+    if (raw_len <= 0) return raw_len;
+    if (raw_len >= (int)sizeof(raw)) raw_len = (int)sizeof(raw) - 1;
+
+    /* Prepend timestamp at line boundaries */
+    for (int i = 0; i < raw_len && len < (int)sizeof(buffer) - 40; i++) {
+        if (g_at_line_start && raw[i] != '\n') {
+            len += openframe_printf_timestamp(buffer + len, (int)sizeof(buffer) - len);
+            g_at_line_start = 0;
+        }
+        buffer[len++] = raw[i];
+        if (raw[i] == '\n') {
+            g_at_line_start = 1;
+        }
+    }
     
     init_log_mutex();
     lock_log();
@@ -418,10 +455,8 @@ static inline int openframe_printf(const char *format, ...)
             /* Write failed - handle gracefully */
             g_disk_error_count++;
             if (g_disk_error_count >= 3) {
-                /* Too many failures - might be disk full or disconnected */
                 g_disk_available = 0;
                 
-                /* Try to write error message if possible */
                 if (g_log_file != NULL) {
                     fprintf(g_log_file, "\n*** LOG ERROR: Disk write failures detected, switching to stdout-only mode ***\n");
                     fflush(g_log_file);
