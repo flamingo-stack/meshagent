@@ -3284,10 +3284,7 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 					if (memcmp(ILibScratchPad2, AuthRequest->serverHash, sizeof(AuthRequest->serverHash)) != 0) 
 					{
 						printf("Bad server certificate hash\r\n"); // TODO: Disconnect
-						if (agent->controlChannelDebug != 0)
-						{
-							ILIBLOGMESSAGEX("Bad server certificate hash");
-						}
+						printf("Handshake FAILED: Bad server certificate hash - gateway/proxy may be intercepting connection\n");
 						break;
 					}
 				}
@@ -3370,7 +3367,11 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 					EVP_PKEY *evp_pubkey;
 
 					// Get the server certificate
-					if (!d2i_X509(&serverCert, (const unsigned char**)&AuthVerify->cert, AuthVerify->certLen)) { printf("Invalid server certificate\r\n"); break; } // TODO: Disconnect
+					if (!d2i_X509(&serverCert, (const unsigned char**)&AuthVerify->cert, AuthVerify->certLen)) {
+						printf("Invalid server certificate\r\n");
+						printf("Handshake FAILED: Invalid server certificate (DER parse error)\n");
+						break;
+					} // TODO: Disconnect
 
 					// Check if this certificate public key hash matches what we want
 					X509_pubkey_digest(serverCert, EVP_sha384(), (unsigned char*)ILibScratchPad, (unsigned int*)&hashlen); // OpenSSL 1.1, SHA384
@@ -3378,8 +3379,9 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 						X509_pubkey_digest(serverCert, EVP_sha256(), (unsigned char*)ILibScratchPad, (unsigned int*)&hashlen); // OpenSSL 1.1, SHA256 (For older .mshx policy file)
 						if (memcmp(ILibScratchPad, agent->serverHash, UTIL_SHA256_HASHSIZE) != 0)
 						{
-							printf("Server certificate mismatch\r\n"); break; // TODO: Disconnect
-							if (agent->controlChannelDebug != 0) { ILIBLOGMESSAGEX("Server certificate mismatch"); }
+							printf("Server certificate mismatch\r\n");
+							printf("Handshake FAILED: Server certificate mismatch - server identity verification failed\n");
+							break; // TODO: Disconnect
 						}
 					}
 
@@ -3397,6 +3399,7 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 						if (EVP_DigestVerifyFinal(mdctx, (unsigned char*)AuthVerify->signature, AuthVerify->signatureLen) == 1)
 					{
 						// Server signature verified, we are good to go.
+						printf("Handshake: Server signature verified (authState=%d->%d)\n", agent->serverAuthState, agent->serverAuthState | 1);
 						agent->serverAuthState |= 1;
 
 						// Store the server's TLS cert hash so in the future, we can skip server auth.
@@ -3406,7 +3409,7 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 						MeshServer_SendAgentInfo(agent, WebStateObject);
 					} else {
 						printf("Invalid server signature\r\n");
-						if (agent->controlChannelDebug != 0) { ILIBLOGMESSAGEX("Invalid Server Signature"); }
+						printf("Handshake FAILED: Invalid server signature - server authentication rejected\n");
 						// TODO: Disconnect
 					}
 					}
@@ -3418,12 +3421,16 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 				break;
 			case MeshCommand_AuthConfirm: // Server indicates that we are authenticated, we can now send data.
 				{
-				if (agent->controlChannelDebug != 0) { printf("Authentication Complete...\n");  ILIBLOGMESSAGEX("Authentication Complete..."); }
+				if (agent->controlChannelDebug != 0) { printf("Authentication Complete...\n"); }
+				printf("Handshake: Server confirmed agent authentication (authState=%d->%d)\n", agent->serverAuthState, agent->serverAuthState | 2);
 
 					// We have to wait for the server to indicate that it authenticated the agent (us) before sending any data to the server.
 					// Node authentication requires the server make database calls, so we need to delay.
 					agent->serverAuthState |= 2;
-					if (agent->serverAuthState == 3) { MeshServer_ServerAuthenticated(WebStateObject, agent); }
+					if (agent->serverAuthState == 3) {
+						printf("Handshake SUCCESS: Fully authenticated with server\n");
+						MeshServer_ServerAuthenticated(WebStateObject, agent);
+					}
 				}
 				break;
 			}
@@ -4076,6 +4083,7 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 
 			agent->controlChannel = WebStateObject; // Set the agent MeshCentral server control channel
 			printf("Control channel established [fd=%d]\n", ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
+			printf("Connection: WebSocket upgrade successful (fd=%d), starting handshake authentication\n", ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
 			ILibRemoteLogging_printf(ILibChainGetLogger(agent->chain), ILibRemoteLogging_Modules_Agent_GuardPost | ILibRemoteLogging_Modules_ConsolePrint, ILibRemoteLogging_Flags_VerbosityLevel_1, "Control Channel Idle Timeout = %d seconds", agent->controlChannel_idleTimeout_seconds);
 			ILibWebClient_SetTimeout(WebStateObject, agent->controlChannel_idleTimeout_seconds, MeshServer_ControlChannel_IdleTimeout, agent);
 			ILibWebClient_WebSocket_SetPingPongHandler(WebStateObject, MeshServer_ControlChannel_PingSink, MeshServer_ControlChannel_PongSink, agent);
@@ -4157,10 +4165,17 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 		case ILibWebClient_ReceiveStatus_Complete: // Disconnection
 			printf("Control channel disconnected [fd=%d, authState=%d]\n",
 				ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject), agent->serverAuthState);
+			// Log disconnection with auth state to help diagnose connection issues
+			if (agent->serverAuthState != 3) {
+				printf("Connection LOST: Disconnected before full authentication (fd=%d, authState=%d) - possible gateway/firewall issue\n",
+					ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject), agent->serverAuthState);
+			} else {
+				printf("Connection LOST: Disconnected after authentication (fd=%d) - server closed connection\n",
+					ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
+			}
 			if (agent->controlChannelDebug != 0)
 			{
 				printf("Control Channel Disconnected [%d]...\n", ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
-				ILIBLOGMESSAGEX("Control Channel Disconnected [%d]...", ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
 			}
 												   
 			// If the channel had been authenticated, inform JavaScript core module that we are not disconnected
@@ -4212,6 +4227,7 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 			else
 			{
 				printf("Protocol Error encountered...\n");
+				printf("Connection FAILED: Protocol error - unexpected HTTP status %d (expected 101 WebSocket upgrade)\n", header->StatusCode);
 			}
 			break;
 	}
@@ -4221,6 +4237,11 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 	{
 		ILibRemoteLogging_printf(ILibChainGetLogger(ILibWebClient_GetChainFromWebStateObject(WebStateObject)), ILibRemoteLogging_Modules_Agent_GuardPost, ILibRemoteLogging_Flags_VerbosityLevel_1, "Agent Host Container: Mesh Server Connection Error, trying again later.");
 		printf("Mesh Server Connection Error [%d] (recvStatus=%d, authState=%d, connState=%d)\n",
+			ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject),
+			recvStatus, agent->serverAuthState, agent->serverConnectionState);
+
+		// Log connection failure details for debugging gateway/proxy issues
+		printf("Connection FAILED: No HTTP headers received (fd=%d, recvStatus=%d, authState=%d, connState=%d) - possible gateway rejection or network issue\n",
 			ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject),
 			recvStatus, agent->serverAuthState, agent->serverConnectionState);
 
@@ -4257,7 +4278,8 @@ void MeshServer_ConnectEx_NetworkError(void *j)
 	void *request = ((void**)j)[1];
 	ILibMemory_Free(j);
 
-	if (agent->controlChannelDebug != 0) { ILIBLOGMESSAGEX("Network Timeout Occurred..."); }
+	if (agent->controlChannelDebug != 0) { printf("Network Timeout Occurred...\n"); }
+	printf("Connection FAILED: Network timeout - server unreachable or gateway blocking connection\n");
 	agent->serverConnectionState = 0; // We are cancelling connection request
 
 	printf("Network Timeout occurred...\n");
