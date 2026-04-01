@@ -1247,8 +1247,8 @@ void ILibProcessAsyncSocket(struct ILibAsyncSocketModule *Reader, int pendingRea
 						while ((sslerror = ERR_get_error()) != 0)
 						{
 							ERR_error_string_n(sslerror, ILibScratchPad, sizeof(ILibScratchPad));
+							printf("TLS Handshake FAILED: %s\n", ILibScratchPad);
 						}
-						// TODO: We should probably do something
 						break;
 					case 1:
 						Reader->SSLConnect = Reader->TLSHandshakeCompleted = 1;
@@ -1266,6 +1266,12 @@ void ILibProcessAsyncSocket(struct ILibAsyncSocketModule *Reader, int pendingRea
 						sslerror = SSL_get_error(Reader->ssl, sslerror);
 						if (sslerror == SSL_ERROR_SSL)
 						{
+							unsigned long err;
+							while ((err = ERR_get_error()) != 0)
+							{
+								ERR_error_string_n(err, ILibScratchPad, sizeof(ILibScratchPad));
+								printf("TLS Handshake ERROR: %s\n", ILibScratchPad);
+							}
 							Reader->TLS_HandshakeError_Occurred = 1;
 							bytesReceived = -1;
 						}

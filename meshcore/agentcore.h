@@ -257,6 +257,7 @@ typedef struct MeshAgentHostContainer
 	int serverConnectionState;
 	int exitCode;
 	int dbRetryCount;
+	int consecutiveConnectionFailures;  // Counter for consecutive connection failures, triggers restart if too many
 	MeshAgent_Posix_PlatformTypes platformType;
 	int JSRunningAsService;
 	int JSRunningWithAdmin;

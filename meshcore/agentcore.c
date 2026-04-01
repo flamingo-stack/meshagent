@@ -3429,6 +3429,7 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 					agent->serverAuthState |= 2;
 					if (agent->serverAuthState == 3) {
 						printf("Handshake SUCCESS: Fully authenticated with server\n");
+						agent->consecutiveConnectionFailures = 0; // Reset failure counter on successful connection
 						MeshServer_ServerAuthenticated(WebStateObject, agent);
 					}
 				}
@@ -4167,8 +4168,17 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 				ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject), agent->serverAuthState);
 			// Log disconnection with auth state to help diagnose connection issues
 			if (agent->serverAuthState != 3) {
-				printf("Connection LOST: Disconnected before full authentication (fd=%d, authState=%d) - possible gateway/firewall issue\n",
-					ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject), agent->serverAuthState);
+				// Disconnected before full authentication - count as failure
+				agent->consecutiveConnectionFailures++;
+				printf("Connection LOST: Disconnected before full authentication (fd=%d, authState=%d, failures=%d) - possible gateway/firewall issue\n",
+					ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject), agent->serverAuthState, agent->consecutiveConnectionFailures);
+
+				// If too many consecutive failures, exit to let OS restart the service
+				if (agent->consecutiveConnectionFailures >= 30 && agent->JSRunningAsService != 0)
+				{
+					printf("Connection FAILED: Too many consecutive failures (%d), restarting agent service...\n", agent->consecutiveConnectionFailures);
+					exit(1);
+				}
 			} else {
 				printf("Connection LOST: Disconnected after authentication (fd=%d) - server closed connection\n",
 					ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject));
@@ -4226,8 +4236,24 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 			}
 			else
 			{
+				// Track consecutive connection failures
+				agent->consecutiveConnectionFailures++;
 				printf("Protocol Error encountered...\n");
-				printf("Connection FAILED: Protocol error - unexpected HTTP status %d (expected 101 WebSocket upgrade)\n", header->StatusCode);
+				printf("Connection FAILED: HTTP %d %.*s (expected 101 WebSocket upgrade, failures=%d)\n",
+					header->StatusCode,
+					(int)header->StatusDataLength, header->StatusData ? header->StatusData : "",
+					agent->consecutiveConnectionFailures);
+				if (header->Body != NULL && header->BodyLength > 0) {
+					printf("Connection FAILED: Server response body: %.*s\n",
+						(int)(header->BodyLength > 512 ? 512 : header->BodyLength), header->Body);
+				}
+
+				// If too many consecutive failures, exit to let OS restart the service
+				if (agent->consecutiveConnectionFailures >= 30 && agent->JSRunningAsService != 0)
+				{
+					printf("Connection FAILED: Too many consecutive failures (%d), restarting agent service...\n", agent->consecutiveConnectionFailures);
+					exit(1);
+				}
 			}
 			break;
 	}
@@ -4235,15 +4261,28 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 	// If there are no headers, this is a connection error. Log it and try again...
 	if (header == NULL)
 	{
+		const char* recvStatusStr = "Unknown";
+		switch(recvStatus) {
+			case ILibWebClient_ReceiveStatus_MoreDataToBeReceived: recvStatusStr = "MoreDataToBeReceived"; break;
+			case ILibWebClient_ReceiveStatus_Complete: recvStatusStr = "Complete/Disconnected"; break;
+			case ILibWebClient_ReceiveStatus_Partial: recvStatusStr = "Partial"; break;
+			case ILibWebClient_ReceiveStatus_LastPartial: recvStatusStr = "LastPartial"; break;
+			case ILibWebClient_ReceiveStatus_Connection_Established: recvStatusStr = "Connection_Established"; break;
+		}
 		ILibRemoteLogging_printf(ILibChainGetLogger(ILibWebClient_GetChainFromWebStateObject(WebStateObject)), ILibRemoteLogging_Modules_Agent_GuardPost, ILibRemoteLogging_Flags_VerbosityLevel_1, "Agent Host Container: Mesh Server Connection Error, trying again later.");
-		printf("Mesh Server Connection Error [%d] (recvStatus=%d, authState=%d, connState=%d)\n",
-			ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject),
-			recvStatus, agent->serverAuthState, agent->serverConnectionState);
 
-		// Log connection failure details for debugging gateway/proxy issues
-		printf("Connection FAILED: No HTTP headers received (fd=%d, recvStatus=%d, authState=%d, connState=%d) - possible gateway rejection or network issue\n",
+		// Track consecutive connection failures
+		agent->consecutiveConnectionFailures++;
+		printf("Connection FAILED: No HTTP response (fd=%d, status=%s, authState=%d, connState=%d, failures=%d)\n",
 			ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject),
-			recvStatus, agent->serverAuthState, agent->serverConnectionState);
+			recvStatusStr, agent->serverAuthState, agent->serverConnectionState, agent->consecutiveConnectionFailures);
+
+		// If too many consecutive failures, exit to let OS restart the service
+		if (agent->consecutiveConnectionFailures >= 30 && agent->JSRunningAsService != 0)
+		{
+			printf("Connection FAILED: Too many consecutive failures (%d), restarting agent service...\n", agent->consecutiveConnectionFailures);
+			exit(1);
+		}
 
 		agent->autoproxy_status = 0;
 
@@ -4278,11 +4317,19 @@ void MeshServer_ConnectEx_NetworkError(void *j)
 	void *request = ((void**)j)[1];
 	ILibMemory_Free(j);
 
+	// Track consecutive connection failures
+	agent->consecutiveConnectionFailures++;
+
 	if (agent->controlChannelDebug != 0) { printf("Network Timeout Occurred...\n"); }
-	printf("Connection FAILED: Network timeout - server unreachable or gateway blocking connection\n");
+	printf("Connection FAILED: Network timeout (failures=%d) - server unreachable or gateway blocking\n", agent->consecutiveConnectionFailures);
 	agent->serverConnectionState = 0; // We are cancelling connection request
 
-	printf("Network Timeout occurred...\n");
+	// If too many consecutive failures, exit to let OS restart the service
+	if (agent->consecutiveConnectionFailures >= 30 && agent->JSRunningAsService != 0)
+	{
+		printf("Connection FAILED: Too many consecutive failures (%d), restarting agent service...\n", agent->consecutiveConnectionFailures);
+		exit(1);
+	}
 
 	ILibWebClient_CancelRequest(request);
 	MeshServer_ConnectEx(agent);
@@ -5270,6 +5317,14 @@ void MeshAgent_Agent_SemaphoreTrack_Sink(char *source, void *user, int init)
 	printf("[%d] SEM_%s: %s\n", init == 0 ? (--MeshAgent_Agent_SemaphoreTrack_Counter) : (++MeshAgent_Agent_SemaphoreTrack_Counter), init == 0 ? "DESTROY" : "INIT", source);
 }
 
+// TEST: Timer callback to test OS restart capability - exits after 60 seconds
+void MeshAgent_TestRestartTimer(void *obj)
+{
+	ILIBLOGMESSAGEX("TEST: 60 second timer fired, exiting to test OS restart...");
+	printf("TEST: 60 second timer fired, exiting to test OS restart...\n");
+	exit(1);
+}
+
 int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **param, int parseCommands)
 {
 	MeshAgent_DirectLog("[AGENT] MeshAgent_AgentMode START");
@@ -6216,6 +6271,12 @@ int MeshAgent_AgentMode(MeshAgentHostContainer *agentHost, int paramLen, char **
 			ILibIPAddressMonitor_Create(agentHost->chain, MeshAgent_AgentMode_IPAddressChanged_Handler, agentHost);
 		}
 		MeshAgent_DirectLog("[AGENT] About to call MeshServer_Connect, localdebugmode=%d", agentHost->localdebugmode);
+
+		// TEST: Set 60 second timer to test OS restart capability
+		ILIBLOGMESSAGEX("TEST: Setting 60 second restart test timer...");
+		printf("TEST: Setting 60 second restart test timer...\n");
+		ILibLifeTime_AddEx(ILibGetBaseTimer(agentHost->chain), agentHost, 60000, MeshAgent_TestRestartTimer, NULL);
+
 		if (agentHost->localdebugmode == 0) { MeshServer_Connect(agentHost); MeshAgent_DirectLog("[AGENT] MeshServer_Connect returned"); }
 		else
 		{
