@@ -4171,7 +4171,7 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 				printf("Connection LOST: Disconnected before full authentication (fd=%d, authState=%d, failures=%d) - possible gateway/firewall issue\n",
 					ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject), agent->serverAuthState, agent->consecutiveConnectionFailures);
 
-				if (agent->consecutiveConnectionFailures >= 30 && agent->JSRunningAsService != 0)
+				if (agent->consecutiveConnectionFailures >= 15 && agent->JSRunningAsService != 0)
 				{
 					printf("Connection FAILED: Too many consecutive failures (%d), restarting agent service...\n", agent->consecutiveConnectionFailures);
 					exit(1);
@@ -4244,7 +4244,7 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 						(int)(header->BodyLength > 512 ? 512 : header->BodyLength), header->Body);
 				}
 
-				if (agent->consecutiveConnectionFailures >= 30 && agent->JSRunningAsService != 0)
+				if (agent->consecutiveConnectionFailures >= 15 && agent->JSRunningAsService != 0)
 				{
 					printf("Connection FAILED: Too many consecutive failures (%d), restarting agent service...\n", agent->consecutiveConnectionFailures);
 					exit(1);
@@ -4271,7 +4271,7 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 			ILibWebClient_GetDescriptorValue_FromStateObject(WebStateObject),
 			recvStatusStr, agent->serverAuthState, agent->serverConnectionState, agent->consecutiveConnectionFailures);
 
-		if (agent->consecutiveConnectionFailures >= 30 && agent->JSRunningAsService != 0)
+		if (agent->consecutiveConnectionFailures >= 15 && agent->JSRunningAsService != 0)
 		{
 			printf("Connection FAILED: Too many consecutive failures (%d), restarting agent service...\n", agent->consecutiveConnectionFailures);
 			exit(1);
@@ -4316,7 +4316,7 @@ void MeshServer_ConnectEx_NetworkError(void *j)
 	printf("Connection FAILED: Network timeout (failures=%d) - server unreachable or gateway blocking\n", agent->consecutiveConnectionFailures);
 	agent->serverConnectionState = 0;
 
-	if (agent->consecutiveConnectionFailures >= 30 && agent->JSRunningAsService != 0)
+	if (agent->consecutiveConnectionFailures >= 15 && agent->JSRunningAsService != 0)
 	{
 		printf("Connection FAILED: Too many consecutive failures (%d), restarting agent service...\n", agent->consecutiveConnectionFailures);
 		exit(1);
