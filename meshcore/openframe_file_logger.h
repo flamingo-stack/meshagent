@@ -38,6 +38,7 @@ Features:
 #include <process.h>
 #include <io.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #endif
 
 /* Macro to ignore return values */
