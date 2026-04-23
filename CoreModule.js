@@ -1166,6 +1166,9 @@ function handleServerCommand(data) {
                                 woptions.checkServerIdentity = tunnel_checkServerIdentity;
                                 woptions.checkServerIdentity.servertlshash = data.servertlshash;
 
+                                // Add custom relay headers if provided by the server
+                                if (data.relayHeaders != null) { woptions.headers = data.relayHeaders; }
+
                                 //sendConsoleText(JSON.stringify(woptions));
                                 //sendConsoleText('TUNNEL: ' + JSON.stringify(data, null, 2));
 
