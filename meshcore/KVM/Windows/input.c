@@ -409,7 +409,8 @@ void KeyAction(unsigned char keycode, int up)
 {
 	INPUT key;
 	HWND windowHandle = GetForegroundWindow();
-	if (windowHandle != NULL) { SetForegroundWindow(windowHandle); }
+	if (windowHandle == NULL) return;
+	SetForegroundWindow(windowHandle);
 	key.type = INPUT_KEYBOARD;
 	key.ki.wVk = keycode;
 	key.ki.dwFlags = 0;
@@ -427,7 +428,8 @@ void KeyActionUnicode(WORD unicode, int up)
 {
 	INPUT key;
 	HWND windowHandle = GetForegroundWindow();
-	if (windowHandle != NULL) { SetForegroundWindow(windowHandle); }
+	if (windowHandle == NULL) return;
+	SetForegroundWindow(windowHandle);
 	key.type = INPUT_KEYBOARD;
 	key.ki.wVk = 0;
 	key.ki.dwFlags = KEYEVENTF_UNICODE;
