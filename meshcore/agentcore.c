@@ -2508,7 +2508,8 @@ static time_t parse_jwt_exp(const char* jwt)
 	}
 	encoded[payloadLen] = '\0';
 
-	int decodedLen = ILibBase64Decode((unsigned char*)encoded, (int)payloadLen, (unsigned char**)&encoded);
+	unsigned char* decodedBuf = (unsigned char*)encoded;
+	int decodedLen = ILibBase64Decode((unsigned char*)encoded, (int)payloadLen, &decodedBuf);
 	if (decodedLen <= 0) return 0;
 	encoded[decodedLen] = '\0';
 
