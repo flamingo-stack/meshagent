@@ -274,7 +274,7 @@ typedef struct MeshAgentHostContainer
 	bool openFrameMode;
 	char* openFrameSecret;
 	char* openFrameTokenPath;
-	time_t jwtExpiry;
+	char* lastJwt;
 #if defined(_WINSERVICE)
 	int runningAsConsole;
 #endif
