@@ -129,8 +129,6 @@ char* MeshAgentHost_BatteryInfo_STRINGS[] = { "UNKNOWN", "HIGH_CHARGE", "LOW_CHA
 JS_ENGINE_CONTEXT MeshAgent_JavaCore_ContextGuid = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 };
 extern int ILibInflate(char *buffer, size_t bufferLen, char *decompressed, size_t *decompressedLen, uint32_t crc);
 #define Agent2PingData(ptr) ((void*)((char*)(ptr)+1))
-#define Agent2JwtTimerData(ptr) ((void*)((char*)(ptr)+2))
-#define JwtTimerData2Agent(ptr) ((MeshAgentHostContainer*)((char*)(ptr)-2))
 #define PingData2Agent(data) ((MeshAgentHostContainer*)((char*)(data)-1))
 #ifndef MICROSTACK_NOTLS
 extern void ILibDuktape_TLS_X509_PUSH(duk_context *ctx, X509* cert);
@@ -390,7 +388,6 @@ void MeshServer_Connect(MeshAgentHostContainer *agent);
 void MeshServer_ProcessCommand(ILibWebClient_StateObject wcdo, MeshAgentHostContainer *agent, char *buffer, int bufferLen);
 char ContainerContextGUID[sizeof(JS_ENGINE_CONTEXT) + 1];
 void MeshServer_ConnectEx(MeshAgentHostContainer *agent);
-void MeshServer_JwtExpiry_Reconnect(void *object);
 int agent_VerifyMeshCertificates(MeshAgentHostContainer *agent);
 void MeshServer_SendJSON(MeshAgentHostContainer* agent, ILibWebClient_StateObject WebStateObject, char *JSON, int JSONLength);
 
@@ -2480,54 +2477,6 @@ char* MeshAgent_MakeAbsolutePathEx(char *basePath, char *localPath, int escapeBa
 	return(ILibScratchPad2);
 }
 
-static time_t parse_jwt_exp(const char* jwt)
-{
-	if (jwt == NULL) return 0;
-
-	const char* dot1 = strchr(jwt, '.');
-	if (dot1 == NULL) return 0;
-	const char* payloadStart = dot1 + 1;
-	const char* dot2 = strchr(payloadStart, '.');
-	if (dot2 == NULL) return 0;
-
-	size_t payloadLen = (size_t)(dot2 - payloadStart);
-	if (payloadLen == 0 || payloadLen > 2048) return 0;
-
-	char encoded[2052];
-	memcpy(encoded, payloadStart, payloadLen);
-
-	for (size_t i = 0; i < payloadLen; i++)
-	{
-		if (encoded[i] == '-') encoded[i] = '+';
-		else if (encoded[i] == '_') encoded[i] = '/';
-	}
-
-	while (payloadLen % 4 != 0 && payloadLen < sizeof(encoded) - 1)
-	{
-		encoded[payloadLen++] = '=';
-	}
-	encoded[payloadLen] = '\0';
-
-	int decodedLen = ILibBase64Decode((unsigned char*)encoded, (int)payloadLen, (unsigned char**)&encoded);
-	if (decodedLen <= 0) return 0;
-	encoded[decodedLen] = '\0';
-
-	char* expStr = strstr(encoded, "\"exp\"");
-	if (expStr == NULL) return 0;
-	expStr += 5;
-
-	while (*expStr == ' ' || *expStr == '\t' || *expStr == ':') expStr++;
-
-	long long expVal = 0;
-	while (*expStr >= '0' && *expStr <= '9')
-	{
-		expVal = expVal * 10 + (*expStr - '0');
-		expStr++;
-	}
-
-	return (expVal > 0) ? (time_t)expVal : 0;
-}
-
 // TODO: make as external cmd arg and configure from openframe agent
 // Build path to CoreModule.js for OpenFrame mode with fallback logic:
 // 1. First try next to the executable
@@ -3151,17 +3100,6 @@ void MeshServer_SendAgentInfo(MeshAgentHostContainer* agent, ILibWebClient_State
 	// Send mesh agent information to the server
 	ILibWebClient_WebSocket_Send(WebStateObject, ILibWebClient_WebSocket_DataType_BINARY, (char*)info, sizeof(MeshCommand_BinaryPacket_AuthInfo) + hostnamelen, ILibAsyncSocket_MemoryOwnership_USER, ILibWebClient_WebSocket_FragmentFlag_Complete);
 	agent->retryTime = 0;
-
-	if (agent->openFrameMode && agent->jwtExpiry > 0)
-	{
-		time_t now = time(NULL);
-		int secondsUntilReconnect = (int)(agent->jwtExpiry - now) + 10;
-		if (secondsUntilReconnect > 60 && secondsUntilReconnect < 7200)
-		{
-			printf("JWT reconnect timer set for %d seconds (jwt_exp=%ld, now=%ld)\n", secondsUntilReconnect, (long)agent->jwtExpiry, (long)now);
-			ILibLifeTime_AddEx(ILibGetBaseTimer(agent->chain), Agent2JwtTimerData(agent), secondsUntilReconnect * 1000, (ILibLifeTime_OnCallback)MeshServer_JwtExpiry_Reconnect, NULL);
-		}
-	}
 
 	if ((agent->capabilities & MeshCommand_AuthInfo_CapabilitiesMask_RECOVERY) == MeshCommand_AuthInfo_CapabilitiesMask_RECOVERY)
 	{
@@ -4046,14 +3984,6 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 	}
 }
 
-void MeshServer_JwtExpiry_Reconnect(void *object)
-{
-	MeshAgentHostContainer *agent = JwtTimerData2Agent(object);
-	if (agent->controlChannel == NULL) return;
-	printf("JWT expiry timer fired - proactive reconnect\n");
-	ILibWebClient_Disconnect(agent->controlChannel);
-}
-
 void MeshServer_ControlChannel_IdleTimeout_PongTimeout(void *object)
 {
 	// We didn't receive a timely PONG response, so we must disconnect the control channel, and reconnect
@@ -4286,7 +4216,6 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 			agent->serverAuthState = 0;
 			agent->controlChannel = NULL; // Set the agent MeshCentral server control channel
 			agent->serverConnectionState = 0;
-			ILibLifeTime_Remove(ILibGetBaseTimer(agent->chain), Agent2JwtTimerData(agent));
 			break;
 		case ILibWebClient_ReceiveStatus_MoreDataToBeReceived:	// Data received			
 			if (header->StatusCode == 101)
@@ -4728,10 +4657,9 @@ void MeshServer_ConnectEx(MeshAgentHostContainer *agent)
 	{
 		char* extracted_token = extract_token(agent->openFrameSecret, agent->openFrameTokenPath);
 		if (extracted_token != NULL) {
-			time_t exp = parse_jwt_exp(extracted_token);
-			if (exp > 0 && exp < time(NULL))
+			if (agent->lastJwt != NULL && strcmp(extracted_token, agent->lastJwt) == 0)
 			{
-				printf("JWT expired %ld seconds ago, waiting for token refresh...\n", (long)(time(NULL) - exp));
+				printf("JWT unchanged, waiting for token refresh...\n");
 				free(extracted_token);
 				ILibDestructPacket(req);
 				free(path);
@@ -4740,7 +4668,8 @@ void MeshServer_ConnectEx(MeshAgentHostContainer *agent)
 				ILibLifeTime_AddEx(ILibGetBaseTimer(agent->chain), agent, 3000, (ILibLifeTime_OnCallback)MeshServer_ConnectEx, NULL);
 				return;
 			}
-			agent->jwtExpiry = exp;
+			if (agent->lastJwt != NULL) { free(agent->lastJwt); }
+			agent->lastJwt = ILibString_Copy(extracted_token, (int)strlen(extracted_token));
 
 			int authLen = 7 + strlen(extracted_token) + 1; // "Bearer " + token + null terminator
 			char *openframeAuthorization = (char*)malloc(authLen);
