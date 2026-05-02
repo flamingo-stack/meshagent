@@ -4657,20 +4657,6 @@ void MeshServer_ConnectEx(MeshAgentHostContainer *agent)
 	{
 		char* extracted_token = extract_token(agent->openFrameSecret, agent->openFrameTokenPath);
 		if (extracted_token != NULL) {
-			if (agent->lastJwt != NULL && strcmp(extracted_token, agent->lastJwt) == 0)
-			{
-				printf("JWT unchanged, waiting for token refresh...\n");
-				free(extracted_token);
-				ILibDestructPacket(req);
-				free(path);
-				free(host);
-				agent->retryTime = 3000;
-				ILibLifeTime_AddEx(ILibGetBaseTimer(agent->chain), agent, 3000, (ILibLifeTime_OnCallback)MeshServer_ConnectEx, NULL);
-				return;
-			}
-			if (agent->lastJwt != NULL) { free(agent->lastJwt); }
-			agent->lastJwt = ILibString_Copy(extracted_token, (int)strlen(extracted_token));
-
 			int authLen = 7 + strlen(extracted_token) + 1; // "Bearer " + token + null terminator
 			char *openframeAuthorization = (char*)malloc(authLen);
 			if (openframeAuthorization != NULL) {
