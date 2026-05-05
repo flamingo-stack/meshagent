@@ -3381,7 +3381,22 @@ void MeshServer_ProcessCommand(ILibWebClient_StateObject WebStateObject, MeshAge
 						{
 							printf("Server certificate mismatch\r\n");
 							printf("Handshake FAILED: Server certificate mismatch - server identity verification failed\n");
-							break; // TODO: Disconnect
+							char hexBuf[UTIL_SHA384_HASHSIZE * 2 + 1];
+							util_tohex((char*)agent->serverHash, UTIL_SHA384_HASHSIZE, hexBuf);
+							printf("  Expected ServerID (stored): %s\n", hexBuf);
+							X509_pubkey_digest(serverCert, EVP_sha384(), (unsigned char*)ILibScratchPad, (unsigned int*)&hashlen);
+							util_tohex(ILibScratchPad, UTIL_SHA384_HASHSIZE, hexBuf);
+							printf("  Received cert pubkey hash (SHA384): %s\n", hexBuf);
+							X509_pubkey_digest(serverCert, EVP_sha256(), (unsigned char*)ILibScratchPad, (unsigned int*)&hashlen);
+							util_tohex(ILibScratchPad, UTIL_SHA256_HASHSIZE, hexBuf);
+							hexBuf[UTIL_SHA256_HASHSIZE * 2] = 0;
+							printf("  Received cert pubkey hash (SHA256): %s\n", hexBuf);
+							char *subjStr = X509_NAME_oneline(X509_get_subject_name(serverCert), NULL, 0);
+							char *issuerStr = X509_NAME_oneline(X509_get_issuer_name(serverCert), NULL, 0);
+							if (subjStr != NULL) { printf("  Cert subject: %s\n", subjStr); OPENSSL_free(subjStr); }
+							if (issuerStr != NULL) { printf("  Cert issuer: %s\n", issuerStr); OPENSSL_free(issuerStr); }
+							if (agent->serveruri != NULL) { printf("  Server URL: %s\n", agent->serveruri); }
+							break;
 						}
 					}
 
@@ -4030,6 +4045,7 @@ void MeshServer_ControlChannel_PongSink(ILibWebClient_StateObject WebStateObject
         ILibRemoteLogging_printf(ILibChainGetLogger(agent->chain), ILibRemoteLogging_Modules_Agent_GuardPost , ILibRemoteLogging_Flags_VerbosityLevel_1, "AgentCore/MeshServer_ControlChannel_IdleTimeout(): Received Pong");
 #endif
 }
+
 void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int InterruptFlag, struct packetheader *header, char *bodyBuffer, int *beginPointer, int endPointer, ILibWebClient_ReceiveStatus recvStatus, void *user1, void *user2, int *PAUSE)
 {
 	MeshAgentHostContainer *agent = (MeshAgentHostContainer*)user1;
