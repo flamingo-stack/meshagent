@@ -31,26 +31,9 @@ var LOG_LEVELS = {
 // Current minimum log level (default: INFO)
 var currentLevel = LOG_LEVELS.INFO;
 
-function pad(num) {
-    return num < 10 ? '0' + num : '' + num;
-}
-
-function getTimestamp() {
-    var d = new Date();
-    var year = d.getFullYear();
-    var month = pad(d.getMonth() + 1);
-    var day = pad(d.getDate());
-    var hours = pad(d.getHours());
-    var minutes = pad(d.getMinutes());
-    var seconds = pad(d.getSeconds());
-
-    return year + '-' + month + '-' + day + ' ' + hours + ':' + minutes + ':' + seconds;
-}
-
 function log(level, levelValue, message) {
-    // Only log if message level is >= current minimum level
     if (levelValue >= currentLevel) {
-        console.log('[' + getTimestamp() + '] ' + level + ': ' + message);
+        console.log(new Date().toISOString() + ' ' + level + ' ' + message + ' tool_id=meshcentral-agent');
     }
 }
 
