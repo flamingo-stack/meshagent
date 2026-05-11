@@ -541,15 +541,17 @@ static inline int openframe_printf(const char *format, ...)
     if (raw_len <= 0) return raw_len;
     if (raw_len >= (int)sizeof(raw)) raw_len = (int)sizeof(raw) - 1;
 
-    /* Prepend timestamp at line boundaries */
-    for (int i = 0; i < raw_len && len < (int)sizeof(buffer) - 40; i++) {
+    for (int i = 0; i < raw_len && len < (int)sizeof(buffer) - 80; i++) {
         if (g_at_line_start && raw[i] != '\n') {
             len += openframe_printf_timestamp(buffer + len, (int)sizeof(buffer) - len);
             g_at_line_start = 0;
         }
-        buffer[len++] = raw[i];
         if (raw[i] == '\n') {
+            len += snprintf(buffer + len, (int)sizeof(buffer) - len, " tool_id=meshcentral-agent");
+            buffer[len++] = '\n';
             g_at_line_start = 1;
+        } else {
+            buffer[len++] = raw[i];
         }
     }
 
