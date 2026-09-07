@@ -146,13 +146,15 @@ function powerMonitor()
                 var info = JSON.parse(child.stdout.str.trim());
                 return (info);
             } catch (e) {
-                // Fallback: return default values if parsing fails
-                return({ ac: 1, level: 100 });
+                // Parsing failed; surface the error instead of fabricating plausible-looking data
+                this.emit('error', new Error('power-monitor: failed to parse pmset battery output: ' + e.message + ' (stdout=' + JSON.stringify(child.stdout.str.trim()) + ', stderr=' + JSON.stringify(child.stderr.str.trim()) + ')'));
+                return (null);
             }
         };
         this._batteryLevelCheck = function _batteryLevelCheck()
         {
             var newLevel = this._getBatteryLevel();
+            if (newLevel == null) { return; }
             if (newLevel.ac != this._ACState)
             {
                 this._ACState = newLevel.ac;
@@ -165,8 +167,11 @@ function powerMonitor()
             }
         };
         var tmp = this._getBatteryLevel();
-        this._ACState = tmp.ac;
-        this._BatteryLevel = tmp.level;
+        if (tmp != null)
+        {
+            this._ACState = tmp.ac;
+            this._BatteryLevel = tmp.level;
+        }
 
         if (this._BatteryLevel >= 0)
         {
