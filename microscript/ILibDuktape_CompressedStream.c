@@ -122,6 +122,7 @@ void ILibDuktape_Compressor_End(ILibDuktape_DuplexStream *stream, void *user)
 	char tmp[16384];
 	size_t avail;
 	int res;
+	int errFlag = 0;
 	cs->Z.avail_in = 0;
 	cs->Z.next_in = (Bytef*)ILibScratchPad;
 
@@ -131,6 +132,7 @@ void ILibDuktape_Compressor_End(ILibDuktape_DuplexStream *stream, void *user)
 		cs->Z.next_out = (Bytef*)tmp;
 		if ((res = deflate(&(cs->Z), Z_FINISH)) != Z_OK && res != Z_STREAM_END)
 		{
+			errFlag = 1;
 			break;
 		}
 		avail = sizeof(tmp) - cs->Z.avail_out;
@@ -140,6 +142,15 @@ void ILibDuktape_Compressor_End(ILibDuktape_DuplexStream *stream, void *user)
 			ILibDuktape_DuplexStream_WriteData(cs->ds, tmp, (int)avail);
 		}
 	} while (cs->Z.avail_out == 0);
+	if (errFlag != 0)
+	{
+		duk_push_heapptr(ctx, cs->object);							// [stream]
+		duk_push_error_object(ctx, DUK_ERR_ERROR, "Compressor error: deflate() failed");	// [stream][error]
+		ILibDuktape_EventEmitter_SetupEmit(ctx, -2, "error");		// [stream][error][emit]
+		duk_swap(ctx, -1, -2);										// [stream][emit][error]
+		duk_pcall_method(ctx, 1);									// [stream][result]
+		duk_pop_2(ctx);												// ...
+	}
 	ILibDuktape_DuplexStream_WriteEnd(cs->ds);
 
 	ignore_result(deflateEnd(&(cs->Z)));
@@ -290,6 +301,7 @@ void ILibDuktape_deCompressor_End(ILibDuktape_DuplexStream *stream, void *user)
 	cs->Z.avail_in = 0;
 	cs->Z.next_in = (Bytef*)ILibScratchPad;
 	int res;
+	int errFlag = 0;
 
 	do
 	{
@@ -297,6 +309,7 @@ void ILibDuktape_deCompressor_End(ILibDuktape_DuplexStream *stream, void *user)
 		cs->Z.next_out = (Bytef*)tmp;
 		if ((res = inflate(&(cs->Z), Z_FINISH)) != Z_OK && res != Z_STREAM_END)
 		{
+			errFlag = 1;
 			break;
 		}
 		avail = sizeof(tmp) - cs->Z.avail_out;
@@ -306,6 +319,15 @@ void ILibDuktape_deCompressor_End(ILibDuktape_DuplexStream *stream, void *user)
 			ILibDuktape_DuplexStream_WriteData(cs->ds, tmp, (int)avail); 
 		}
 	} while (cs->Z.avail_out == 0);
+	if (errFlag != 0)
+	{
+		duk_push_heapptr(ctx, cs->object);							// [stream]
+		duk_push_error_object(ctx, DUK_ERR_ERROR, "Decompressor error: inflate() failed");	// [stream][error]
+		ILibDuktape_EventEmitter_SetupEmit(ctx, -2, "error");		// [stream][error][emit]
+		duk_swap(ctx, -1, -2);										// [stream][emit][error]
+		duk_pcall_method(ctx, 1);									// [stream][result]
+		duk_pop_2(ctx);												// ...
+	}
 	ILibDuktape_DuplexStream_WriteEnd(cs->ds);
 	ignore_result(inflateEnd(&(cs->Z)));
 
