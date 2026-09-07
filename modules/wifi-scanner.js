@@ -80,8 +80,8 @@ function WiFiScanner()
                 this.child.on('exit', function () { this.ms.end(); });
                 this.child.ms.on('end', function ()
                 {
-                    var str = this.buffer.toString();
-                    tokens = str.split(' - Address: ');
+                    var str = this.toBuffer().toString();
+                    var tokens = str.split(' - Address: ');
                     for (var block in tokens)
                     {
                         if (block == 0) continue;
@@ -118,6 +118,7 @@ function WiFiScanner()
 }
 
 module.exports = WiFiScanner;
+
 
 
 
