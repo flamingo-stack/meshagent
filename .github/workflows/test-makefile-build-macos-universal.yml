@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       branch:
-        description: 'Branch to build from (default: OpenSSL_Pipeline_3.5.4_Upgrade_v2)'
+        description: 'Branch to build from (default: main)'
         required: false
-        default: 'OpenSSL_Pipeline_3.5.4_Upgrade_v2'
+        default: 'main'
 
 jobs:
   test-build-universal:
@@ -17,7 +17,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.branch || 'OpenSSL_Pipeline_3.5.4_Upgrade_v2' }}
+          ref: ${{ github.event.inputs.branch || 'main' }}
 
       - name: Verify macOS version and architecture
         run: |
@@ -157,3 +157,4 @@ jobs:
             build/meshagent_macos-x86-64
             build/meshagent_macos-arm-64
           retention-days: 7
+
