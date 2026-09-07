@@ -29,7 +29,7 @@ function WsmanStackCreateService(/*CreateWsmanComm, host, port, user, pass, tls,
     obj.Address = '/wsman';
     obj.xmlParser = require('amt-xml');
 
-    if (arguments.length == 1 && typeof (arguments[0] == 'object'))
+    if (arguments.length == 1 && typeof (arguments[0]) == 'object')
     {
         var CreateWsmanComm = arguments[0].transport;
         if (CreateWsmanComm) { obj.comm = new CreateWsmanComm(arguments[0]); }
