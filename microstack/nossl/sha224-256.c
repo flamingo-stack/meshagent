@@ -90,10 +90,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 /*
 * add "length" to the length
 */
-static uint32_t addTemp;
 #define SHA224_256AddLength(context, length)               \
-  (addTemp = (context)->Length_Low, (context)->Corrupted = \
-    (((context)->Length_Low += (length)) < addTemp) &&     \
+  ((context)->Corrupted = \
+    (((context)->Length_Low += (length)) < (length)) &&     \
     (++(context)->Length_High == 0) ? 1 : 0)
 
 /* Local Function Prototypes */
@@ -634,3 +633,4 @@ SHA224_256ResultN(SHA256Context * context,
 
 	return shaSuccess;
 }
+
