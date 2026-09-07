@@ -89,10 +89,10 @@ function linux_identifiers()
                     }
                 } catch (xx) { }
             } else {
-                throw('Unknown board');
+                throw new Error('Unknown board');
             }
         } else {
-            throw ('this platform does not have DMI statistics');
+            throw new Error('this platform does not have DMI statistics');
         }
     } else {
         var entries = require('fs').readdirSync('/sys/class/dmi/id');
@@ -1004,4 +1004,5 @@ if (process.platform == 'win32')
 // board_serial = BASEBOARD->SerialNumber = ioreg/serial-number | ioreg/IOPlatformSerialNumber
 // board_vendor = BASEBOARD->Manufacturer = ioreg/manufacturer
 // board_version = BASEBOARD->Version
+
 
