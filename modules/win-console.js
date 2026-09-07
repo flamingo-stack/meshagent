@@ -121,7 +121,7 @@ function WindowsConsole()
             retVal.MessagePump.TrayIcon = retVal;
             retVal.MessagePump.NotifyData = data;
             retVal.MessagePump.WindowsConsole = this;
-            retVal.MessagePump.on('exit', function onExit(code) { console.log('Pump Exited'); if (this.TrayIcon) { this.TrayIcon.remove(); } });
+            retVal.MessagePump.on('exit', function onExit(code) { if (this.TrayIcon && !this.TrayIcon._removed) { this.TrayIcon.remove(); } });
             retVal.MessagePump.on('hwnd', function onHwnd(h)
             {
                 //console.log('Got HWND');
@@ -131,6 +131,7 @@ function WindowsConsole()
                 if(this.WindowsConsole._shell32.Shell_NotifyIconA(TrayIconFlags.NIM_ADD, this.NotifyData).Val == 0)
                 {
                     // Something went wrong
+                    console.error('WindowsConsole: Shell_NotifyIconA(NIM_ADD) failed');
                 }
             });
             retVal.MessagePump.on('message', function onWindowsMessage(msg)
@@ -159,6 +160,8 @@ function WindowsConsole()
             });
             retVal.remove = function remove()
             {
+                if (this._removed) { return; }
+                this._removed = true;
                 this.MessagePump.WindowsConsole._shell32.Shell_NotifyIconA(TrayIconFlags.NIM_DELETE, this.MessagePump.NotifyData);
                 this.MessagePump.stop();
                 delete this.MessagePump.TrayIcon;
