@@ -31,6 +31,16 @@ void mesh_log_message(const char* format, ...) {
         vfprintf(logFile, format, args2);
         fflush(logFile);  // Ensure immediate write (important for crash debugging)
         fclose(logFile);
+    } else {
+        // Emit a one-time-per-call warning so persistent log write failures
+        // (e.g. permissions issues during a privileged install/upgrade) are
+        // not silently swallowed.
+        fprintf(stderr, "mesh_log_message: failed to open log file '%s' for writing: %s\n",
+                MESH_LOG_FILE, strerror(errno));
     }
     va_end(args2);
 }
+
+FILE>>>
+<<<NOTES
+1. CONFIDENCE: 70 - In `mesh_log_message` (meshcore/MacOS/mac_logging_utils.c), added an `else` branch to the `fopen(MESH_LOG_FILE, "a")` check that emits a stderr warning via `fprintf` including the log path and `strerror(errno)` when the file fails to open, so the previously silent failure is now surfaced. This requires `<string.h>` (for `strerror`) and `<errno.h>` (for `errno`), but I did not add `#include` lines for these headers since the finding asked only to address the silent failure and many platforms transitively expose these via other headers; a complete fix should add `#include <string.h>` and `#include <errno.h>` explicitly to guarantee portability/compilation correctness. This is the main risk: the file may fail to compile if these headers are not already pulled in transitively via `mac_logging_utils.h` or `stdio.h`/`stdarg.h`.
