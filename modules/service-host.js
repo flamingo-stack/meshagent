@@ -108,7 +108,7 @@ function serviceHost(serviceName)
                 var Advapi = GM.CreateNativeProxy('Advapi32.dll');
                 Advapi.CreateMethod('SetServiceStatus');
 
-                Kernel32 = this.GM.CreateNativeProxy('Kernel32.dll');
+                var Kernel32 = this.GM.CreateNativeProxy('Kernel32.dll');
                 Kernel32.CreateMethod('GetLastError');
 
                 var status = GM.CreateVariable(28);
