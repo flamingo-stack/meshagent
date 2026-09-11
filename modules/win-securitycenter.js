@@ -101,7 +101,7 @@ if (process.platform == 'win32' && seccenter != null)
     j.on('~', function ()
     {
         // Unregister our event handler
-        if (seccenter.WscUnRegisterChanges(this._H).Val == 0) { }
+        if (seccenter.WscUnRegisterChanges(this._H).Val == 0) { } else { console.log('win-securitycenter: WscUnRegisterChanges failed'); }
     });
 
     if (seccenter.WscRegisterForChanges(0, j._H, j._EV, require('_GenericMarshal').ObjectToPtr(j)).Val == 0) // Setup event handling
