@@ -1,16 +1,30 @@
+/*
+Copyright 2019 Intel Corporation
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 
 var http = require('http');
-var childProcess = require('child_process');
 var meshCoreObj = { "action": "coreinfo", "value": "MeshCore Recovery", "caps": 14 }; // Capability bitmask: 1 = Desktop, 2 = Terminal, 4 = Files, 8 = Console, 16 = JavaScript
 var nextTunnelIndex = 1;
 var tunnels = {};
-var fs = require('fs');
 
 // OpenFrame: Read machine ID from shared location
 var openframeMachineId = null;
 function getOpenFrameMachineId() {
     if (openframeMachineId != null) return openframeMachineId;
     try {
+        var fs = require('fs');
         var machineIdPath = (process.platform == 'win32')
             ? (process.env['ProgramData'] + '\\OpenFrame\\machine_id')
             : ((process.platform == 'darwin')
@@ -203,6 +217,7 @@ require('MeshAgent').AddCommandHandler(function (data)
                                     {
                                         if (tunnels[this.httprequest.index] == null) return; // Stop duplicate calls.
 
+                                        var fs = require('fs');
                                         // If there is a upload or download active on this connection, close the file
                                         if (this.httprequest.uploadFile) { fs.closeSync(this.httprequest.uploadFile); this.httprequest.uploadFile = undefined; }
                                         if (this.httprequest.downloadFile) { fs.closeSync(this.httprequest.downloadFile); this.httprequest.downloadFile = undefined; }
@@ -216,11 +231,12 @@ require('MeshAgent').AddCommandHandler(function (data)
                                     });
                                     s.on('data', function (data)
                                     {
+                                        var fs = require('fs');
                                         // If this is upload data, save it to file
                                         if (this.httprequest.uploadFile)
                                         {
-                                            try { fs.writeSync(this.httprequest.uploadFile, data); } catch (e) { this.write(new Buffer(JSON.stringify({ action: 'uploaderror' }))); return; } // Write to the file, if there is a problem, error out.
-                                            this.write(new Buffer(JSON.stringify({ action: 'uploadack', reqid: this.httprequest.uploadFileid }))); // Ask for more data
+                                            try { fs.writeSync(this.httprequest.uploadFile, data); } catch (e) { try { this.write(new Buffer(JSON.stringify({ action: 'uploaderror' }))); } catch (e) { } return; } // Write to the file, if there is a problem, error out.
+                                            try { this.write(new Buffer(JSON.stringify({ action: 'uploadack', reqid: this.httprequest.uploadFileid }))); } catch (e) { } // Ask for more data
                                             return;
                                         }
 
@@ -246,6 +262,7 @@ require('MeshAgent').AddCommandHandler(function (data)
                                                     }
                                                     else
                                                     {
+                                                        var childProcess = require('child_process');
                                                         this.httprequest.process = childProcess.execFile("/bin/sh", ["sh"], { type: childProcess.SpawnTypes.TERM });
                                                         this.httprequest.process.tunnel = this;
                                                         this.httprequest.process.on('exit', function (ecode, sig) { this.tunnel.end(); });
@@ -281,6 +298,7 @@ require('MeshAgent').AddCommandHandler(function (data)
 
                                                 //sendConsoleText('CMD: ' + JSON.stringify(cmd));
 
+                                                if ((cmd.path != null) && (cmd.path.indexOf('..') >= 0)) { return; } // Reject any path containing '..' to prevent path traversal
                                                 if ((cmd.path != null) && (process.platform != 'win32') && (cmd.path[0] != '/')) { cmd.path = '/' + cmd.path; } // Add '/' to paths on non-windows
                                                 //console.log(objToString(cmd, 0, ' '));
                                                 switch (cmd.action)
@@ -289,10 +307,11 @@ require('MeshAgent').AddCommandHandler(function (data)
                                                         // Send the folder content to the browser
                                                         var response = getDirectoryInfo(cmd.path);
                                                         if (cmd.reqid != undefined) { response.reqid = cmd.reqid; }
-                                                        this.write(new Buffer(JSON.stringify(response)));
+                                                        try { this.write(new Buffer(JSON.stringify(response))); } catch (e) { }
                                                         break;
                                                     case 'mkdir': {
                                                         // Create a new empty folder
+                                                        var fs = require('fs');
                                                         fs.mkdirSync(cmd.path);
                                                         break;
                                                     }
@@ -300,12 +319,15 @@ require('MeshAgent').AddCommandHandler(function (data)
                                                         // Delete, possibly recursive delete
                                                         for (var i in cmd.delfiles)
                                                         {
+                                                            if ((cmd.delfiles[i] != null) && (cmd.delfiles[i].indexOf('..') >= 0)) { continue; } // Reject any name containing '..' to prevent path traversal
                                                             try { deleteFolderRecursive(path.join(cmd.path, cmd.delfiles[i]), cmd.rec); } catch (e) { }
                                                         }
                                                         break;
                                                     }
                                                     case 'rename': {
                                                         // Rename a file or folder
+                                                        var fs = require('fs');
+                                                        if (((cmd.oldname != null) && (cmd.oldname.indexOf('..') >= 0)) || ((cmd.newname != null) && (cmd.newname.indexOf('..') >= 0))) { break; } // Reject '..' in names
                                                         var oldfullpath = path.join(cmd.path, cmd.oldname);
                                                         var newfullpath = path.join(cmd.path, cmd.newname);
                                                         try { fs.renameSync(oldfullpath, newfullpath); } catch (e) { console.log(e); }
@@ -313,17 +335,21 @@ require('MeshAgent').AddCommandHandler(function (data)
                                                     }
                                                     case 'upload': {
                                                         // Upload a file, browser to agent
+                                                        var fs = require('fs');
                                                         if (this.httprequest.uploadFile != undefined) { fs.closeSync(this.httprequest.uploadFile); this.httprequest.uploadFile = undefined; }
                                                         if (cmd.path == undefined) break;
+                                                        if ((cmd.name != null) && (cmd.name.indexOf('..') >= 0)) { break; } // Reject '..' in name
                                                         var filepath = cmd.name ? path.join(cmd.path, cmd.name) : cmd.path;
-                                                        try { this.httprequest.uploadFile = fs.openSync(filepath, 'wbN'); } catch (e) { this.write(new Buffer(JSON.stringify({ action: 'uploaderror', reqid: cmd.reqid }))); break; }
+                                                        try { this.httprequest.uploadFile = fs.openSync(filepath, 'wbN'); } catch (e) { try { this.write(new Buffer(JSON.stringify({ action: 'uploaderror', reqid: cmd.reqid }))); } catch (e) { } break; }
                                                         this.httprequest.uploadFileid = cmd.reqid;
-                                                        if (this.httprequest.uploadFile) { this.write(new Buffer(JSON.stringify({ action: 'uploadstart', reqid: this.httprequest.uploadFileid }))); }
+                                                        if (this.httprequest.uploadFile) { try { this.write(new Buffer(JSON.stringify({ action: 'uploadstart', reqid: this.httprequest.uploadFileid }))); } catch (e) { } }
                                                         break;
                                                     }
                                                     case 'copy': {
                                                         // Copy a bunch of files from scpath to dspath
+                                                        var fs = require('fs');
                                                         for (var i in cmd.names) {
+                                                            if ((cmd.names[i] != null) && (cmd.names[i].indexOf('..') >= 0)) { continue; } // Reject '..' in names
                                                             var sc = path.join(cmd.scpath, cmd.names[i]), ds = path.join(cmd.dspath, cmd.names[i]);
                                                             if (sc != ds) { try { fs.copyFileSync(sc, ds); } catch (e) { } }
                                                         }
@@ -331,7 +357,9 @@ require('MeshAgent').AddCommandHandler(function (data)
                                                     }
                                                     case 'move': {
                                                         // Move a bunch of files from scpath to dspath
+                                                        var fs = require('fs');
                                                         for (var i in cmd.names) {
+                                                            if ((cmd.names[i] != null) && (cmd.names[i].indexOf('..') >= 0)) { continue; } // Reject '..' in names
                                                             var sc = path.join(cmd.scpath, cmd.names[i]), ds = path.join(cmd.dspath, cmd.names[i]);
                                                             if (sc != ds) { try { fs.copyFileSync(sc, ds); fs.unlinkSync(sc); } catch (e) { } }
                                                         }
@@ -449,6 +477,7 @@ function processConsoleCommand(cmd, args, rights, sessionid)
 // Get a formated response for a given directory path
 function getDirectoryInfo(reqpath)
 {
+    var fs = require('fs');
     var response = { path: reqpath, dir: [] };
     if (((reqpath == undefined) || (reqpath == '')) && (process.platform == 'win32')) {
         // List all the drives in the root, or the root itself
@@ -488,6 +517,7 @@ function getDirectoryInfo(reqpath)
 }
 // Delete a directory with a files and directories within it
 function deleteFolderRecursive(path, rec) {
+    var fs = require('fs');
     if (fs.existsSync(path)) {
         if (rec == true) {
             fs.readdirSync(path.join(path, '*')).forEach(function (file, index) {
@@ -502,3 +532,4 @@ function deleteFolderRecursive(path, rec) {
         fs.unlinkSync(path);
     }
 };
+
