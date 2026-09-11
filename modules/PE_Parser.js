@@ -27,115 +27,121 @@ function parse(exePath)
     var optHeader;
     var z;
 
-    // Read the DOS header
-    bytesRead = fs.readSync(fd, dosHeader, 0, 64, 0);
-    if (dosHeader.readUInt16LE(0).toString(16).toUpperCase() != '5A4D')
+    try
     {
-        throw ('unrecognized binary format');
+        // Read the DOS header
+        bytesRead = fs.readSync(fd, dosHeader, 0, 64, 0);
+        if (dosHeader.readUInt16LE(0).toString(16).toUpperCase() != '5A4D')
+        {
+            throw ('unrecognized binary format');
+        }
+
+        // Read the NT header
+        bytesRead = fs.readSync(fd, ntHeader, 0, ntHeader.length, dosHeader.readUInt32LE(60));
+        if (ntHeader.slice(0, 4).toString('hex') != '50450000')
+        {
+            throw ('not a PE file');
+        }
+        switch (ntHeader.readUInt16LE(4).toString(16))
+        {
+            case '14c': // 32 bit
+                retVal.format = 'x86';
+                break;
+            case '8664': // 64 bit
+                retVal.format = 'x64';
+                break;
+            default: // Unknown
+                retVal.format = undefined;
+                break;
+        }
+
+        retVal.optionalHeaderSize = ntHeader.readUInt16LE(20);
+        retVal.optionalHeaderSizeAddress = dosHeader.readUInt32LE(60) + 24;
+        retVal.sectionHeadersAddress = retVal.optionalHeaderSizeAddress + retVal.optionalHeaderSize;
+
+        // Read the optional header
+        optHeader = Buffer.alloc(ntHeader.readUInt16LE(20));
+        bytesRead = fs.readSync(fd, optHeader, 0, optHeader.length, dosHeader.readUInt32LE(60) + 24);
+        var numRVA = undefined;
+        var rvaStart = 0;
+        retVal.CheckSumPos = dosHeader.readUInt32LE(60) + 24 + 64;
+        retVal.SizeOfCode = optHeader.readUInt32LE(4);
+        retVal.SizeOfInitializedData = optHeader.readUInt32LE(8);
+        retVal.SizeOfUnInitializedData = optHeader.readUInt32LE(12);
+        retVal.sections = {};
+
+        // read section headers
+        var sect = Buffer.alloc(40);
+        for (z = 0; z < 16; ++z)
+        {
+            fs.readSync(fd, sect, 0, sect.length, retVal.sectionHeadersAddress + (z * 40));
+            if (sect[0] != 46) { break; }
+            var s = {};
+            s.sectionName = sect.slice(0, 8).toString().trim('\0');
+            s.virtualSize = sect.readUInt32LE(8);
+            s.virtualAddr = sect.readUInt32LE(12);
+            s.rawSize = sect.readUInt32LE(16);
+            s.rawAddr = sect.readUInt32LE(20);
+            s.relocAddr = sect.readUInt32LE(24);
+            s.lineNumbers = sect.readUInt32LE(28);
+            s.relocNumber = sect.readUInt16LE(32);
+            s.lineNumbersNumber = sect.readUInt16LE(34);
+            s.characteristics = sect.readUInt32LE(36);
+            retVal.sections[s.sectionName] = s;
+        }
+
+        if (retVal.sections['.rsrc'] != null)
+        {
+            retVal.resources = readResourceTable(fd, retVal.sections['.rsrc'].rawAddr, 0); // Read all resources recursively
+        }
+
+        switch (optHeader.readUInt16LE(0).toString(16).toUpperCase())
+        {
+            case '10B': // 32 bit binary
+                numRVA = optHeader.readUInt32LE(92);
+                rvaStart = 96;
+                retVal.CertificateTableAddress = optHeader.readUInt32LE(128);
+                retVal.CertificateTableSize = optHeader.readUInt32LE(132);
+                retVal.CertificateTableSizePos = dosHeader.readUInt32LE(60) + 24 + 132;
+                retVal.rvaStartAddress = dosHeader.readUInt32LE(60) + 24 + 96;
+                break;
+            case '20B': // 64 bit binary
+                numRVA = optHeader.readUInt32LE(108);
+                rvaStart = 112;
+                retVal.CertificateTableAddress = optHeader.readUInt32LE(144);
+                retVal.CertificateTableSize = optHeader.readUInt32LE(148);
+                retVal.CertificateTableSizePos = dosHeader.readUInt32LE(60) + 24 + 148;
+                retVal.rvaStartAddress = dosHeader.readUInt32LE(60) + 24 + 112;
+                break;
+            default:
+                throw ('Unknown Value found for Optional Magic: ' + ntHeader.readUInt16LE(24).toString(16).toUpperCase());
+                break;
+        }
+        retVal.rvaCount = numRVA;
+
+        retVal.rva = [];
+        for (z = 0; z < retVal.rvaCount && z < 32; ++z)
+        {
+            retVal.rva.push({ virtualAddress: optHeader.readUInt32LE(rvaStart + (z * 8)), size: optHeader.readUInt32LE(rvaStart + 4 + (z * 8)) });
+        }
+
+        if (retVal.CertificateTableAddress)
+        {
+            // Read the authenticode certificate, only one cert (only the first entry)
+            var hdr = Buffer.alloc(8);
+            fs.readSync(fd, hdr, 0, hdr.length, retVal.CertificateTableAddress);
+            retVal.certificate = Buffer.alloc(hdr.readUInt32LE(0));
+            fs.readSync(fd, retVal.certificate, 0, retVal.certificate.length, retVal.CertificateTableAddress + hdr.length);
+            retVal.certificate = retVal.certificate.toString('base64');
+            retVal.certificateDwLength = hdr.readUInt32LE(0);
+        }
+        retVal.versionInfo = getVersionInfo(fd, retVal);
+    }
+    finally
+    {
+        fs.closeSync(fd);
     }
 
-    // Read the NT header
-    bytesRead = fs.readSync(fd, ntHeader, 0, ntHeader.length, dosHeader.readUInt32LE(60));
-    if (ntHeader.slice(0, 4).toString('hex') != '50450000')
-    {
-        throw ('not a PE file');
-    }
-    switch (ntHeader.readUInt16LE(4).toString(16))
-    {
-        case '14c': // 32 bit
-            retVal.format = 'x86';
-            break;
-        case '8664': // 64 bit
-            retVal.format = 'x64';
-            break;
-        default: // Unknown
-            retVal.format = undefined;
-            break;
-    }
-
-    retVal.optionalHeaderSize = ntHeader.readUInt16LE(20);
-    retVal.optionalHeaderSizeAddress = dosHeader.readUInt32LE(60) + 24;
-    retVal.sectionHeadersAddress = retVal.optionalHeaderSizeAddress + retVal.optionalHeaderSize;
-
-    // Read the optional header
-    optHeader = Buffer.alloc(ntHeader.readUInt16LE(20));
-    bytesRead = fs.readSync(fd, optHeader, 0, optHeader.length, dosHeader.readUInt32LE(60) + 24);
-    var numRVA = undefined;
-    var rvaStart = 0;
-    retVal.CheckSumPos = dosHeader.readUInt32LE(60) + 24 + 64;
-    retVal.SizeOfCode = optHeader.readUInt32LE(4);
-    retVal.SizeOfInitializedData = optHeader.readUInt32LE(8);
-    retVal.SizeOfUnInitializedData = optHeader.readUInt32LE(12);
-    retVal.sections = {};
-
-    // read section headers
-    var sect = Buffer.alloc(40);
-    for (z = 0; z < 16; ++z)
-    {
-        fs.readSync(fd, sect, 0, sect.length, retVal.sectionHeadersAddress + (z * 40));
-        if (sect[0] != 46) { break; }
-        var s = {};
-        s.sectionName = sect.slice(0, 8).toString().trim('\0');
-        s.virtualSize = sect.readUInt32LE(8);
-        s.virtualAddr = sect.readUInt32LE(12);
-        s.rawSize = sect.readUInt32LE(16);
-        s.rawAddr = sect.readUInt32LE(20);
-        s.relocAddr = sect.readUInt32LE(24);
-        s.lineNumbers = sect.readUInt32LE(28);
-        s.relocNumber = sect.readUInt16LE(32);
-        s.lineNumbersNumber = sect.readUInt16LE(34);
-        s.characteristics = sect.readUInt32LE(36);
-        retVal.sections[s.sectionName] = s;
-    }
-
-    if (retVal.sections['.rsrc'] != null)
-    {
-        retVal.resources = readResourceTable(fd, retVal.sections['.rsrc'].rawAddr, 0); // Read all resources recursively
-    }
-
-    switch (optHeader.readUInt16LE(0).toString(16).toUpperCase())
-    {
-        case '10B': // 32 bit binary
-            numRVA = optHeader.readUInt32LE(92);
-            rvaStart = 96;
-            retVal.CertificateTableAddress = optHeader.readUInt32LE(128);
-            retVal.CertificateTableSize = optHeader.readUInt32LE(132);
-            retVal.CertificateTableSizePos = dosHeader.readUInt32LE(60) + 24 + 132;
-            retVal.rvaStartAddress = dosHeader.readUInt32LE(60) + 24 + 96;
-            break;
-        case '20B': // 64 bit binary
-            numRVA = optHeader.readUInt32LE(108);
-            rvaStart = 112;
-            retVal.CertificateTableAddress = optHeader.readUInt32LE(144);
-            retVal.CertificateTableSize = optHeader.readUInt32LE(148);
-            retVal.CertificateTableSizePos = dosHeader.readUInt32LE(60) + 24 + 148;
-            retVal.rvaStartAddress = dosHeader.readUInt32LE(60) + 24 + 112;
-            break;
-        default:
-            throw ('Unknown Value found for Optional Magic: ' + ntHeader.readUInt16LE(24).toString(16).toUpperCase());
-            break;
-    }
-    retVal.rvaCount = numRVA;
-
-    retVal.rva = [];
-    for (z = 0; z < retVal.rvaCount && z < 32; ++z)
-    {
-        retVal.rva.push({ virtualAddress: optHeader.readUInt32LE(rvaStart + (z * 8)), size: optHeader.readUInt32LE(rvaStart + 4 + (z * 8)) });
-    }
-
-    if (retVal.CertificateTableAddress)
-    {
-        // Read the authenticode certificate, only one cert (only the first entry)
-        var hdr = Buffer.alloc(8);
-        fs.readSync(fd, hdr, 0, hdr.length, retVal.CertificateTableAddress);
-        retVal.certificate = Buffer.alloc(hdr.readUInt32LE(0));
-        fs.readSync(fd, retVal.certificate, 0, retVal.certificate.length, retVal.CertificateTableAddress + hdr.length);
-        retVal.certificate = retVal.certificate.toString('base64');
-        retVal.certificateDwLength = hdr.readUInt32LE(0);
-    }
-    retVal.versionInfo = getVersionInfo(fd, retVal);
-
-    fs.closeSync(fd);
     return (retVal);
 }
 
@@ -144,11 +150,11 @@ function readLenPrefixUnicodeString(fd, ptr)
 {
     var name = '';
     var tmp = Buffer.alloc(1);
-   require('fs').readSync(fd, tmp, 0, 1, 0);
+   require('fs').readSync(fd, tmp, 0, 1, ptr);
     var nameLen = tmp[0];
 
     var buf = Buffer.alloc(nameLen * 2);
-    require('fs').readSync(fd, buf, 0, buf.length, 1);
+    require('fs').readSync(fd, buf, 0, buf.length, ptr + 1);
     return (require('_GenericMarshal').CreateVariable(buf).Wide2UTF8);
 }
 // Read a resource item

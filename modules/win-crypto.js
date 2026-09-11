@@ -279,7 +279,7 @@ function WinCrypto()
         this._Kernel32.GetSystemTime(expiration);
         
         // If today is Feb-29, change the expiration to Feb-28, because that's simpler than dealing with leap-year exception complexity
-        if (expiration.toBuffer().readUInt16LE(2) == 2 && expiration.toBuffer().readUInt16LE(6) == 29) { exipiration.toBuffer().writeUInt16LE(28, 6); }
+        if (expiration.toBuffer().readUInt16LE(2) == 2 && expiration.toBuffer().readUInt16LE(6) == 29) { expiration.toBuffer().writeUInt16LE(28, 6); }
         var year = expiration.toBuffer().readUInt16LE(0);
         year += options._years;
         expiration.toBuffer().writeUInt16LE(year, 0);

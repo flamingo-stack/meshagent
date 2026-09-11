@@ -63,7 +63,7 @@ function WsmanStackCreateService(/*CreateWsmanComm, host, port, user, pass, tls,
 
     // Perform a WSMAN Subscribe operation
     obj.ExecSubscribe = function ExecSubscribe(resuri, delivery, url, callback, tag, pri, selectors, opaque, user, pass) {
-        var digest = "", digest2 = "", opaque = "";
+        var digest = "", digest2 = "";
         if (user != null && pass != null) { digest = '<t:IssuedTokens xmlns:t="http://schemas.xmlsoap.org/ws/2005/02/trust" xmlns:se="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd"><t:RequestSecurityTokenResponse><t:TokenType>http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#UsernameToken</t:TokenType><t:RequestedSecurityToken><se:UsernameToken><se:Username>' + user + '</se:Username><se:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd#PasswordText">' + pass + '</se:Password></se:UsernameToken></t:RequestedSecurityToken></t:RequestSecurityTokenResponse></t:IssuedTokens>'; digest2 = '<w:Auth Profile="http://schemas.dmtf.org/wbem/wsman/1/wsman/secprofile/http/digest"/>'; }
         if (opaque != null) { opaque = '<a:ReferenceParameters><m:arg>' + opaque + '</m:arg></a:ReferenceParameters>'; }
         if (delivery == 'PushWithAck') { delivery = 'dmtf.org/wbem/wsman/1/wsman/PushWithAck'; } else if (delivery == 'Push') { delivery = 'xmlsoap.org/ws/2004/08/eventing/DeliveryModes/Push'; }

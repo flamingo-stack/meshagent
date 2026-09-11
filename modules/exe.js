@@ -79,6 +79,7 @@ for (i = 1; i < process.argv.length; ++i) {
 // Read all dependencies in the path
 if (depPath != null)
 {
+    var filenames = [];
     try
     {
         filenames = fs.readdirSync(depPath + '\\*');
@@ -87,7 +88,7 @@ if (depPath != null)
             var currentPath = process.execPath.substring(0, process.execPath.lastIndexOf('/'));
             filenames = fs.readdirSync(currentPath + '/' + depPath + '/*');
         }
-    } catch (e) { }
+    } catch (e) { filenames = []; }
     filenames.forEach(function (filename)
     {
         var fname = process.platform == 'win32' ? (depPath + '\\' + filename) : (depPath + '/' + filename);
@@ -182,3 +183,4 @@ function escapeCodeString(str) {
     }
     return r;
 }
+

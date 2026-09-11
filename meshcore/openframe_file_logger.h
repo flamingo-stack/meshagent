@@ -3,9 +3,9 @@ OpenFrame File Logger - Duplicates printf to both console and file
 Usage: Call enable_file_logging() at the start of main()
 
 Features:
-- Single log file: meshagent.log
+- Single log file: meshcentral-agent.log
 - Auto-rotation at 10MB
-- Keeps only 1 archive (meshagent.log.old.gz)
+- Keeps only 1 archive (meshcentral-agent.log.old.gz)
 */
 
 #ifndef OPENFRAME_FILE_LOGGER_H
@@ -39,6 +39,7 @@ Features:
 #include <io.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <zlib.h>
 #endif
 
 /* Macro to ignore return values */
@@ -173,30 +174,6 @@ static inline long get_file_size(const char* filepath) {
 }
 
 static inline int compress_file_to_gzip(const char* source_path, const char* dest_path) {
-#ifdef WIN32
-    FILE* src = fopen(source_path, "rb");
-    FILE* dst = fopen(dest_path, "wb");
-    char buffer[8192];
-    size_t bytes;
-
-    if (!src || !dst) {
-        if (src) fclose(src);
-        if (dst) fclose(dst);
-        return 0;
-    }
-
-    while ((bytes = fread(buffer, 1, sizeof(buffer), src)) > 0) {
-        if (fwrite(buffer, 1, bytes, dst) != bytes) {
-            fclose(src);
-            fclose(dst);
-            return 0;
-        }
-    }
-
-    fclose(src);
-    fclose(dst);
-    return 1;
-#else
     FILE* src = fopen(source_path, "rb");
     gzFile dst = gzopen(dest_path, "wb9");
     char buffer[8192];
@@ -219,7 +196,6 @@ static inline int compress_file_to_gzip(const char* source_path, const char* des
     fclose(src);
     gzclose(dst);
     return 1;
-#endif
 }
 
 static inline int rotate_log_file(void) {

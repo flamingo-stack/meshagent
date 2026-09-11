@@ -148,7 +148,7 @@ namespace WebRTC_Sample
                 {
                     case GET_HEADER:
                         byte[] resp = await ProcessGet(RW.client.Client.LocalEndPoint as IPEndPoint, headers[0]).ConfigureAwait(false);
-                        if (resp.Length > 0) { RW.s.Write(resp, 0, resp.Length); }
+                        if (resp != null && resp.Length > 0) { RW.s.Write(resp, 0, resp.Length); }
                         RW.s.Close();
                         break;
                     case POST_HEADER:
@@ -168,7 +168,7 @@ namespace WebRTC_Sample
                             if (contentLength + eoh + 4 <= RW.totalRead)
                             {
                                 byte[] postResp = await ProcessPost(headers[0], UTF8Encoding.UTF8.GetString(RW.buffer, eoh + 4, contentLength)).ConfigureAwait(false);
-                                if (postResp.Length > 0) { RW.s.Write(postResp, 0, postResp.Length); }
+                                if (postResp != null && postResp.Length > 0) { RW.s.Write(postResp, 0, postResp.Length); }
                                 RW.s.Close();
                             }
                             else
@@ -180,7 +180,7 @@ namespace WebRTC_Sample
                         else
                         {
                             byte[] postResp = await ProcessPost(headers[0], null).ConfigureAwait(false);
-                            if (postResp.Length > 0) { RW.s.Write(postResp, 0, postResp.Length); }
+                            if (postResp != null && postResp.Length > 0) { RW.s.Write(postResp, 0, postResp.Length); }
                             RW.s.Close();
                         }
                         break;
