@@ -222,7 +222,7 @@ switch (process.platform)
         break;
     default:
         // For other platforms, we will return an error
-        module.exports = { getOpenDescriptors: invalid, closeDescriptors: invalid };
+        module.exports = { getOpenDescriptors: invalid, closeDescriptors: invalid, _execv: invalid, libc: null };
         break;
 }
 
