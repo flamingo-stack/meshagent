@@ -161,6 +161,7 @@
 #	IFADDR_DISABLE							1 = Don't use ifaddrs.h				=> Default is use IFADDR
 #	KVM										1 = KVM Enabled, 0 = KVM Disabled   => Default depends on ARCHID
 #	KVM_ALL_TILES							0 = Normal, 1 = All Tiles			=> Default is Normal Tiling Algorithm
+#	KVMDEBUG								1 = KVM helper trace log			=> Default is disabled (Windows and macOS KVM only)
 #	LEGACY_LD								0 = Standard, 1 = Legacy			=> Default is Standard (CentOS 5.11 requires Legacy)
 #	NET_SEND_FORCE_FRAGMENT					1 = net.send() fragments sends		=> Default is normal send operation
 #	NOTLS									1 = TLS Support Compiled Out		=> Default is TLS Support Compiled In
@@ -697,6 +698,9 @@ endif
 
 ifeq ($(KVM_ALL_TILES),1)
 CFLAGS += -DKVM_ALL_TILES
+endif
+ifeq ($(KVMDEBUG),1)
+CFLAGS += -DKVMDEBUGENABLED
 endif
 
 ifeq ($(BIGCHAINLOCK),1)
