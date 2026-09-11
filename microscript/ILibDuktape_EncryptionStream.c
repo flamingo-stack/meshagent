@@ -42,6 +42,7 @@ typedef struct ILibDuktape_EncryptionStream_Ptrs
 ILibTransport_DoneState ILibDuktape_EncryptionStream_encrypted_WriteSink(ILibDuktape_DuplexStream *stream, char *buffer, int bufferLen, void *user)
 {
 	ILibDuktape_EncryptionStream_Ptrs *ptrs = (ILibDuktape_EncryptionStream_Ptrs*)user;
+	// NOTE: AES-256-CTR is a stream cipher, so output length always equals input length (max 4096 per chunk), which fits within this 5000-byte buffer.
 	char out[5000];
 	int outLen;
 	int i = 0;
@@ -49,7 +50,18 @@ ILibTransport_DoneState ILibDuktape_EncryptionStream_encrypted_WriteSink(ILibDuk
 
 	while (i < bufferLen)
 	{
-		EVP_DecryptUpdate(ptrs->decryptedCTX, (unsigned char*)out, &outLen, (unsigned char*)(buffer + i), bufferLen - i > 4096 ? 4096 : bufferLen - i);
+		if (!EVP_DecryptUpdate(ptrs->decryptedCTX, (unsigned char*)out, &outLen, (unsigned char*)(buffer + i), bufferLen - i > 4096 ? 4096 : bufferLen - i))
+		{
+			// Decrypt Error
+			ILibDuktape_EventEmitter_SetupEmit(ptrs->clear->readableStream->ctx, ptrs->clear->readableStream->object, "error");	// [emit][this][error]
+			duk_push_string(ptrs->clear->readableStream->ctx, "Decrypt Error");													// [emit][this][error][msg]
+			if (duk_pcall_method(ptrs->clear->readableStream->ctx, 2) != 0)														// [ret]
+			{
+				ILibDuktape_Process_UncaughtException(ptrs->clear->readableStream->ctx);
+			}
+			duk_pop(ptrs->clear->readableStream->ctx);																			// ...
+			return(ILibTransport_DoneState_ERROR);
+		}
 		result = ILibDuktape_DuplexStream_WriteData(ptrs->clear, out, outLen);
 		i += 4096;
 	}
@@ -58,6 +70,7 @@ ILibTransport_DoneState ILibDuktape_EncryptionStream_encrypted_WriteSink(ILibDuk
 ILibTransport_DoneState ILibDuktape_EncryptionStream_decrypted_WriteSink(ILibDuktape_DuplexStream *stream, char *buffer, int bufferLen, void *user)
 {
 	ILibDuktape_EncryptionStream_Ptrs *ptrs = (ILibDuktape_EncryptionStream_Ptrs*)user;
+	// NOTE: AES-256-CTR is a stream cipher, so output length always equals input length (max 4096 per chunk), which fits within this 5000-byte buffer.
 	char out[5000];
 	int outLen;
 	int i = 0;
@@ -65,7 +78,18 @@ ILibTransport_DoneState ILibDuktape_EncryptionStream_decrypted_WriteSink(ILibDuk
 
 	while (i < bufferLen)
 	{
-		EVP_EncryptUpdate(ptrs->encryptedCTX, (unsigned char*)out, &outLen, (unsigned char*)(buffer + i), bufferLen - i > 4096 ? 4096 : bufferLen - i);
+		if (!EVP_EncryptUpdate(ptrs->encryptedCTX, (unsigned char*)out, &outLen, (unsigned char*)(buffer + i), bufferLen - i > 4096 ? 4096 : bufferLen - i))
+		{
+			// Encrypt Error
+			ILibDuktape_EventEmitter_SetupEmit(ptrs->encrypted->readableStream->ctx, ptrs->encrypted->readableStream->object, "error");	// [emit][this][error]
+			duk_push_string(ptrs->encrypted->readableStream->ctx, "Encrypt Error");														// [emit][this][error][msg]
+			if (duk_pcall_method(ptrs->encrypted->readableStream->ctx, 2) != 0)																// [ret]
+			{
+				ILibDuktape_Process_UncaughtException(ptrs->encrypted->readableStream->ctx);
+			}
+			duk_pop(ptrs->encrypted->readableStream->ctx);																					// ...
+			return(ILibTransport_DoneState_ERROR);
+		}
 		result = ILibDuktape_DuplexStream_WriteData(ptrs->encrypted, out, outLen);
 		i += 4096;
 	}
@@ -278,3 +302,4 @@ public:
 	DuplexStream decryptedStream;
 };
 #endif
+

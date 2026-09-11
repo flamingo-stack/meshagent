@@ -95,7 +95,7 @@ for (var i in tst)
     }
     else
     {
-        var top = tst[i].peek();
+        var top = tst[i][tst[i].length - 1];
         str += ('        case ' + top.primary + ':\r\n');
         str += ('           switch(((int64_t*)val)[1])\r\n');
         str += ('           {\r\n');
@@ -116,4 +116,5 @@ str += '    }\r\n';
 console.log('Value saved to clipboard...');
 require('clipboard')(str);
 process.exit();
+
 

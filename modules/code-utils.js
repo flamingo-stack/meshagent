@@ -313,6 +313,7 @@ function readExpandedModules(options)
             }
             catch (x)
             {
+                console.log('Error importing module: ' + files[i] + ' -- ' + (x && x.stack ? x.stack : x));
             }
         }
     }
@@ -419,7 +420,17 @@ function compress(data)
         }
     });
     zip.end(data);
-    return(vstring = zip.buffer.toString('base64'));
+    if (zip.buffer == null)
+    {
+        throw new Error('compress(): compressor did not synchronously produce output data');
+    }
+    var vstring = zip.buffer.toString('base64');
+    if (typeof zip.destroy === 'function')
+    {
+        zip.destroy();
+    }
+    zip.buffer = null;
+    return (vstring);
 }
 
 module.exports = { expand: expand, shrink: shrink, update: update }

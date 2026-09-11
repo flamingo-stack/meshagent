@@ -164,7 +164,7 @@ typedef enum MeshAgentHost_BatteryInfo
 	MeshAgentHost_BatteryInfo_LOW			= 2,
 	MeshAgentHost_BatteryInfo_CRITICAL		= 4,
 	MeshAgentHost_BatteryInfo_CHARGING		= 8,
-	MeshAgentHost_BatteryInfo_NONE			= 3,
+	MeshAgentHost_BatteryInfo_NONE			= 0x10,
 	MeshAgentHost_BatteryInfo_UNKNOWN		= 0,
 }MeshAgentHost_BatteryInfo;
 
@@ -332,3 +332,4 @@ WebProxy:					Manually specify proxy configuration
 */
 
 #endif
+

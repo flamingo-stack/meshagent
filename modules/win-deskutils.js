@@ -62,7 +62,10 @@ function sessionDispatch(tsid, parent, method, args)
         ILibProcessPipe_SpawnTypes_POSIX_DETACHED = 0x8000
         ------------------------------------------------------------------------
     */
-    console.log('stype: ' + stype);
+    if (process.env['win_deskutils_debug'] != null)
+    {
+        console.log('stype: ' + stype);
+    }
     if (stype == 1)
     {
         if (tsid == null && require('MeshAgent')._tsid != null)
@@ -83,7 +86,8 @@ function sessionDispatch(tsid, parent, method, args)
 
     child.stdout.str = '';
     child.stdout.on('data', function (c) { this.str += c.toString(); });
-    child.stderr.on('data', function (c) { });
+    child.stderr.str = '';
+    child.stderr.on('data', function (c) { this.str += c.toString(); });
     child.on('exit', function (c) { this.exitCode = c; });
     child.waitExit(10000);
     if (child.exitCode == 0)
@@ -92,7 +96,7 @@ function sessionDispatch(tsid, parent, method, args)
     }
     else
     {
-        throw (child.stdout.str.trim()); // If the return code was nonzero, then the stdout response is the exception that should be bubbled
+        throw (child.stdout.str.trim() != '' ? child.stdout.str.trim() : child.stderr.str.trim()); // If the return code was nonzero, then the stdout response is the exception that should be bubbled, falling back to stderr if stdout is empty
     }
 }
 

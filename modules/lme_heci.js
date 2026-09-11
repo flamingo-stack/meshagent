@@ -1,5 +1,4 @@
 
-var MemoryStream = require('MemoryStream');
 var lme_id = 0;
 
 
@@ -141,7 +140,7 @@ function lme_heci()
                     break;
                 case APF_SERVICE_REQUEST:     
                     var nameLen = chunk.readUInt32BE(1);
-                    var name = chunk.slice(5, nameLen + 5);
+                    var name = chunk.slice(5, nameLen + 5).toString();
                     //console.log("Service Request for: " + name);
                     if (name == 'pfwd@amt.intel.com' || name == 'auth@amt.intel.com')
                     {
@@ -314,6 +313,7 @@ function lme_heci()
    
     this.bindDuplexStream = function (duplexStream, remoteFamily, localPort)
     {
+        var MemoryStream = require('MemoryStream');
         var socket = duplexStream;
         //console.log('New [' + remoteFamily + '] Virtual Connection/' + socket.localPort);
         socket.pendingBytes = [];
