@@ -41,7 +41,7 @@ limitations under the License.
 
 int ILibDuktape_ModSearch_ShowNames = 0;
 
-duk_ret_t ModSearchTable_Get(duk_context *ctx, duk_idx_t table, char *key, char *id)
+duk_ret_t ILibDuktape_ModSearchTable_Get(duk_context *ctx, duk_idx_t table, char *key, char *id)
 {
 	if (!duk_has_prop_string(ctx, table, id))
 	{
@@ -57,7 +57,7 @@ duk_ret_t ModSearchTable_Get(duk_context *ctx, duk_idx_t table, char *key, char 
 	duk_remove(ctx, -2);							// [table][...][value]
 	return(1);
 }
-duk_ret_t ModSearchTable_Put(duk_context *ctx, duk_idx_t table, char *key, char *id)
+duk_ret_t ILibDuktape_ModSearchTable_Put(duk_context *ctx, duk_idx_t table, char *key, char *id)
 {
 	if (!duk_has_prop_string(ctx, table, id))
 	{
@@ -106,7 +106,7 @@ uint32_t ILibDuktape_ModSearch_GetJSModuleDate(duk_context *ctx, char *id)
 		// use result from module table
 		retVal = 0;
 		duk_get_prop_string(ctx, -3, "ModSearchTable");				// [stash][fileName][result][table]
-		if (ModSearchTable_Get(ctx, -1, ILibDuktape_ModSearch_ModuleFileDate, id) > 0)
+		if (ILibDuktape_ModSearchTable_Get(ctx, -1, ILibDuktape_ModSearch_ModuleFileDate, id) > 0)
 		{
 			retVal = (uint32_t)duk_get_uint(ctx, -1);
 		}
@@ -123,7 +123,7 @@ int ILibDuktape_ModSearch_IsRequired(duk_context *ctx, char *id, size_t idLen)
 
 	duk_push_heap_stash(ctx);										// [stash]
 	duk_get_prop_string(ctx, -1, "ModSearchTable");					// [stash][table]
-	if (ModSearchTable_Get(ctx, -1, ILibDuktape_ModSearch_ModuleRequired, id) > 0)
+	if (ILibDuktape_ModSearchTable_Get(ctx, -1, ILibDuktape_ModSearch_ModuleRequired, id) > 0)
 	{
 		ret = duk_get_boolean(ctx, -1) ? 1 : 0;
 	}
@@ -159,7 +159,7 @@ duk_ret_t ILibDuktape_ModSearch_GetJSModule(duk_context *ctx, char *id)
 	else
 	{
 		duk_get_prop_string(ctx, -2, "ModSearchTable");			// [stash][str][table]
-		if(ModSearchTable_Get(ctx, -1, ILibDuktape_ModSearch_ModuleFile, id)>0)
+		if(ILibDuktape_ModSearchTable_Get(ctx, -1, ILibDuktape_ModSearch_ModuleFile, id)>0)
 		{
 			return(1);
 		}
@@ -174,7 +174,7 @@ void ILibDuktape_ModSearch_AddModuleObject(duk_context *ctx, char *id, void *hea
 	duk_push_heap_stash(ctx);											// [stash]
 	duk_get_prop_string(ctx, -1, "ModSearchTable");						// [stash][table]
 	duk_push_heapptr(ctx, heapptr);										// [stash][table][object]
-	ModSearchTable_Put(ctx, -2, ILibDuktape_ModSearch_ModuleObject, id);// [stash][table]
+	ILibDuktape_ModSearchTable_Put(ctx, -2, ILibDuktape_ModSearch_ModuleObject, id);// [stash][table]
 	duk_pop_2(ctx);														// ...
 }
 int ILibDuktape_ModSearch_AddModuleEx(duk_context *ctx, char *id, char *module, int moduleLen, char *mtime)
@@ -182,12 +182,12 @@ int ILibDuktape_ModSearch_AddModuleEx(duk_context *ctx, char *id, char *module, 
 	duk_push_heap_stash(ctx);											// [stash]
 	duk_get_prop_string(ctx, -1, "ModSearchTable");						// [stash][table]
 	duk_push_lstring(ctx, module, moduleLen);							// [stash][table][module]
-	ModSearchTable_Put(ctx, -2, ILibDuktape_ModSearch_ModuleFile, id);	// [stash][table]
+	ILibDuktape_ModSearchTable_Put(ctx, -2, ILibDuktape_ModSearch_ModuleFile, id);	// [stash][table]
 	if (mtime != NULL)
 	{
 		duk_push_sprintf(ctx, "(new Date('%s')).getTime()/1000", mtime);		// [stash][table][string]
 		duk_eval(ctx);															// [stash][table][uint]
-		ModSearchTable_Put(ctx, -2, ILibDuktape_ModSearch_ModuleFileDate, id);	// [stash][table]
+		ILibDuktape_ModSearchTable_Put(ctx, -2, ILibDuktape_ModSearch_ModuleFileDate, id);	// [stash][table]
 	}
 	duk_pop_2(ctx);																// ...
 	return(0);
@@ -197,12 +197,12 @@ int ILibDuktape_ModSearch_AddHandler(duk_context *ctx, char *id, ILibDuktape_Mod
 	duk_push_heap_stash(ctx);											// [stash]
 	duk_get_prop_string(ctx, -1, "ModSearchTable");						// [stash][table]
 	duk_push_pointer(ctx, (void*)handler);								// [stash][table][ptr]
-	ModSearchTable_Put(ctx, -2, ILibDuktape_ModSearch_ModuleFunc, id);	// [stash][table]
+	ILibDuktape_ModSearchTable_Put(ctx, -2, ILibDuktape_ModSearch_ModuleFunc, id);	// [stash][table]
 	duk_pop_2(ctx);														// ...
 	return(0);
 }
 
-duk_ret_t mod_Search_Files(duk_context *ctx, char* id)
+duk_ret_t ILibDuktape_ModSearch_Search_Files(duk_context *ctx, char* id)
 {
 	char fileName[255];
 	char *data;
@@ -241,7 +241,7 @@ void ILibDuktape_ModSearch_AddHandler_AlsoIncludeJS(duk_context *ctx, char *js, 
 	duk_pop(ctx);													// ...
 }
 
-duk_ret_t mod_Search(duk_context *ctx)
+duk_ret_t ILibDuktape_ModSearch_Search(duk_context *ctx)
 {
 	duk_size_t idLen;
 	char *id;
@@ -265,14 +265,14 @@ duk_ret_t mod_Search(duk_context *ctx)
 	duk_get_prop_string(ctx, -1, "ModSearchTable");									// [func][chain][DB][stash][table]
 
 	// First check if there is a JS Object override
-	if (ModSearchTable_Get(ctx, -1, ILibDuktape_ModSearch_ModuleObject, id) > 0)	// [func][chain][DB][stash][table][obj]
+	if (ILibDuktape_ModSearchTable_Get(ctx, -1, ILibDuktape_ModSearch_ModuleObject, id) > 0)	// [func][chain][DB][stash][table][obj]
 	{
 		duk_put_prop_string(ctx, 3, "exports");										// [func][chain][DB][stash][table][obj]
 		return(0);
 	}
 	 
 	// Check if there is a native handler
-	if (ModSearchTable_Get(ctx, -1, ILibDuktape_ModSearch_ModuleFunc, id) > 0)		// [func][chain][DB][stash][table][ptr]
+	if (ILibDuktape_ModSearchTable_Get(ctx, -1, ILibDuktape_ModSearch_ModuleFunc, id) > 0)		// [func][chain][DB][stash][table][ptr]
 	{
 		// Init this temp value, to detect if the module wants to add JS code
 		duk_del_prop_string(ctx, -3, ILibDuktape_ModSearch_JSInclude);
@@ -294,18 +294,18 @@ duk_ret_t mod_Search(duk_context *ctx)
 	else
 	{																				// [func][chain][DB][stash][table]
 		// Check the local filesystem, becuase if present, those should take precedence
-		if(mod_Search_Files(ctx, id) == 1)
+		if(ILibDuktape_ModSearch_Search_Files(ctx, id) == 1)
 		{
 			return(1);
 		}
 
-		if (ModSearchTable_Get(ctx, -1, ILibDuktape_ModSearch_ModuleFile, id) > 0)
+		if (ILibDuktape_ModSearchTable_Get(ctx, -1, ILibDuktape_ModSearch_ModuleFile, id) > 0)
 		{																			// [func][chain][DB][stash][table][string]
 			//
 			// Let's mark that this was already "require'ed"
 			//
 			duk_push_true(ctx);														// [func][chain][DB][stash][table][string][true]
-			ModSearchTable_Put(ctx, -3, ILibDuktape_ModSearch_ModuleRequired, id);	// [func][chain][DB][stash][table][string]
+			ILibDuktape_ModSearchTable_Put(ctx, -3, ILibDuktape_ModSearch_ModuleRequired, id);	// [func][chain][DB][stash][table][string]
 			return(1);
 		}
 		else if (mDS == NULL)
@@ -361,7 +361,7 @@ void ILibDuktape_ModSearch_Init(duk_context * ctx, void * chain, ILibSimpleDataS
 	if (duk_ctx_chain(ctx) == NULL) { duk_ctx_context_data(ctx)->chain = chain; }
 
 	duk_get_global_string(ctx, "Duktape");		// [globalString]
-	duk_push_c_function(ctx, mod_Search, 4);	// [globalString][func]
+	duk_push_c_function(ctx, ILibDuktape_ModSearch_Search, 4);	// [globalString][func]
 	duk_push_pointer(ctx, chain);				// [globalString][func][chain]
 	duk_put_prop_string(ctx, -2, "chain");		// [globalString][func]
 
@@ -384,3 +384,4 @@ void ILibDuktape_ModSearch_Init(duk_context * ctx, void * chain, ILibSimpleDataS
 	duk_put_prop_string(ctx, -2, "ModSearchTable");		// [stash]
 	duk_pop(ctx);										// ...
 }
+
