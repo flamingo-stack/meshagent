@@ -185,9 +185,29 @@ function vt()
                 }
                 else
                 {
+                    k32.ClosePseudoConsole(ret._h.Deref());
+                    k32.CloseHandle(ret._input.Deref());
+                    k32.CloseHandle(ret._output.Deref());
+                    k32.CloseHandle(ret._consoleInput.Deref());
+                    k32.CloseHandle(ret._consoleOutput.Deref());
                 }
             }
-
+            else
+            {
+                k32.ClosePseudoConsole(ret._h.Deref());
+                k32.CloseHandle(ret._input.Deref());
+                k32.CloseHandle(ret._output.Deref());
+                k32.CloseHandle(ret._consoleInput.Deref());
+                k32.CloseHandle(ret._consoleOutput.Deref());
+            }
+        }
+        else
+        {
+            k32.ClosePseudoConsole(ret._h.Deref());
+            k32.CloseHandle(ret._input.Deref());
+            k32.CloseHandle(ret._output.Deref());
+            k32.CloseHandle(ret._consoleInput.Deref());
+            k32.CloseHandle(ret._consoleOutput.Deref());
         }
         throw ('Internal Error');
     }
