@@ -1,3 +1,19 @@
+/*
+Copyright 2024 Intel Corporation
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * MeshAgent Security Permissions Module
  *
@@ -37,15 +53,21 @@ var userSessions = null;  // Lazy-load to avoid circular dependencies
  * Get current effective UID
  * Uses process.getuid() if available, otherwise user-sessions.Self()
  */
-function getEffectiveUid() {
-    if (process.getuid) {
+function getEffectiveUid()
+{
+    if (process.getuid)
+    {
         return process.getuid();
     }
     // Fallback to user-sessions module (for Duktape)
-    if (!userSessions) {
-        try {
+    if (!userSessions)
+    {
+        try
+        {
             userSessions = require('user-sessions');
-        } catch (e) {
+        }
+        catch (e)
+        {
             logger.debug('[SECURITY-PERMS] Could not load user-sessions: ' + e.message);
             return -1;
         }
@@ -205,17 +227,20 @@ var SECURE_FILE_PERMISSIONS = {
  *   logger.error('Failed: ' + result.errors.join(', '));
  * }
  */
-function setSecurePermissions(filePath, fileType, options) {
+function setSecurePermissions(filePath, fileType, options)
+{
     options = options || {};
     var result = { success: true, actions: [], errors: [] };
 
     logger.debug('[SECURITY-PERMS] setSecurePermissions(' + filePath + ', ' + fileType +
                 ', dryRun=' + (options.dryRun || false) + ', skipChown=' + (options.skipChown || false) + ')');
 
-    try {
+    try
+    {
         // Validate file type
         var policy = SECURE_FILE_PERMISSIONS[fileType];
-        if (!policy) {
+        if (!policy)
+        {
             throw new Error('Unknown file type: ' + fileType + '. Valid types: ' +
                           Object.keys(SECURE_FILE_PERMISSIONS).join(', '));
         }
@@ -223,59 +248,70 @@ function setSecurePermissions(filePath, fileType, options) {
                     ', owner=' + policy.owner + ', critical=' + policy.critical);
 
         // Windows uses ACLs - different implementation needed (future work)
-        if (process.platform === 'win32') {
+        if (process.platform === 'win32')
+        {
             result.actions.push('Windows ACL management not yet implemented');
             return result;
         }
 
         // Check if file exists
-        if (!fs.existsSync(filePath)) {
+        if (!fs.existsSync(filePath))
+        {
             throw new Error('File does not exist: ' + filePath);
         }
         logger.debug('[SECURITY-PERMS] File exists: ' + filePath);
 
         // Set mode (permissions)
-        if (!options.dryRun) {
+        if (!options.dryRun)
+        {
             fs.chmodSync(filePath, policy.mode);
         }
         result.actions.push('chmod ' + policy.mode.toString(8) + ' "' + filePath + '"');
 
         // Set ownership (POSIX only, requires root)
-        if (!options.skipChown && process.platform !== 'win32') {
+        if (!options.skipChown && process.platform !== 'win32')
+        {
             // Check if running as root
             var currentUid = getEffectiveUid();
             logger.debug('[SECURITY-PERMS] Checking root: currentUid=' + currentUid);
 
-            if (currentUid === 0) {
+            if (currentUid === 0)
+            {
                 var group = (process.platform === 'darwin') ? policy.group : policy.groupLinux;
-                var chownCmd = 'chown ' + policy.owner + ':' + group + ' "' + filePath + '"';
-                logger.debug('[SECURITY-PERMS] Setting ownership: ' + chownCmd);
 
-                if (!options.dryRun) {
-                    try {
-                        // Use execFile + waitExit for Duktape compatibility
-                        var child = child_process.execFile('/bin/sh', ['sh']);
+                if (!options.dryRun)
+                {
+                    try
+                    {
+                        // Use execFile with an argv array (no shell string-building)
+                        // to avoid shell metacharacter/injection issues with filePath.
+                        var child = child_process.execFile('/usr/sbin/chown', ['chown', policy.owner + ':' + group, filePath]);
                         var stdout = '';
                         var stderr = '';
                         child.stdout.on('data', function(chunk) { stdout += chunk.toString(); });
                         child.stderr.on('data', function(chunk) { stderr += chunk.toString(); });
-                        child.stdin.write(chownCmd + '\n');
-                        child.stdin.write('echo "EXITCODE:$?"\n');  // Capture exit code
-                        child.stdin.write('exit\n');
                         child.waitExit();
 
                         // Check for errors in stderr
-                        if (stderr && stderr.trim().length > 0) {
+                        if (stderr && stderr.trim().length > 0)
+                        {
                             throw new Error('chown stderr: ' + stderr.trim());
                         }
 
-                        // Check exit code
-                        if (stdout.indexOf('EXITCODE:0') === -1) {
-                            throw new Error('chown returned non-zero exit code');
+                        // Verify ownership afterward via fs.statSync rather than
+                        // trusting shell stdout parsing.
+                        var chownStats = fs.statSync(filePath);
+                        var expectedGid = getGidForGroup(group);
+                        if (chownStats.uid !== 0 || (expectedGid !== null && chownStats.gid !== expectedGid))
+                        {
+                            throw new Error('chown verification failed: uid=' + chownStats.uid + ', gid=' + chownStats.gid);
                         }
 
                         logger.debug('[SECURITY-PERMS] Ownership set successfully');
-                    } catch (e) {
+                        result.actions.push('chown ' + policy.owner + ':' + group + ' "' + filePath + '"');
+                    }
+                    catch (e)
+                    {
                         // Log as WARNING so it's visible even without DEBUG
                         var errMsg = 'chown failed for ' + filePath + ': ' + (e.message || e.toString());
                         result.actions.push(errMsg);
@@ -283,11 +319,16 @@ function setSecurePermissions(filePath, fileType, options) {
                         result.success = false;
                         logger.warn('[SECURITY-PERMS] ' + errMsg);
                     }
-                } else {
+                }
+                else
+                {
+                    var chownCmd = 'chown ' + policy.owner + ':' + group + ' "' + filePath + '"';
                     result.actions.push(chownCmd);
                     logger.debug('[SECURITY-PERMS] Dry-run: would execute ' + chownCmd);
                 }
-            } else {
+            }
+            else
+            {
                 var skipMsg = 'Skipped chown (not running as root, UID: ' + currentUid + ')';
                 result.actions.push(skipMsg);
                 logger.warn('[SECURITY-PERMS] ' + skipMsg);
@@ -296,7 +337,9 @@ function setSecurePermissions(filePath, fileType, options) {
 
         logger.info('[SECURITY-PERMS] Set permissions: ' + filePath + ' (' + fileType + ')');
 
-    } catch (e) {
+    }
+    catch (e)
+    {
         result.success = false;
         result.errors.push(e.message || e.toString());
         logger.error('[SECURITY-PERMS] Failed to set permissions on ' + filePath + ': ' +
@@ -324,20 +367,24 @@ function setSecurePermissions(filePath, fileType, options) {
  *   logger.info('Current mode: ' + result.stats.mode);
  * }
  */
-function verifyPermissions(filePath, fileType) {
+function verifyPermissions(filePath, fileType)
+{
     var result = { valid: true, issues: [], stats: null };
 
     logger.debug('[SECURITY-PERMS] verifyPermissions(' + filePath + ', ' + fileType + ')');
 
-    try {
+    try
+    {
         // Validate file type
         var policy = SECURE_FILE_PERMISSIONS[fileType];
-        if (!policy) {
+        if (!policy)
+        {
             throw new Error('Unknown file type: ' + fileType);
         }
 
         // Check existence
-        if (!fs.existsSync(filePath)) {
+        if (!fs.existsSync(filePath))
+        {
             result.valid = false;
             result.issues.push('File does not exist');
             logger.debug('[SECURITY-PERMS] File does not exist: ' + filePath);
@@ -360,7 +407,8 @@ function verifyPermissions(filePath, fileType) {
                     ', owner=' + policy.owner);
 
         // Verify mode
-        if (currentMode !== policy.mode) {
+        if (currentMode !== policy.mode)
+        {
             result.valid = false;
             result.issues.push('Incorrect mode: expected ' + policy.mode.toString(8) +
                              ', got ' + currentMode.toString(8));
@@ -368,8 +416,10 @@ function verifyPermissions(filePath, fileType) {
         }
 
         // Verify ownership (if running as root)
-        if (process.getuid && process.getuid() === 0) {
-            if (stats.uid !== 0) {
+        if (process.getuid && process.getuid() === 0)
+        {
+            if (stats.uid !== 0)
+            {
                 result.valid = false;
                 result.issues.push('Incorrect owner: expected root (uid 0), got uid ' + stats.uid);
             }
@@ -377,7 +427,8 @@ function verifyPermissions(filePath, fileType) {
             // Verify group
             var expectedGroup = (process.platform === 'darwin') ? policy.group : policy.groupLinux;
             var expectedGid = getGidForGroup(expectedGroup);
-            if (expectedGid !== null && stats.gid !== expectedGid) {
+            if (expectedGid !== null && stats.gid !== expectedGid)
+            {
                 result.valid = false;
                 result.issues.push('Incorrect group: expected ' + expectedGroup + ' (gid ' + expectedGid +
                                  '), got gid ' + stats.gid);
@@ -385,15 +436,20 @@ function verifyPermissions(filePath, fileType) {
             }
         }
 
-        if (!result.valid && policy.critical) {
+        if (!result.valid && policy.critical)
+        {
             logger.warn('[SECURITY-PERMS] Permission verification FAILED for CRITICAL file ' +
                        filePath + ': ' + result.issues.join(', '));
-        } else if (!result.valid) {
+        }
+        else if (!result.valid)
+        {
             logger.warn('[SECURITY-PERMS] Permission verification failed for ' + filePath +
                        ': ' + result.issues.join(', '));
         }
 
-    } catch (e) {
+    }
+    catch (e)
+    {
         result.valid = false;
         result.issues.push(e.message || e.toString());
     }
@@ -425,7 +481,8 @@ function verifyPermissions(filePath, fileType) {
  *   if (result.errors.length > 0) logger.error('Errors: ' + result.errors.join(', '));
  * }
  */
-function verifyInstallation(installPath, options) {
+function verifyInstallation(installPath, options)
+{
     options = options || {};
     var results = {
         allValid: true,
@@ -438,7 +495,8 @@ function verifyInstallation(installPath, options) {
                 ', autoFix=' + (options.autoFix || false) + ')');
 
     // Normalize path (ensure trailing slash)
-    if (!installPath.endsWith('/')) {
+    if (!installPath.endsWith('/'))
+    {
         installPath = installPath + '/';
     }
 
@@ -451,7 +509,8 @@ function verifyInstallation(installPath, options) {
 
     // Check for bundle installation (macOS)
     var bundlePath = findBundle(installPath);
-    if (bundlePath) {
+    if (bundlePath)
+    {
         logger.debug('[SECURITY-PERMS] Found bundle: ' + bundlePath);
         criticalFiles.push({ path: bundlePath, type: 'bundle' });
     }
@@ -459,10 +518,12 @@ function verifyInstallation(installPath, options) {
     logger.debug('[SECURITY-PERMS] Checking ' + criticalFiles.length + ' file(s)');
 
     // Verify each file
-    for (var i = 0; i < criticalFiles.length; i++) {
+    for (var i = 0; i < criticalFiles.length; i++)
+    {
         var file = criticalFiles[i];
 
-        if (!fs.existsSync(file.path)) {
+        if (!fs.existsSync(file.path))
+        {
             // File doesn't exist - may be optional (e.g., .db created later, .msh only in some installs)
             logger.debug('[SECURITY-PERMS] Skipping (does not exist): ' + file.path);
             continue;
@@ -471,29 +532,38 @@ function verifyInstallation(installPath, options) {
         var verification = verifyPermissions(file.path, file.type);
         results.files[file.path] = verification;
 
-        if (!verification.valid) {
+        if (!verification.valid)
+        {
             results.allValid = false;
             logger.debug('[SECURITY-PERMS] Verification failed for ' + file.path + ': ' +
                         verification.issues.join(', '));
 
-            if (options.autoFix) {
+            if (options.autoFix)
+            {
                 logger.info('[SECURITY-PERMS] Auto-fixing permissions for: ' + file.path);
                 var fixResult = setSecurePermissions(file.path, file.type);
-                if (fixResult.success) {
+                if (fixResult.success)
+                {
                     results.fixed.push(file.path);
                     logger.debug('[SECURITY-PERMS] Successfully fixed: ' + file.path);
-                } else {
+                }
+                else
+                {
                     results.errors.push('Failed to fix ' + file.path + ': ' +
                                        fixResult.errors.join(', '));
                 }
-            } else if (options.failOnError && SECURE_FILE_PERMISSIONS[file.type].critical) {
+            }
+            else if (options.failOnError && SECURE_FILE_PERMISSIONS[file.type].critical)
+            {
                 // Critical file with wrong permissions and not auto-fixing
                 var error = 'CRITICAL: ' + file.path + ' has incorrect permissions: ' +
                            verification.issues.join(', ');
                 results.errors.push(error);
                 throw new Error(error);
             }
-        } else {
+        }
+        else
+        {
             logger.debug('[SECURITY-PERMS] Verification passed: ' + file.path);
         }
     }
@@ -519,42 +589,53 @@ function verifyInstallation(installPath, options) {
  * createFileSecure('/opt/meshagent/meshagent.msh', mshData, '.msh');
  * // File is created with 0600 permissions immediately, no race condition
  */
-function createFileSecure(filePath, content, fileType) {
+function createFileSecure(filePath, content, fileType)
+{
     var policy = SECURE_FILE_PERMISSIONS[fileType];
-    if (!policy) {
+    if (!policy)
+    {
         throw new Error('Unknown file type: ' + fileType + '. Valid types: ' +
                        Object.keys(SECURE_FILE_PERMISSIONS).join(', '));
     }
 
-    try {
+    try
+    {
         // Write file with mode option (atomic on most platforms)
         // This prevents the race condition where file is created with default
         // umask before chmod can run
         fs.writeFileSync(filePath, content, { mode: policy.mode });
 
         // Set ownership (requires separate call, requires root)
-        if (process.platform !== 'win32' && process.getuid && process.getuid() === 0) {
+        if (process.platform !== 'win32' && process.getuid && process.getuid() === 0)
+        {
             var group = (process.platform === 'darwin') ? policy.group : policy.groupLinux;
-            try {
-                // Use execFile + waitExit for Duktape compatibility
-                var child = child_process.execFile('/bin/sh', ['sh']);
+            try
+            {
+                // Use execFile with an argv array (no shell string-building)
+                // to avoid shell metacharacter/injection issues with filePath.
+                var child = child_process.execFile('/usr/sbin/chown', ['chown', policy.owner + ':' + group, filePath]);
                 var stdout = '';
                 var stderr = '';
                 child.stdout.on('data', function(chunk) { stdout += chunk.toString(); });
                 child.stderr.on('data', function(chunk) { stderr += chunk.toString(); });
-                child.stdin.write('chown ' + policy.owner + ':' + group + ' "' + filePath + '"\n');
-                child.stdin.write('echo "EXITCODE:$?"\n');
-                child.stdin.write('exit\n');
                 child.waitExit();
 
                 // Check for errors
-                if (stderr && stderr.trim().length > 0) {
+                if (stderr && stderr.trim().length > 0)
+                {
                     throw new Error('chown stderr: ' + stderr.trim());
                 }
-                if (stdout.indexOf('EXITCODE:0') === -1) {
-                    throw new Error('chown returned non-zero exit code');
+
+                // Verify ownership afterward via fs.statSync
+                var chownStats = fs.statSync(filePath);
+                var expectedGid = getGidForGroup(group);
+                if (chownStats.uid !== 0 || (expectedGid !== null && chownStats.gid !== expectedGid))
+                {
+                    throw new Error('chown verification failed: uid=' + chownStats.uid + ', gid=' + chownStats.gid);
                 }
-            } catch (e) {
+            }
+            catch (e)
+            {
                 // Log but don't fail - ownership may already be correct
                 logger.warn('[SECURITY-PERMS] chown warning: ' + e.message);
             }
@@ -563,7 +644,9 @@ function createFileSecure(filePath, content, fileType) {
         logger.info('[SECURITY-PERMS] Created secure file: ' + filePath + ' (' + fileType +
                    ', mode ' + policy.mode.toString(8) + ')');
 
-    } catch (e) {
+    }
+    catch (e)
+    {
         logger.error('[SECURITY-PERMS] Failed to create secure file ' + filePath + ': ' +
                     e.message);
         throw e;
@@ -580,12 +663,15 @@ function createFileSecure(filePath, content, fileType) {
  * @param {string} groupName - Group name (e.g., 'wheel', 'root')
  * @returns {number|null} Group ID or null if not found
  */
-function getGidForGroup(groupName) {
-    if (process.platform === 'win32') {
+function getGidForGroup(groupName)
+{
+    if (process.platform === 'win32')
+    {
         return null;
     }
 
-    try {
+    try
+    {
         // Parse /etc/group to find GID (most portable approach)
         // Use execFile + waitExit for Duktape compatibility
         var child = child_process.execFile('/bin/sh', ['sh']);
@@ -598,18 +684,22 @@ function getGidForGroup(groupName) {
         child.waitExit();
 
         // Log stderr if present (but don't fail - group might just not exist)
-        if (stderr && stderr.trim().length > 0) {
+        if (stderr && stderr.trim().length > 0)
+        {
             logger.debug('[SECURITY-PERMS] getGidForGroup stderr: ' + stderr.trim());
         }
 
         // Format: groupname:x:gid:members
         var parts = output.trim().split(':');
-        if (parts.length >= 3) {
+        if (parts.length >= 3)
+        {
             var gid = parseInt(parts[2], 10);
             return isNaN(gid) ? null : gid;
         }
         return null;
-    } catch (e) {
+    }
+    catch (e)
+    {
         // Group not found or command failed
         logger.debug('[SECURITY-PERMS] Could not get GID for group ' + groupName + ': ' + e.message);
         return null;
@@ -626,22 +716,30 @@ function getGidForGroup(groupName) {
  * @param {string} installPath - Directory to search
  * @returns {string|null} Full path to .app bundle, or null if not found
  */
-function findBundle(installPath) {
-    if (process.platform !== 'darwin') {
+function findBundle(installPath)
+{
+    if (process.platform !== 'darwin')
+    {
         return null;
     }
 
-    try {
+    try
+    {
         var files = fs.readdirSync(installPath);
-        for (var i = 0; i < files.length; i++) {
-            if (files[i].endsWith('.app')) {
+        for (var i = 0; i < files.length; i++)
+        {
+            if (files[i].endsWith('.app'))
+            {
                 var fullPath = installPath + files[i];
-                if (fs.statSync(fullPath).isDirectory()) {
+                if (fs.statSync(fullPath).isDirectory())
+                {
                     return fullPath;
                 }
             }
         }
-    } catch (e) {
+    }
+    catch (e)
+    {
         // Ignore errors (directory may not exist, permission denied, etc.)
     }
 
@@ -659,16 +757,22 @@ function findBundle(installPath) {
  *
  * @returns {string} Security mode ('warn', 'fix', or 'strict')
  */
-function getSecurityMode() {
-    try {
+function getSecurityMode()
+{
+    try
+    {
         // Try to read from database if available
-        if (typeof ILibSimpleDataStore !== 'undefined') {
+        if (typeof ILibSimpleDataStore !== 'undefined')
+        {
             var mode = ILibSimpleDataStore.Get('SecurityMode');
-            if (mode) {
+            if (mode)
+            {
                 return mode;
             }
         }
-    } catch (e) {
+    }
+    catch (e)
+    {
         // Ignore errors - database may not be initialized yet
     }
 
@@ -685,15 +789,19 @@ function getSecurityMode() {
  * @param {string} event - Event type (e.g., 'permission_violation', 'tampering_detected')
  * @param {object} details - Event details
  */
-function logSecurityEvent(event, details) {
+function logSecurityEvent(event, details)
+{
     // Local logging
     logger.info('[SECURITY-EVENT] ' + event + ': ' + JSON.stringify(details));
 
     // Remote logging (if MeshAgent is available)
-    try {
-        if (typeof require !== 'undefined') {
+    try
+    {
+        if (typeof require !== 'undefined')
+        {
             var meshAgent = require('MeshAgent');
-            if (meshAgent && meshAgent.SendCommand) {
+            if (meshAgent && meshAgent.SendCommand)
+            {
                 meshAgent.SendCommand({
                     action: 'msg',
                     type: 'security_event',
@@ -703,7 +811,9 @@ function logSecurityEvent(event, details) {
                 });
             }
         }
-    } catch (e) {
+    }
+    catch (e)
+    {
         // Ignore if not connected or MeshAgent not available
     }
 }
