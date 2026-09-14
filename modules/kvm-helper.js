@@ -5,7 +5,7 @@ function getUsers()
     var res, i, uu = {};
     require('user-sessions').Current(function (u) { res = u; });
 
-    for (i in res)
+    for (var i in res)
     {
         if (process.platform != 'win32') { res[i].SessionId = res[i].uid; }
         if (res[i].State == 'Active' || res[i].State == 'Connected') { uu[process.platform == 'win32' ? res[i].SessionId : res[i].uid] = res[i]; }
@@ -14,7 +14,7 @@ function getUsers()
     if (process.platform == 'linux')
     {
         var spawnable = this.loginUids();
-        for (i in spawnable)
+        for (var i in spawnable)
         {
             if (uu[spawnable[i].uid] == null)
             {
@@ -86,9 +86,14 @@ if (process.platform == 'linux')
             var terminal = childProcess.execFile('/bin/sh', options);
 
             terminal.stdout.on('data', function (c) { console.info1(c.toString()); });
-            terminal.stdin.write('su ' + username + '\n');
-            terminal.stdin.write('xvfb-run -n 99 -a ' + startDM + ' &\n');
-            terminal.stdin.write('exit\nexit\n');
+            try
+            {
+                terminal.stdin.write('su ' + username + '\n');
+                terminal.stdin.write('xvfb-run -n 99 -a ' + startDM + ' &\n');
+                terminal.stdin.write('exit\nexit\n');
+            }
+            catch (z)
+            { }
             terminal.waitExit();
             return (uid);
         }
@@ -108,7 +113,7 @@ if (process.platform == 'linux')
     {
         var lids = module.exports.allowed
         var uu = {};
-        for (i in lids)
+        for (var i in lids)
         {
             try
             {
@@ -129,25 +134,30 @@ if (process.platform == 'linux')
         {
             var child = require('child_process').execFile('/bin/sh', ['sh']);
             child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
-            child.stdin.write("cat /etc/gdm/custom.conf | grep WaylandEnable= | tr '\\n' '`' | awk -F'`' '");
-            child.stdin.write('{');
-            child.stdin.write('   wayland=1;');
-            child.stdin.write('   for(n=1;n<NF;++n) ');
-            child.stdin.write('   {');
-            child.stdin.write('      if($n~/^#/) { continue; }')
-            child.stdin.write('      gsub(/ /, "", $n);');
-            child.stdin.write('      if($n~/^WaylandEnable=/)');
-            child.stdin.write('      {');
-            child.stdin.write('         split($n, dummy, "WaylandEnable=");');
-            child.stdin.write('         if(dummy[2]=="false")');
-            child.stdin.write('         {');
-            child.stdin.write('            wayland=0;');
-            child.stdin.write('         }');
-            child.stdin.write('         break;');
-            child.stdin.write('      }');
-            child.stdin.write('   }');
-            child.stdin.write('   print wayland;');
-            child.stdin.write("}'\nexit\n");
+            try
+            {
+                child.stdin.write("cat /etc/gdm/custom.conf | grep WaylandEnable= | tr '\\n' '`' | awk -F'`' '");
+                child.stdin.write('{');
+                child.stdin.write('   wayland=1;');
+                child.stdin.write('   for(n=1;n<NF;++n) ');
+                child.stdin.write('   {');
+                child.stdin.write('      if($n~/^#/) { continue; }')
+                child.stdin.write('      gsub(/ /, "", $n);');
+                child.stdin.write('      if($n~/^WaylandEnable=/)');
+                child.stdin.write('      {');
+                child.stdin.write('         split($n, dummy, "WaylandEnable=");');
+                child.stdin.write('         if(dummy[2]=="false")');
+                child.stdin.write('         {');
+                child.stdin.write('            wayland=0;');
+                child.stdin.write('         }');
+                child.stdin.write('         break;');
+                child.stdin.write('      }');
+                child.stdin.write('   }');
+                child.stdin.write('   print wayland;');
+                child.stdin.write("}'\nexit\n");
+            }
+            catch (z)
+            { }
             child.waitExit();
             if (child.stdout.str.trim() == '0')
             {
@@ -158,25 +168,30 @@ if (process.platform == 'linux')
         {
             var child = require('child_process').execFile('/bin/sh', ['sh']);
             child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
-            child.stdin.write("cat /etc/gdm3/custom.conf | grep WaylandEnable= | tr '\\n' '`' | awk -F'`' '");
-            child.stdin.write('{');
-            child.stdin.write('   wayland=1;');
-            child.stdin.write('   for(n=1;n<NF;++n) ');
-            child.stdin.write('   {');
-            child.stdin.write('      if($n~/^#/) { continue; }')
-            child.stdin.write('      gsub(/ /, "", $n);');
-            child.stdin.write('      if($n~/^WaylandEnable=/)');
-            child.stdin.write('      {');
-            child.stdin.write('         split($n, dummy, "WaylandEnable=");');
-            child.stdin.write('         if(dummy[2]=="false")');
-            child.stdin.write('         {');
-            child.stdin.write('            wayland=0;');
-            child.stdin.write('         }');
-            child.stdin.write('         break;');
-            child.stdin.write('      }');
-            child.stdin.write('   }');
-            child.stdin.write('   print wayland;');
-            child.stdin.write("}'\nexit\n");
+            try
+            {
+                child.stdin.write("cat /etc/gdm3/custom.conf | grep WaylandEnable= | tr '\\n' '`' | awk -F'`' '");
+                child.stdin.write('{');
+                child.stdin.write('   wayland=1;');
+                child.stdin.write('   for(n=1;n<NF;++n) ');
+                child.stdin.write('   {');
+                child.stdin.write('      if($n~/^#/) { continue; }')
+                child.stdin.write('      gsub(/ /, "", $n);');
+                child.stdin.write('      if($n~/^WaylandEnable=/)');
+                child.stdin.write('      {');
+                child.stdin.write('         split($n, dummy, "WaylandEnable=");');
+                child.stdin.write('         if(dummy[2]=="false")');
+                child.stdin.write('         {');
+                child.stdin.write('            wayland=0;');
+                child.stdin.write('         }');
+                child.stdin.write('         break;');
+                child.stdin.write('      }');
+                child.stdin.write('   }');
+                child.stdin.write('   print wayland;');
+                child.stdin.write("}'\nexit\n");
+            }
+            catch (z)
+            { }
             child.waitExit();
             if (child.stdout.str.trim() == '0')
             {
@@ -194,18 +209,28 @@ if (process.platform == 'linux')
             {
                 var child = require('child_process').execFile('/bin/sh', ['sh']);
                 child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
-                child.stdin.write('sed "s/#WaylandEnable=false/WaylandEnable=false/g" /etc/gdm/custom.conf > /etc/gdm/custom_2.conf\n');
-                child.stdin.write("mv /etc/gdm/custom_2.conf /etc/gdm/custom.conf\n");
-                child.stdin.write("\nexit\n");
+                try
+                {
+                    child.stdin.write('sed "s/#WaylandEnable=false/WaylandEnable=false/g" /etc/gdm/custom.conf > /etc/gdm/custom_2.conf\n');
+                    child.stdin.write("mv /etc/gdm/custom_2.conf /etc/gdm/custom.conf\n");
+                    child.stdin.write("\nexit\n");
+                }
+                catch (z)
+                { }
                 child.waitExit();
             }
             if (require('fs').existsSync('/etc/gdm3/custom.conf'))
             {
                 var child = require('child_process').execFile('/bin/sh', ['sh']);
                 child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
-                child.stdin.write('sed "s/#WaylandEnable=false/WaylandEnable=false/g" /etc/gdm3/custom.conf > /etc/gdm3/custom_2.conf\n');
-                child.stdin.write("mv /etc/gdm3/custom_2.conf /etc/gdm3/custom.conf\n");
-                child.stdin.write("\nexit\n");
+                try
+                {
+                    child.stdin.write('sed "s/#WaylandEnable=false/WaylandEnable=false/g" /etc/gdm3/custom.conf > /etc/gdm3/custom_2.conf\n');
+                    child.stdin.write("mv /etc/gdm3/custom_2.conf /etc/gdm3/custom.conf\n");
+                    child.stdin.write("\nexit\n");
+                }
+                catch (z)
+                { }
                 child.waitExit();
             }
         }
@@ -218,18 +243,28 @@ if (process.platform == 'linux')
             {
                 var child = require('child_process').execFile('/bin/sh', ['sh']);
                 child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
-                child.stdin.write('sed "s/WaylandEnable=false/#WaylandEnable=false/g" /etc/gdm/custom.conf > /etc/gdm/custom_2.conf\n');
-                child.stdin.write("mv /etc/gdm/custom_2.conf /etc/gdm/custom.conf\n");
-                child.stdin.write("\nexit\n");
+                try
+                {
+                    child.stdin.write('sed "s/WaylandEnable=false/#WaylandEnable=false/g" /etc/gdm/custom.conf > /etc/gdm/custom_2.conf\n');
+                    child.stdin.write("mv /etc/gdm/custom_2.conf /etc/gdm/custom.conf\n");
+                    child.stdin.write("\nexit\n");
+                }
+                catch (z)
+                { }
                 child.waitExit();
             }
             if (require('fs').existsSync('/etc/gdm3/custom.conf'))
             {
                 var child = require('child_process').execFile('/bin/sh', ['sh']);
                 child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
-                child.stdin.write('sed "s/WaylandEnable=false/#WaylandEnable=false/g" /etc/gdm3/custom.conf > /etc/gdm3/custom_2.conf\n');
-                child.stdin.write("mv /etc/gdm3/custom_2.conf /etc/gdm3/custom.conf\n");
-                child.stdin.write("\nexit\n");
+                try
+                {
+                    child.stdin.write('sed "s/WaylandEnable=false/#WaylandEnable=false/g" /etc/gdm3/custom.conf > /etc/gdm3/custom_2.conf\n');
+                    child.stdin.write("mv /etc/gdm3/custom_2.conf /etc/gdm3/custom.conf\n");
+                    child.stdin.write("\nexit\n");
+                }
+                catch (z)
+                { }
                 child.waitExit();
             }
         }
