@@ -16,7 +16,7 @@ installation, upgrade, and TCC permission issues.
  * 1. Real-time visibility in console/terminal (stderr)
  * 2. Persistent record for post-mortem debugging (log file)
  */
-void mesh_log_message(const char* format, ...) {
+void MeshAgent_LogMessage(const char* format, ...) {
     va_list args1, args2;
     va_start(args1, format);
     va_copy(args2, args1);
