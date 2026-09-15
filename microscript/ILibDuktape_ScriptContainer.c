@@ -2506,23 +2506,18 @@ void ILibDuktape_ScriptContainer_OS_Push(duk_context *ctx, void *chain)
 				}\
 				catch(zz)\
 				{}\
+				/* OpenFrame: OS name from the registry, not WMI - the WMI query blocks the microstack thread until the 10min x2 watchdog kills the agent when WmiPrvSE is starved; the build-number check corrects the stale Win11 ProductName. */\
+				var build = '';\
+				try { build = require('win-registry').QueryKey(require('win-registry').HKEY.LocalMachine, 'SOFTWARE\\\\MICROSOFT\\\\WINDOWS NT\\\\CurrentVersion', 'CurrentBuild'); } catch(zz) {}\
 				try\
 				{\
-					ret = require('win-wmi').query('ROOT\\\\CIMV2', \"SELECT * FROM Win32_OperatingSystem\", ['Caption','BuildNumber']);\
-					ret = ret[0].Caption + ' - ' + friendly + ret[0].BuildNumber;\
+					ret = require('win-registry').QueryKey(require('win-registry').HKEY.LocalMachine, 'SOFTWARE\\\\MICROSOFT\\\\WINDOWS NT\\\\CurrentVersion', 'ProductName');\
+					if (parseInt(build) >= 22000 && ret.indexOf('Windows 10') == 0) { ret = ret.replace('Windows 10', 'Windows 11'); }\
+					ret = ret + ' - ' + friendly + build;\
 				}\
-				catch(zz)\
+				catch(zzz)\
 				{\
-					try\
-					{\
-						ret = require('win-registry').QueryKey(require('win-registry').HKEY.LocalMachine, 'SOFTWARE\\\\MICROSOFT\\\\WINDOWS NT\\\\CurrentVersion', 'ProductName');\
-						ret = ret + ' - ' + friendly + require('win-registry').QueryKey(require('win-registry').HKEY.LocalMachine, 'SOFTWARE\\\\MICROSOFT\\\\WINDOWS NT\\\\CurrentVersion', 'CurrentBuild');\
-					}\
-					catch(zzz)\
-					{\
-						ret = 'Windows (UNKNOWN) - ' + friendly;\
-					}\
-					ret += (' [WMI ERROR] ');\
+					ret = 'Windows (UNKNOWN) - ' + friendly + build;\
 				}\
 				break;\
 			case 'linux':\
