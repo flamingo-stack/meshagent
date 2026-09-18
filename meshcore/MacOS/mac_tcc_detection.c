@@ -1,3 +1,19 @@
+/*
+Copyright 2022 Intel Corporation
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 #include "mac_tcc_detection.h"
 #include <sqlite3.h>
 #include <ApplicationServices/ApplicationServices.h>
@@ -31,6 +47,7 @@ TCC_PermissionStatus check_fda_permission(void) {
     }
 
     // Cannot open TCC.db - no FDA permission
+    if (db != NULL) { sqlite3_close(db); }
     return TCC_PERMISSION_DENIED;
 }
 
@@ -81,6 +98,7 @@ static TCC_PermissionStatus check_screen_recording_via_tcc_db(void) {
     int rc = sqlite3_open_v2(TCC_DB_PATH, &db, SQLITE_OPEN_READONLY, NULL);
     if (rc != SQLITE_OK) {
         // Can't open TCC.db (no FDA)
+        if (db != NULL) { sqlite3_close(db); }
         return TCC_PERMISSION_DENIED;
     }
 
@@ -228,3 +246,4 @@ TCC_AllPermissions check_all_permissions(void) {
     result.screen_recording = check_screen_recording_permission();
     return result;
 }
+
