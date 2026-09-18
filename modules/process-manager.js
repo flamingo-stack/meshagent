@@ -166,7 +166,21 @@ function processManager() {
                     p.waitExit();
                 }
 
-                var J = JSON.parse(p.stdout.str);
+                try
+                {
+                    var J = JSON.parse(p.stdout.str);
+                }
+                catch (parseErr)
+                {
+                    if (callback)
+                    {
+                        p.args = [];
+                        for (var i = 1; i < arguments.length; ++i) { p.args.push(arguments[i]); }
+                        p.args.unshift(null);
+                        callback.apply(this, p.args);
+                    }
+                    break;
+                }
                 if (callback)
                 {
                     p.args = [];
@@ -209,7 +223,18 @@ function processManager() {
 
                 if (callback)
                 {
-                    var J = JSON.parse(p.stdout.str);
+                    try
+                    {
+                        var J = JSON.parse(p.stdout.str);
+                    }
+                    catch (parseErr)
+                    {
+                        p.args = [];
+                        for (var i = 1; i < arguments.length; ++i) { p.args.push(arguments[i]); }
+                        p.args.unshift(null);
+                        callback.apply(this, p.args);
+                        break;
+                    }
                     p.args = [];
                     for (var i = 1; i < arguments.length; ++i) { p.args.push(arguments[i]); }
                     if (process.platform == 'freebsd')
