@@ -286,7 +286,7 @@ void ILibAsyncUDPSocket_SetMulticastTTL(ILibAsyncUDPSocket_SocketModule module, 
 {
 	struct sockaddr_in6 localAddress;
 #if defined(__SYMBIAN32__)
-	return 0;
+	return;
 #else
 	#if defined(WIN32) || defined(_WIN32_WCE)
 	SOCKET s = *((SOCKET*)ILibAsyncSocket_GetSocket(module));
@@ -310,3 +310,4 @@ void ILibAsyncUDPSocket_SetMulticastLoopback(ILibAsyncUDPSocket_SocketModule mod
 	ILibAsyncSocket_GetLocalInterface(module, (struct sockaddr*)&localAddress);
 	if (setsockopt(s, localAddress.sin6_family == PF_INET6 ? IPPROTO_IPV6 : IPPROTO_IP, localAddress.sin6_family == PF_INET6 ? IPV6_MULTICAST_LOOP : IP_MULTICAST_LOOP, (char*)&loopback, sizeof(loopback)) != 0) ILIBCRITICALERREXIT(253);
 }
+

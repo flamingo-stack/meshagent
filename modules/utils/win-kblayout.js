@@ -37,10 +37,6 @@ str += '   }\r\n';
 str += '   return(ret);\r\n';
 str += '}';
 
-console.log('Value saved to clipboard...');
-require('clipboard')(str);
-process.exit();
-
 
 
 var check = {};
