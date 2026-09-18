@@ -21,8 +21,10 @@ limitations under the License.
 #include "stdafx.h"
 #include "WebRTC.h"
 
+#ifdef WIN32
 #include <WinSock2.h>
 #include <WS2tcpip.h>
+#endif
 
 #if defined(WIN32)
 #define _CRTDBG_MAP_ALLOC
