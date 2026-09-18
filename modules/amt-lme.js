@@ -150,7 +150,9 @@ function lme_heci(options) {
                     console.log('Unhandled LME Command ' + cmd + ', ' + chunk.length + ' byte(s).');
                     break;
                 case APF_SERVICE_REQUEST:
+                    if (chunk.length < 5) { break; }
                     var nameLen = chunk.readUInt32BE(1);
+                    if (nameLen < 0 || (nameLen + 5) > chunk.length) { break; }
                     var name = chunk.slice(5, nameLen + 5);
                     //console.log("Service Request for: " + name);
                     if (name == 'pfwd@amt.intel.com' || name == 'auth@amt.intel.com') {
@@ -165,12 +167,16 @@ function lme_heci(options) {
                     }
                     break;
                 case APF_GLOBAL_REQUEST:
+                    if (chunk.length < 5) { break; }
                     var nameLen = chunk.readUInt32BE(1);
+                    if (nameLen < 0 || (nameLen + 5) > chunk.length) { break; }
                     var name = chunk.slice(5, nameLen + 5).toString();
 
                     switch (name) {
                         case 'tcpip-forward':
+                            if (chunk.length < (nameLen + 10)) { break; }
                             var len = chunk.readUInt32BE(nameLen + 6);
+                            if (len < 0 || chunk.length < (nameLen + 14 + len)) { break; }
                             var port = chunk.readUInt32BE(nameLen + 10 + len);
                             //console.log("[" + chunk.length + "/" + len + "] APF_GLOBAL_REQUEST for: " + name + " on port " + port);
                             if (this[name] == undefined) { this[name] = {}; }
@@ -379,14 +385,18 @@ function lme_heci(options) {
                     }
                     break;
                 case APF_CHANNEL_OPEN:
+                    if (chunk.length < 5) { break; }
                     var nameLen = chunk.readUInt32BE(1);
+                    if (nameLen < 0 || chunk.length < (nameLen + 21)) { break; }
                     var name = chunk.slice(5, nameLen + 5).toString();
                     var channelSender = chunk.readUInt32BE(nameLen + 5);
                     var initialWindowSize = chunk.readUInt32BE(nameLen + 9);
                     var hostToConnectLen = chunk.readUInt32BE(nameLen + 17);
+                    if (hostToConnectLen < 0 || chunk.length < (nameLen + 29 + hostToConnectLen)) { break; }
                     var hostToConnect = chunk.slice(nameLen + 21, nameLen + 21 + hostToConnectLen).toString();
                     var portToConnect = chunk.readUInt32BE(nameLen + 21 + hostToConnectLen);
                     var originatorIpLen = chunk.readUInt32BE(nameLen + 25 + hostToConnectLen);
+                    if (originatorIpLen < 0 || chunk.length < (nameLen + 33 + hostToConnectLen + originatorIpLen)) { break; }
                     var originatorIp = chunk.slice(nameLen + 29 + hostToConnectLen, nameLen + 29 + hostToConnectLen + originatorIpLen).toString();
                     var originatorPort = chunk.readUInt32BE(nameLen + 29 + hostToConnectLen + originatorIpLen);
                     //console.log('APF_CHANNEL_OPEN', name, channelSender, initialWindowSize, 'From: ' + originatorIp + ':' + originatorPort, 'To: ' + hostToConnect + ':' + portToConnect);

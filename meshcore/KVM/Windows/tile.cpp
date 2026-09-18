@@ -89,7 +89,7 @@ int GetEncoderClsid(const WCHAR* format, CLSID* pClsid)
 
 	for (unsigned int j = 0; j < num; ++j)
 	{
-		if (wcsncmp(pImageCodecInfo[j].MimeType, format, size) == 0)
+		if (wcsncmp(pImageCodecInfo[j].MimeType, format, wcslen(format)) == 0)
 		{
 			*pClsid = pImageCodecInfo[j].Clsid;
 			free(pImageCodecInfo);
@@ -648,3 +648,4 @@ void set_tile_compression(int type, int level)
 }
 
 #endif
+
