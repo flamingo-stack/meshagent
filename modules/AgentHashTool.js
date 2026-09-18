@@ -57,17 +57,23 @@ function hashFile(options)
         var guid = Buffer.alloc(16);
         var bytesRead;
 
-        bytesRead = fs.readSync(fd, guid, 0, guid.length, options.state.stats.size - 16);
-        if(guid.toString('hex') == exeMeshPolicyGuid)
+        try
         {
-            bytesRead = fs.readSync(fd, guid, 0, 4, options.state.stats.size - 20);
-            options.state.endIndex = options.state.stats.size - 20 - guid.readUInt32LE(0);
+            bytesRead = fs.readSync(fd, guid, 0, guid.length, options.state.stats.size - 16);
+            if(guid.toString('hex') == exeMeshPolicyGuid)
+            {
+                bytesRead = fs.readSync(fd, guid, 0, 4, options.state.stats.size - 20);
+                options.state.endIndex = options.state.stats.size - 20 - guid.readUInt32LE(0);
+            }
+            else
+            {
+                options.state.endIndex = options.state.stats.size;
+            }
         }
-        else
+        finally
         {
-            options.state.endIndex = options.state.stats.size;
+            fs.closeSync(fd);
         }
-        fs.closeSync(fd);
     }
 
     if (options.state.checkSumIndex != 0)

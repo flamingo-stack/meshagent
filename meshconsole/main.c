@@ -337,7 +337,7 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 		"-uninstall", "-fulluninstall", "-update"
 	};
 	for (int i = 1; i < argc; i++) {
-		for (int j = 0; j < 6; j++) {
+		for (int j = 0; j < (int)(sizeof(forbidden_flags)/sizeof(forbidden_flags[0])); j++) {
 			if (strcmp(argv[i], forbidden_flags[j]) == 0) {
 				has_forbidden_flag = 1;
 				fprintf(stderr, "[MAIN] Skipping LAUNCHED_FROM_FINDER check - running with %s flag\n", argv[i]);
@@ -360,7 +360,7 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 			mesh_log_message("[MAIN] [%ld] MeshAgent launched from Finder with CMD key - showing Installation Assistant\n", time(NULL));
 
 			// Redirect stdout and stderr to log file to capture ALL output including TCC spawn traces
-			int log_fd = open("/tmp/meshagent-install-ui.log", O_WRONLY | O_APPEND | O_CREAT, 0666);
+			int log_fd = open("/tmp/meshagent-install-ui.log", O_WRONLY | O_APPEND | O_CREAT, 0600);
 			if (log_fd >= 0) {
 				dup2(log_fd, STDOUT_FILENO);
 				dup2(log_fd, STDERR_FILENO);
@@ -444,8 +444,10 @@ char* crashMemory = ILib_POSIX_InstallCrashHandler(argv[0]);
 	}
 	if (argc > 1 && strcasecmp(argv[1], "-nodeid-base64") == 0 && integratedJavaScriptLen == 0)
 	{
-		// Output only clean base64 NodeID, validate format to ensure no debug logs leak through
-		char script[] = "var _nid=Buffer.from(require('_agentNodeId')(),'hex').toString('base64').replace(/\\+/g,'@').replace(/\\//g,'$');if(/^[A-Za-z0-9@$=]+$/.test(_nid)){console.log(_nid);}process.exit();";
+		// Output only clean base64 NodeID, validate format to ensure no debug logs leak through.
+		// If validation fails, print an explicit error to stderr and exit(1) so callers can
+		// distinguish a validation failure from a legitimate (but empty) success.
+		char script[] = "var _nid=Buffer.from(require('_agentNodeId')(),'hex').toString('base64').replace(/\\+/g,'@').replace(/\\//g,'$');if(/^[A-Za-z0-9@$=]+$/.test(_nid)){console.log(_nid);process.exit();}else{console.error('ERROR: invalid nodeid format');process.exit(1);}";
 		integratedJavaScript = ILibString_Copy(script, sizeof(script) - 1);
 		integratedJavaScriptLen = (int)sizeof(script) - 1;
 	}

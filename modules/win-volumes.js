@@ -52,6 +52,7 @@ function getVolumes()
     for (i in v)
     {
         var tmp = trimObject(v[i]);
+        if (!ret[tmp.DeviceID]) { ret[tmp.DeviceID] = {}; }
         for (var k in tmp)
         {
             ret[tmp.DeviceID][k] = tmp[k];
@@ -60,4 +61,4 @@ function getVolumes()
     return (ret);
 }
 
-module.exports = { getVolumes: function () { try { return (getVolumes()); } catch (x) { return ({}); } } };
+module.exports = { getVolumes: function () { try { return (getVolumes()); } catch (x) { console.error('getVolumes() failed: ' + x); return ({}); } } };
