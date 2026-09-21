@@ -275,14 +275,17 @@ function lme_heci()
                     if (this.sockets[rChannelId] != undefined)
                     {
                         this.sockets[rChannelId].pendingBytes.push(data.length);
+                        var _heci = this;
+                        var _rChannelId = rChannelId;
                         this.sockets[rChannelId].write(data, function ()
                         {
-                            var written = this.pendingBytes.shift();
+                            if (_heci.sockets[_rChannelId] == undefined) { return; }
+                            var written = _heci.sockets[_rChannelId].pendingBytes.shift();
                             var outBuffer = Buffer.alloc(9);
                             outBuffer.writeUInt8(APF_CHANNEL_WINDOW_ADJUST, 0);
-                            outBuffer.writeUInt32BE(this.lme.amtId, 1);
+                            outBuffer.writeUInt32BE(_heci.sockets[_rChannelId].lme.amtId, 1);
                             outBuffer.writeUInt32BE(written, 5);
-                            this.HECI.write(outBuffer);
+                            _heci.write(outBuffer);
                         });
                     }
                     else
@@ -353,3 +356,4 @@ function lme_heci()
 }
 
 module.exports = lme_heci;
+
