@@ -78,6 +78,7 @@ function linux_identifiers()
                 const memorySlots = [];
                 var child = require('child_process').execFile('/bin/sh', ['sh']);
                 child.stdout.str = ''; child.stdout.on('data', dataHandler);
+                child.stderr.str = ''; child.stderr.on('data', dataHandler);
                 child.stdin.write('vcgencmd get_mem arm && vcgencmd get_mem gpu\nexit\n');
                 child.waitExit();
                 try { 
@@ -124,12 +125,14 @@ function linux_identifiers()
 
     var child = require('child_process').execFile('/bin/sh', ['sh']);
     child.stdout.str = ''; child.stdout.on('data', dataHandler);
+    child.stderr.str = ''; child.stderr.on('data', dataHandler);
     child.stdin.write('cat /proc/cpuinfo | grep -i "model name" | ' + "tr '\\n' ':' | awk -F: '{ print $2 }'\nexit\n");
     child.waitExit();
     identifiers['cpu_name'] = child.stdout.str.trim();
     if (identifiers['cpu_name'] == "") { // CPU BLANK, check lscpu instead
         child = require('child_process').execFile('/bin/sh', ['sh']);
         child.stdout.str = ''; child.stdout.on('data', dataHandler);
+        child.stderr.str = ''; child.stderr.on('data', dataHandler);
         child.stdin.write('lscpu | grep -i "model name" | ' + "tr '\\n' ':' | awk -F: '{ print $2 }'\nexit\n");
         child.waitExit();
         identifiers['cpu_name'] = child.stdout.str.trim();
@@ -140,6 +143,7 @@ function linux_identifiers()
     // Fetch GPU info
     child = require('child_process').execFile('/bin/sh', ['sh']);
     child.stdout.str = ''; child.stdout.on('data', dataHandler);
+    child.stderr.str = ''; child.stderr.on('data', dataHandler);
     child.stdin.write("lspci | grep ' VGA ' | tr '\\n' '`' | awk '{ a=split($0,lines" + ',"`"); printf "["; for(i=1;i<a;++i) { split(lines[i],gpu,"r: "); printf "%s\\"%s\\"", (i==1?"":","),gpu[2]; } printf "]"; }\'\nexit\n');
     child.waitExit();
     try { identifiers['gpu_name'] = JSON.parse(child.stdout.str.trim()); } catch (xx) { }
@@ -148,6 +152,7 @@ function linux_identifiers()
     // Fetch Storage Info
     child = require('child_process').execFile('/bin/sh', ['sh']);
     child.stdout.str = ''; child.stdout.on('data', dataHandler);
+    child.stderr.str = ''; child.stderr.on('data', dataHandler);
     child.stdin.write("lshw -class disk | tr '\\n' '`' | awk '" + '{ len=split($0,lines,"*"); printf "["; for(i=2;i<=len;++i) { model=""; caption=""; size=""; clen=split(lines[i],item,"`"); for(j=2;j<clen;++j) { split(item[j],tokens,":"); split(tokens[1],key," "); if(key[1]=="description") { caption=substr(tokens[2],2); } if(key[1]=="product") { model=substr(tokens[2],2); } if(key[1]=="size") { size=substr(tokens[2],2);  } } if(model=="") { model=caption; } if(caption!="" || model!="") { printf "%s{\\"Caption\\":\\"%s\\",\\"Model\\":\\"%s\\",\\"Size\\":\\"%s\\"}",(i==2?"":","),caption,model,size; }  } printf "]"; }\'\nexit\n');
     child.waitExit();
     try { identifiers['storage_devices'] = JSON.parse(child.stdout.str.trim()); } catch (xx) { }
@@ -156,6 +161,7 @@ function linux_identifiers()
     // Fetch storage volumes using df
     child = require('child_process').execFile('/bin/sh', ['sh']);
     child.stdout.str = ''; child.stdout.on('data', dataHandler);
+    child.stderr.str = ''; child.stderr.on('data', dataHandler);
     child.stdin.write('df -T | awk \'NR==1 || $1 ~ ".+"{print $3, $4, $5, $7, $2}\' | awk \'NR>1 {printf "{\\"size\\":\\"%s\\",\\"used\\":\\"%s\\",\\"available\\":\\"%s\\",\\"mount_point\\":\\"%s\\",\\"type\\":\\"%s\\"},", $1, $2, $3, $4, $5}\' | sed \'$ s/,$//\' | awk \'BEGIN {printf "["} {printf "%s", $0} END {printf "]"}\'\nexit\n');
     child.waitExit();
     try { ret.volumes = JSON.parse(child.stdout.str.trim()); } catch (xx) { }
@@ -362,7 +368,7 @@ function linux_identifiers()
     try {
         child = require('child_process').execFile('/usr/bin/uptime', ['', '-s']); // must include blank value at begining for some reason?
         child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
-        child.stderr.on('data', function () { });
+        child.stderr.str = ''; child.stderr.on('data', function (c) { this.str += c.toString(); });
         child.waitExit();
         var regex = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
         if (regex.test(child.stdout.str.trim())) {
@@ -370,6 +376,7 @@ function linux_identifiers()
         } else {
             child = require('child_process').execFile('/bin/sh', ['sh']);
             child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
+            child.stderr.str = ''; child.stderr.on('data', function (c) { this.str += c.toString(); });
             child.stdin.write('date -d "@$(( $(date +%s) - $(awk \'{print int($1)}\' /proc/uptime) ))" "+%Y-%m-%d %H:%M:%S"\nexit\n');
             child.waitExit();
             if (regex.test(child.stdout.str.trim())) {
@@ -490,6 +497,7 @@ function windows_volumes()
                         var foundIDMarkedLine = false, foundMarkedLine = false, identifier = '', password = '';
                         var keychild = require('child_process').execFile(process.env['windir'] + '\\system32\\cmd.exe', ['cmd', '/c', 'manage-bde -protectors -get ', tokens[0].split('"')[1], ' -Type recoverypassword'], {});
                         keychild.stdout.str = ''; keychild.stdout.on('data', function (c) { this.str += c.toString(); });
+                        keychild.stderr.str = ''; keychild.stderr.on('data', function (c) { this.str += c.toString(); });
                         keychild.waitExit();
                         var lines = keychild.stdout.str.trim().split('\r\n');
                         for (var x = 0; x < lines.length; x++) { // Loop each line
@@ -632,42 +640,49 @@ function macos_identifiers()
 
     child = require('child_process').execFile('/bin/sh', ['sh']);
     child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
+    child.stderr.str = ''; child.stderr.on('data', function (c) { this.str += c.toString(); });
     child.stdin.write('ioreg -d2 -c IOPlatformExpertDevice | grep board-id | awk -F= \'{ split($2, res, "\\""); print res[2]; }\'\nexit\n');
     child.waitExit();
     ret.identifiers.board_name = child.stdout.str.trim();
 
     child = require('child_process').execFile('/bin/sh', ['sh']);
     child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
+    child.stderr.str = ''; child.stderr.on('data', function (c) { this.str += c.toString(); });
     child.stdin.write('ioreg -d2 -c IOPlatformExpertDevice | grep IOPlatformSerialNumber | awk -F= \'{ split($2, res, "\\""); print res[2]; }\'\nexit\n');
     child.waitExit();
     ret.identifiers.board_serial = child.stdout.str.trim();
 
     child = require('child_process').execFile('/bin/sh', ['sh']);
     child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
+    child.stderr.str = ''; child.stderr.on('data', function (c) { this.str += c.toString(); });
     child.stdin.write('ioreg -d2 -c IOPlatformExpertDevice | grep manufacturer | awk -F= \'{ split($2, res, "\\""); print res[2]; }\'\nexit\n');
     child.waitExit();
     ret.identifiers.board_vendor = child.stdout.str.trim();
 
     child = require('child_process').execFile('/bin/sh', ['sh']);
     child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
+    child.stderr.str = ''; child.stderr.on('data', function (c) { this.str += c.toString(); });
     child.stdin.write('ioreg -d2 -c IOPlatformExpertDevice | grep version | awk -F= \'{ split($2, res, "\\""); print res[2]; }\'\nexit\n');
     child.waitExit();
     ret.identifiers.board_version = child.stdout.str.trim();
 
     child = require('child_process').execFile('/bin/sh', ['sh']);
     child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
+    child.stderr.str = ''; child.stderr.on('data', function (c) { this.str += c.toString(); });
     child.stdin.write('ioreg -d2 -c IOPlatformExpertDevice | grep IOPlatformUUID | awk -F= \'{ split($2, res, "\\""); print res[2]; }\'\nexit\n');
     child.waitExit();
     ret.identifiers.product_uuid = child.stdout.str.trim();
 
     child = require('child_process').execFile('/bin/sh', ['sh']);
     child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
+    child.stderr.str = ''; child.stderr.on('data', function (c) { this.str += c.toString(); });
     child.stdin.write('sysctl -n machdep.cpu.brand_string\nexit\n');
     child.waitExit();
     ret.identifiers.cpu_name = child.stdout.str.trim();
 
     child = require('child_process').execFile('/bin/sh', ['sh']);
     child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
+    child.stderr.str = ''; child.stderr.on('data', function (c) { this.str += c.toString(); });
     child.stdin.write('system_profiler SPMemoryDataType\nexit\n');
     child.waitExit();
     var lines = child.stdout.str.trim().split('\n');
@@ -702,6 +717,7 @@ function macos_identifiers()
 
     child = require('child_process').execFile('/bin/sh', ['sh']);
     child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
+    child.stderr.str = ''; child.stderr.on('data', function (c) { this.str += c.toString(); });
     child.stdin.write('diskutil info -all\nexit\n');
     child.waitExit();
     var sections = child.stdout.str.split('**********\n');
@@ -741,6 +757,7 @@ function macos_identifiers()
     // Fetch storage volumes using df
     child = require('child_process').execFile('/bin/sh', ['sh']);
     child.stdout.str = ''; child.stdout.on('data', dataHandler);
+    child.stderr.str = ''; child.stderr.on('data', dataHandler);
     child.stdin.write('df -aHY | awk \'NR>1 {printf "{\\"size\\":\\"%s\\",\\"used\\":\\"%s\\",\\"available\\":\\"%s\\",\\"mount_point\\":\\"%s\\",\\"type\\":\\"%s\\"},", $3, $4, $5, $10, $2}\' | sed \'$ s/,$//\' | awk \'BEGIN {printf "["} {printf "%s", $0} END {printf "]"}\'\nexit\n');
     child.waitExit();
     try {
@@ -753,6 +770,7 @@ function macos_identifiers()
         if (ret.darwin.volumes.length == 0) { // not sonima OS so dont show type for now
             child = require('child_process').execFile('/bin/sh', ['sh']);
             child.stdout.str = ''; child.stdout.on('data', dataHandler);
+            child.stderr.str = ''; child.stderr.on('data', dataHandler);
             child.stdin.write('df -aH | awk \'NR>1 {printf "{\\"size\\":\\"%s\\",\\"used\\":\\"%s\\",\\"available\\":\\"%s\\",\\"mount_point\\":\\"%s\\"},", $2, $3, $4, $9}\' | sed \'$ s/,$//\' | awk \'BEGIN {printf "["} {printf "%s", $0} END {printf "]"}\'\nexit\n');
             child.waitExit();
             try {
@@ -771,7 +789,7 @@ function macos_identifiers()
     try {
         child = require('child_process').execFile('/usr/sbin/sysctl', ['', 'kern.boottime']); // must include blank value at begining for some reason?
         child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
-        child.stderr.on('data', function () { });
+        child.stderr.str = ''; child.stderr.on('data', function (c) { this.str += c.toString(); });
         child.waitExit();
         const timestampMatch = /\{ sec = (\d+), usec = \d+ \}/.exec(child.stdout.str.trim());
         if (!ret.darwin) {
@@ -877,6 +895,7 @@ module.exports.isDocker = function isDocker()
 
     var child = require('child_process').execFile('/bin/sh', ['sh']);
     child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
+    child.stderr.str = ''; child.stderr.on('data', function (c) { this.str += c.toString(); });
     child.stdin.write("cat /proc/self/cgroup | tr '\n' '`' | awk -F'`' '{ split($1, res, " + '"/"); if(res[2]=="docker"){print "1";} }\'\nexit\n');
     child.waitExit();
     return (child.stdout.str != '');
@@ -1004,4 +1023,5 @@ if (process.platform == 'win32')
 // board_serial = BASEBOARD->SerialNumber = ioreg/serial-number | ioreg/IOPlatformSerialNumber
 // board_vendor = BASEBOARD->Manufacturer = ioreg/manufacturer
 // board_version = BASEBOARD->Version
+
 
