@@ -5,7 +5,7 @@
 
 #define MAX_MACHINE_ID_LEN 128
 
-#ifdef _WIN32
+#ifdef WIN32
 #include <windows.h>
 
 char* read_machine_id() {
@@ -95,3 +95,4 @@ char* read_machine_id() {
 }
 
 #endif
+
