@@ -38,10 +38,16 @@ function wget(remoteUri, localFilePath, wgetoptions)
 
     try
     {
+        // 'MeshAgent' is an optional, host-provided module that may legitimately
+        // not exist in this build/platform. If it's missing, we fall through to
+        // performing our own proxy detection below. Any other failure while
+        // reading isControlChannelConnected is logged so proxy problems in the
+        // field don't get silently masked.
         agentConnected = require('MeshAgent').isControlChannelConnected;
     }
     catch (e)
     {
+        console.log('wget: unable to query MeshAgent.isControlChannelConnected (' + e + '), assuming agent not connected');
     }
 
     // We only need to check proxy settings if the agent is not connected, because when the agent
