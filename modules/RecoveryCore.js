@@ -191,6 +191,8 @@ require('MeshAgent').AddCommandHandler(function (data)
                             if (xurl != null) {
                                 var woptions = http.parseUri(xurl);
                                 woptions.rejectUnauthorized = 0;
+                                // Add custom relay headers if provided by the server
+                                if (data.relayHeaders != null) { woptions.headers = data.relayHeaders; }
                                 //sendConsoleText(JSON.stringify(woptions));
                                 addOpenFrameHeaders(woptions); // Add X-MACHINE-ID header
                                 var tunnel = http.request(woptions);
