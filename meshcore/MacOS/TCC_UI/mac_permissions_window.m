@@ -627,6 +627,15 @@ int show_tcc_permissions_window(int show_reminder_checkbox) {
             backing:NSBackingStoreBuffered
             defer:NO];
 
+        // NSWindow created with -initWithContentRect: defaults releasedWhenClosed
+        // to YES, so the -close below would release a window that ARC also owns
+        // and releases when `window` goes out of scope. That double release left
+        // a dangling pointer in the autorelease pool; draining it at the end of
+        // this @autoreleasepool then spun inside objc_release (100% CPU, window
+        // frozen on screen) instead of returning to the caller. ARC owns this
+        // window, so closing it must not release it.
+        [window setReleasedWhenClosed:NO];
+
         [window setTitle:@"OpenFrame – Setup Required"];
         [window setBackgroundColor:COLOR_WINDOW_BG];
         [window setOpaque:YES];
