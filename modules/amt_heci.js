@@ -262,32 +262,32 @@ function amt_heci() {
             fn.apply(this, opt);
         }, callback, optional);
     }
-    this.startConfiguration = function () {
+    this.startConfiguration = function (callback) {
         var optional = [];
-        for (var i = 2; i < arguments.length; ++i) { optional.push(arguments[i]); }
-        this.sendCommand(0x29, data, function (header, fn, opt) { opt.unshift(header.Status); fn.apply(this, opt); }, callback, optional);
+        for (var i = 1; i < arguments.length; ++i) { optional.push(arguments[i]); }
+        this.sendCommand(0x29, null, function (header, fn, opt) { opt.unshift(header.Status); fn.apply(this, opt); }, callback, optional);
     }
-    this.stopConfiguration = function () {
+    this.stopConfiguration = function (callback) {
         var optional = [];
-        for (var i = 2; i < arguments.length; ++i) { optional.push(arguments[i]); }
-        this.sendCommand(0x5E, data, function (header, fn, opt) { opt.unshift(header.Status); fn.apply(this, opt); }, callback, optional);
+        for (var i = 1; i < arguments.length; ++i) { optional.push(arguments[i]); }
+        this.sendCommand(0x5E, null, function (header, fn, opt) { opt.unshift(header.Status); fn.apply(this, opt); }, callback, optional);
     }
-    this.openUserInitiatedConnection = function () {
+    this.openUserInitiatedConnection = function (callback) {
         var optional = [];
-        for (var i = 2; i < arguments.length; ++i) { optional.push(arguments[i]); }
-        this.sendCommand(0x44, data, function (header, fn, opt) { opt.unshift(header.Status); fn.apply(this, opt); }, callback, optional);
+        for (var i = 1; i < arguments.length; ++i) { optional.push(arguments[i]); }
+        this.sendCommand(0x44, null, function (header, fn, opt) { opt.unshift(header.Status); fn.apply(this, opt); }, callback, optional);
     }
-    this.closeUserInitiatedConnection = function () {
+    this.closeUserInitiatedConnection = function (callback) {
         var optional = [];
-        for (var i = 2; i < arguments.length; ++i) { optional.push(arguments[i]); }
-        this.sendCommand(0x45, data, function (header, fn, opt) { opt.unshift(header.Status); fn.apply(this, opt); }, callback, optional);
+        for (var i = 1; i < arguments.length; ++i) { optional.push(arguments[i]); }
+        this.sendCommand(0x45, null, function (header, fn, opt) { opt.unshift(header.Status); fn.apply(this, opt); }, callback, optional);
     }
-    this.getRemoteAccessConnectionStatus = function () {
+    this.getRemoteAccessConnectionStatus = function (callback) {
         var optional = [];
-        for (var i = 2; i < arguments.length; ++i) { optional.push(arguments[i]); }
-        this.sendCommand(0x46, data, function (header, fn, opt) {
+        for (var i = 1; i < arguments.length; ++i) { optional.push(arguments[i]); }
+        this.sendCommand(0x46, null, function (header, fn, opt) {
             if (header.Status == 0) {
-                var hostname = v.slice(14, header.Data.readUInt16LE(12) + 14).toString()
+                var hostname = header.Data.slice(14, header.Data.readUInt16LE(12) + 14).toString()
                 opt.unshift({ status: header.Status, networkStatus: header.Data.readUInt32LE(0), remoteAccessStatus: header.Data.readUInt32LE(4), remoteAccessTrigger: header.Data.readUInt32LE(8), mpsHostname: hostname, raw: header.Data });
             } else {
                 opt.unshift({ status: header.Status });
@@ -297,7 +297,7 @@ function amt_heci() {
     }
     this.getProtocolVersion = function (callback) {
         var optional = [];
-        for (var i = 1; i < arguments.length; ++i) { opt.push(arguments[i]); }
+        for (var i = 1; i < arguments.length; ++i) { optional.push(arguments[i]); }
 
         heci.doIoctl(heci.IOCTL.HECI_VERSION, Buffer.alloc(5), Buffer.alloc(5), function (status, buffer, self, fn, opt) {
             if (status == 0) {
