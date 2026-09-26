@@ -30,7 +30,7 @@ function CreateWsmanComm(/*host, port, user, pass, tls, extra*/) {
     obj.digest = null;
     obj.RequestCount = 0;
 
-    if (arguments.length == 1 && typeof (arguments[0] == 'object')) {
+    if (arguments.length == 1 && typeof (arguments[0]) == 'object' && arguments[0] != null) {
         obj.host = arguments[0].host;
         obj.port = arguments[0].port;
         obj.authToken = arguments[0].authToken;
@@ -139,3 +139,4 @@ function CreateWsmanComm(/*host, port, user, pass, tls, extra*/) {
 }
 
 module.exports = CreateWsmanComm;
+

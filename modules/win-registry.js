@@ -141,7 +141,7 @@ function windows_registry()
             retVal = this._AdvApi.RegQueryInfoKeyW(h.Deref(), achClass, achClassSize, 0,
                 numSubKeys, longestSubkeySize, longestClassString, numValues,
                 longestValueName, longestValueData, securityDescriptor, lastWriteTime);
-            if (retVal.Val != 0) { throw ('RegQueryInfoKeyW() returned error: ' + retVal.Val); }
+            if (retVal.Val != 0) { this._AdvApi.RegCloseKey(h.Deref()); throw ('RegQueryInfoKeyW() returned error: ' + retVal.Val); }
             for(var i = 0; i < numSubKeys.toBuffer().readUInt32LE(); ++i)
             {
                 nameSize.toBuffer().writeUInt32LE(1024);
@@ -203,11 +203,12 @@ function windows_registry()
         v = this._AdvApi.RegQueryInfoKeyW(h.Deref(), achClass, achClassSize, 0,
             numSubKeys, longestSubkeySize, longestClassString, numValues,
             longestValueName, longestValueData, securityDescriptor, lastWriteTime);
-        if (v.Val != 0) { throw ('RegQueryInfoKeyW() returned error: ' + v.Val); }
+        if (v.Val != 0) { this._AdvApi.RegCloseKey(h.Deref()); throw ('RegQueryInfoKeyW() returned error: ' + v.Val); }
 
         // Convert the time format
         var systime = this._marshal.CreateVariable(16);
-        if (this._Kernel32.FileTimeToSystemTime(lastWriteTime, systime).Val == 0) { throw ('Error parsing time'); }
+        if (this._Kernel32.FileTimeToSystemTime(lastWriteTime, systime).Val == 0) { this._AdvApi.RegCloseKey(h.Deref()); throw ('Error parsing time'); }
+        this._AdvApi.RegCloseKey(h.Deref());
         return (require('fs').convertFileTime(lastWriteTime));
     };
 
