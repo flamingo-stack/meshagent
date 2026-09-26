@@ -1,11 +1,4 @@
 name: MeshAgent Test
-permissions:
-  contents: write
-  packages: write
-  actions: write
-  pull-requests: write
-  attestations: write
-  id-token: write
 
 on:
   pull_request:
@@ -31,6 +24,8 @@ jobs:
   build_client:
     name: "Build C Client (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     if: |
       (github.event_name == 'pull_request' && !github.event.pull_request.draft)
     defaults:
