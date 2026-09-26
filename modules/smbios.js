@@ -178,7 +178,7 @@ function SMBiosTables()
         }
         try
         {
-            r.systemSlots = this.systemInfo(data);
+            r.systemSlots = this.systemSlots(data);
         }
         catch(e)
         {
@@ -279,7 +279,7 @@ function SMBiosTables()
                 retVal.storageRedirection = amt[6] ? true : false;
                 retVal.serialOverLan = amt[7] ? true : false;
                 retVal.kvm = amt[14] ? true : false;
-                if (data[131].peek() && data[131].peek().slice(52, 56).toString() == 'vPro')
+                if (data[131] && data[131].peek() && data[131].peek().slice(52, 56).toString() == 'vPro')
                 {
                     var settings = data[131].peek();
                     if (settings[0] & 0x04) { retVal.TXT = (settings[0] & 0x08) ? true : false; }
@@ -300,7 +300,7 @@ function SMBiosTables()
         }
         if (!retVal.AMT)
         {
-            if (data[131].peek() && data[131].peek().slice(52, 56).toString() == 'vPro')
+            if (data[131] && data[131].peek() && data[131].peek().slice(52, 56).toString() == 'vPro')
             {
                 var settings = data[131].peek();
                 if ((settings[20] & 0x08) == 0x08) { retVal.AMT = true; }

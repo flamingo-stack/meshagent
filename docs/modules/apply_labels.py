@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
+import argparse
 import os
 import subprocess
 import re
+import sys
 
 # Label mappings
 LABELS = {
@@ -54,6 +56,10 @@ def apply_label(filepath, platform):
     if platform not in LABELS:
         return False
 
+    if sys.platform != 'darwin':
+        print(f"Error applying label to {filepath}: Finder labels via xattr are only supported on macOS")
+        return False
+
     label_hex, label_name = LABELS[platform]
     hex_value = f"000000000000000000{label_hex}00000000000000000000000000000000000000000000"
 
@@ -69,7 +75,15 @@ def apply_label(filepath, platform):
         return False
 
 def main():
-    doc_dir = '/Users/peet/GitHub/MeshAgent_installer/bin/modules_documentation'
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        'doc_dir',
+        nargs='?',
+        default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'modules_documentation'),
+        help='Directory containing module documentation markdown files'
+    )
+    args = parser.parse_args()
+    doc_dir = args.doc_dir
 
     print("Processing module documentation files...")
     print("=" * 60)
