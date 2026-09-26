@@ -1,3 +1,19 @@
+/*
+Copyright 2006 - 2024 Intel Corporation
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+	http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 /**
  * MeshAgent Security Permissions Module
  *
@@ -248,30 +264,22 @@ function setSecurePermissions(filePath, fileType, options) {
 
             if (currentUid === 0) {
                 var group = (process.platform === 'darwin') ? policy.group : policy.groupLinux;
-                var chownCmd = 'chown ' + policy.owner + ':' + group + ' "' + filePath + '"';
-                logger.debug('[SECURITY-PERMS] Setting ownership: ' + chownCmd);
+                var chownArg = policy.owner + ':' + group;
+                logger.debug('[SECURITY-PERMS] Setting ownership: chown ' + chownArg + ' "' + filePath + '"');
 
                 if (!options.dryRun) {
                     try {
-                        // Use execFile + waitExit for Duktape compatibility
-                        var child = child_process.execFile('/bin/sh', ['sh']);
+                        // Use execFile with argv array (no shell interpolation) for safety
+                        var child = child_process.execFile('/usr/sbin/chown', ['chown', chownArg, filePath]);
                         var stdout = '';
                         var stderr = '';
                         child.stdout.on('data', function(chunk) { stdout += chunk.toString(); });
                         child.stderr.on('data', function(chunk) { stderr += chunk.toString(); });
-                        child.stdin.write(chownCmd + '\n');
-                        child.stdin.write('echo "EXITCODE:$?"\n');  // Capture exit code
-                        child.stdin.write('exit\n');
                         child.waitExit();
 
                         // Check for errors in stderr
                         if (stderr && stderr.trim().length > 0) {
                             throw new Error('chown stderr: ' + stderr.trim());
-                        }
-
-                        // Check exit code
-                        if (stdout.indexOf('EXITCODE:0') === -1) {
-                            throw new Error('chown returned non-zero exit code');
                         }
 
                         logger.debug('[SECURITY-PERMS] Ownership set successfully');
@@ -284,8 +292,8 @@ function setSecurePermissions(filePath, fileType, options) {
                         logger.warn('[SECURITY-PERMS] ' + errMsg);
                     }
                 } else {
-                    result.actions.push(chownCmd);
-                    logger.debug('[SECURITY-PERMS] Dry-run: would execute ' + chownCmd);
+                    result.actions.push('chown ' + chownArg + ' "' + filePath + '"');
+                    logger.debug('[SECURITY-PERMS] Dry-run: would execute chown ' + chownArg + ' "' + filePath + '"');
                 }
             } else {
                 var skipMsg = 'Skipped chown (not running as root, UID: ' + currentUid + ')';
@@ -536,23 +544,17 @@ function createFileSecure(filePath, content, fileType) {
         if (process.platform !== 'win32' && process.getuid && process.getuid() === 0) {
             var group = (process.platform === 'darwin') ? policy.group : policy.groupLinux;
             try {
-                // Use execFile + waitExit for Duktape compatibility
-                var child = child_process.execFile('/bin/sh', ['sh']);
+                // Use execFile with argv array (no shell interpolation) for safety
+                var child = child_process.execFile('/usr/sbin/chown', ['chown', policy.owner + ':' + group, filePath]);
                 var stdout = '';
                 var stderr = '';
                 child.stdout.on('data', function(chunk) { stdout += chunk.toString(); });
                 child.stderr.on('data', function(chunk) { stderr += chunk.toString(); });
-                child.stdin.write('chown ' + policy.owner + ':' + group + ' "' + filePath + '"\n');
-                child.stdin.write('echo "EXITCODE:$?"\n');
-                child.stdin.write('exit\n');
                 child.waitExit();
 
                 // Check for errors
                 if (stderr && stderr.trim().length > 0) {
                     throw new Error('chown stderr: ' + stderr.trim());
-                }
-                if (stdout.indexOf('EXITCODE:0') === -1) {
-                    throw new Error('chown returned non-zero exit code');
                 }
             } catch (e) {
                 // Log but don't fail - ownership may already be correct

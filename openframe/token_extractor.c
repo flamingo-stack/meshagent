@@ -1,3 +1,18 @@
+/*
+Copyright 2024 Intel Corporation
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,10 +27,10 @@
 #define MAX_FILE_SIZE 4096
 
 // Function prototypes for internal functions
-char* read_token_file(const char* filename, size_t* file_size);
-char* decrypt_aes_gcm(const unsigned char* ciphertext, size_t ciphertext_len, 
+static char* OpenFrame_read_token_file(const char* filename, size_t* file_size);
+static char* OpenFrame_decrypt_aes_gcm(const unsigned char* ciphertext, size_t ciphertext_len, 
                       const unsigned char* key, size_t* plaintext_len);
-char* base64_decode(const char* input, size_t* output_len);
+static char* OpenFrame_base64_decode(const char* input, size_t* output_len);
 
 // Main token extraction function with secret and token path parameters
 char* extract_token(const char* secret, const char* token_path) {
@@ -27,13 +42,13 @@ char* extract_token(const char* secret, const char* token_path) {
     }
 
     size_t file_size;
-    char* file_data = read_token_file(filename, &file_size);
+    char* file_data = OpenFrame_read_token_file(filename, &file_size);
     if (!file_data) {
         return NULL;
     }
 
     size_t decoded_len;
-    char* encrypted_data = base64_decode(file_data, &decoded_len);
+    char* encrypted_data = OpenFrame_base64_decode(file_data, &decoded_len);
     free(file_data);
 
     if (!encrypted_data) {
@@ -51,14 +66,14 @@ char* extract_token(const char* secret, const char* token_path) {
 
     size_t ciphertext_len = decoded_len; // Full decoded data for GCM decryption
     size_t plaintext_len;
-    char* decrypted_token = decrypt_aes_gcm((const unsigned char*)encrypted_data, ciphertext_len, (const unsigned char*)secret, &plaintext_len);
+    char* decrypted_token = OpenFrame_decrypt_aes_gcm((const unsigned char*)encrypted_data, ciphertext_len, (const unsigned char*)secret, &plaintext_len);
     free(encrypted_data);
 
     return decrypted_token;
 }
 
 // Function to read file content
-char* read_token_file(const char* filename, size_t* file_size) {
+static char* OpenFrame_read_token_file(const char* filename, size_t* file_size) {
     FILE* file = fopen(filename, "rb");
     if (!file) {
         return NULL;
@@ -97,7 +112,7 @@ char* read_token_file(const char* filename, size_t* file_size) {
 }
 
 // Base64 decode function
-char* base64_decode(const char* input, size_t* output_len) {
+static char* OpenFrame_base64_decode(const char* input, size_t* output_len) {
     BIO *bio, *b64;
     size_t input_len = strlen(input);
     char* buffer = malloc(input_len + 1);
@@ -123,7 +138,7 @@ char* base64_decode(const char* input, size_t* output_len) {
 }
 
 // AES-GCM decryption function
-char* decrypt_aes_gcm(const unsigned char* ciphertext, size_t ciphertext_len, 
+static char* OpenFrame_decrypt_aes_gcm(const unsigned char* ciphertext, size_t ciphertext_len, 
                       const unsigned char* key, size_t* plaintext_len) {
     const int GCM_NONCE_SIZE = 12;
     const int GCM_TAG_SIZE = 16;
@@ -198,6 +213,7 @@ char* decrypt_aes_gcm(const unsigned char* ciphertext, size_t ciphertext_len,
         char err_buf[256];
         ERR_error_string_n(err, err_buf, sizeof(err_buf));
         printf("OpenSSL error: %s\n", err_buf);
+        OPENSSL_cleanse(plaintext, actual_ciphertext_len + 1);
         free(plaintext);
         EVP_CIPHER_CTX_free(ctx);
         return NULL;
@@ -207,6 +223,7 @@ char* decrypt_aes_gcm(const unsigned char* ciphertext, size_t ciphertext_len,
     // Set expected tag
     if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, GCM_TAG_SIZE, (void*)tag) != 1) {
         printf("Failed to set authentication tag\n");
+        OPENSSL_cleanse(plaintext, actual_ciphertext_len + 1);
         free(plaintext);
         EVP_CIPHER_CTX_free(ctx);
         return NULL;
@@ -219,6 +236,7 @@ char* decrypt_aes_gcm(const unsigned char* ciphertext, size_t ciphertext_len,
         char err_buf[256];
         ERR_error_string_n(err, err_buf, sizeof(err_buf));
         printf("OpenSSL error: %s\n", err_buf);
+        OPENSSL_cleanse(plaintext, actual_ciphertext_len + 1);
         free(plaintext);
         EVP_CIPHER_CTX_free(ctx);
         return NULL;
@@ -232,3 +250,4 @@ char* decrypt_aes_gcm(const unsigned char* ciphertext, size_t ciphertext_len,
     
     return plaintext;
 }
+
