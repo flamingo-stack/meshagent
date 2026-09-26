@@ -18,7 +18,7 @@ function windows_defaultRoute()
 {
     var ret = null;
     var GM = require('_GenericMarshal');
-    IP = GM.CreateNativeProxy('Iphlpapi.dll');
+    var IP = GM.CreateNativeProxy('Iphlpapi.dll');
     IP.CreateMethod('GetIpForwardTable');
 
     var size = GM.CreateVariable(4);
