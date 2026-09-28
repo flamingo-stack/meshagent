@@ -34,3 +34,4 @@ typedef enum AgentPowerStateActions
 
 int MeshInfo_GetSystemInformation(char** data);
 int MeshInfo_PowerState(AgentPowerStateActions flg, int force);
+
