@@ -42,7 +42,7 @@ function filesearch()
                     c.on('end', function ()
                     {
                         var last = this.str.trim();
-                        if (last != '') { this.parent.promise.emit('result', lines.shift()); }
+                        if (last != '') { this.parent.promise.emit('result', last); }
                         console.info1('Powershell Search Client disconnected');
                         this.end(); 
                         this.parent._connection = null;

@@ -94,6 +94,8 @@ function heci_create()
                 return;
             }
 
+            if (process.platform == 'win32')
+            {
             var result = kernel32.ReadFile(this._descriptor, this._readbuffer, this._readbuffer._size, 0, this._readoverlapped);
             if(result.Val != 0 || result._LastError == ERROR_IO_PENDING)
             {
@@ -161,6 +163,11 @@ function heci_create()
             else
             {
                 console.info1('Some Other Error: ' + result._LastError);
+            }
+            }
+            else
+            {
+                console.info1('Some Other Error: Unsupported platform (' + process.platform + ')');
             }
         }
     });

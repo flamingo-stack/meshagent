@@ -255,7 +255,7 @@ function readStringFilesStruct(buf, ptr, len)
         r.szKey = stringUntilNull(require('_GenericMarshal').CreateVariable(buf.slice(ptr + 6, ptr + 6 + (r.wLength - 6))).Wide2UTF8); // String value
         //console.log('readStringFileStruct', r.wLength, r.wValueLength, r.wType, r.szKey.toString());
         if (r.szKey == 'StringFileInfo') { r.stringTable = readStringTableStruct(buf, ptr + 36 + r.wValueLength); }
-        if (r.szKey == 'VarFileInfo$') { r.varFileInfo = {}; } // TODO
+        if (r.szKey == 'VarFileInfo') { r.varFileInfo = {}; } // TODO
         t.push(r);
         ptr += r.wLength;
         ptr = padPointer(ptr);
