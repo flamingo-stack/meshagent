@@ -1,6 +1,5 @@
 /*
 Copyright 2022 Intel Corporation
-@author Bryan Roe
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -53,7 +52,7 @@ function winutils()
                         // Windows will automatically restart explorer if you kill it
                         process.kill(pids[0]);
                     }
-                    return (this.autoHide(tsid));
+                    return (rv[8] == 3);
                 }
             }
         };
