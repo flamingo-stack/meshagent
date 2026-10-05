@@ -165,7 +165,7 @@ function mousetrails_set(value, tsid)
     var ret = user32.SystemParametersInfoA(SPI_SETMOUSETRAILS, value, 0, 0);
     if (ret.Val == 0)
     {
-        throw ('Error occured trying to fetch wallpaper');
+        throw ('Error occured trying to set mouse trails');
     }
 }
 
@@ -184,7 +184,7 @@ function mousetrails_get(tsid)
     var ret = user32.SystemParametersInfoA(SPI_GETMOUSETRAILS, v._size, v, 0);
     if (ret.Val == 0)
     {
-        throw ('Error occured trying to fetch wallpaper');
+        throw ('Error occured trying to fetch mouse trails');
     }
     return (v.toBuffer().readUInt32LE());
 }
