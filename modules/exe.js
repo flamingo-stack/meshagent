@@ -79,6 +79,7 @@ for (i = 1; i < process.argv.length; ++i) {
 // Read all dependencies in the path
 if (depPath != null)
 {
+    var filenames = [];
     try
     {
         filenames = fs.readdirSync(depPath + '\\*');
@@ -182,3 +183,4 @@ function escapeCodeString(str) {
     }
     return r;
 }
+
