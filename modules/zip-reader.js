@@ -46,6 +46,12 @@ function extractNext(p)
 {
     if (p.pending.length == 0) { p.source.close(); p._res(); return; }
     var next = p.pending.pop();
+    if (next.split('/').join('\\').split('\\').indexOf('..') >= 0)
+    {
+        p.source.close();
+        p._rej('Invalid path in zip entry: ' + next);
+        return;
+    }
     var dest = p.baseFolder + (process.platform == 'win32' ? '\\' : '/') + next;
     if (process.platform == 'win32')
     {
