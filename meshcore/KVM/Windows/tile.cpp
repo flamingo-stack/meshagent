@@ -251,6 +251,15 @@ int calc_opt_compr_send(int x, int y, int captureWidth, int captureHeight, void*
 
 	// Save the image stream in memory.
 	char* Tile = (char*)ILibMemory_Allocate(jpegSize > 65500 ? (jpegSize + 16):(jpegSize + 8), 0, NULL, NULL);
+	if (Tile == NULL)
+	{
+		KVMDEBUG("ILibMemory_Allocate() failed", 0);
+		delete DIBImage;
+		bmpStream->Release();
+		jpegStream->Release();
+		ILibCriticalLog(NULL, __FILE__, __LINE__, 252, GetLastError());
+		return 0;
+	}
 	if (jpegStream->Read(Tile + (jpegSize > 65500 ? 16 : 8), jpegSize, NULL) != S_OK)
 	{
 		KVMDEBUG("jpegStream->Read() failed", 0);
@@ -648,3 +657,4 @@ void set_tile_compression(int type, int level)
 }
 
 #endif
+
