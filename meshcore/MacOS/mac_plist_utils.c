@@ -90,7 +90,7 @@ static char* cfstring_to_cstring(CFStringRef cfString) {
 /**
  * Extract the Label value from a plist file
  */
-char* mesh_plist_get_label(const char* plistPath) {
+char* MeshAgent_plist_get_label(const char* plistPath) {
     CFDictionaryRef dict = load_plist_from_file(plistPath);
     if (!dict) {
         return NULL;
@@ -106,7 +106,7 @@ char* mesh_plist_get_label(const char* plistPath) {
 /**
  * Extract the first ProgramArguments path from a plist file
  */
-char* mesh_plist_get_program_path(const char* plistPath) {
+char* MeshAgent_plist_get_program_path(const char* plistPath) {
     CFDictionaryRef dict = load_plist_from_file(plistPath);
     if (!dict) {
         return NULL;
@@ -130,7 +130,7 @@ char* mesh_plist_get_program_path(const char* plistPath) {
 /**
  * Check if ProgramArguments contains a specific argument
  */
-int mesh_plist_has_argument(const char* plistPath, const char* argument) {
+int MeshAgent_plist_has_argument(const char* plistPath, const char* argument) {
     CFDictionaryRef dict = load_plist_from_file(plistPath);
     if (!dict) {
         return 0;
@@ -164,7 +164,7 @@ int mesh_plist_has_argument(const char* plistPath, const char* argument) {
 /**
  * Parse a LaunchDaemon plist file and extract meshagent information
  */
-int mesh_parse_launchdaemon_plist(const char* plistPath, MeshPlistInfo* info) {
+int MeshAgent_parse_launchdaemon_plist(const char* plistPath, MeshPlistInfo* info) {
     if (!plistPath || !info) {
         return 0;
     }
