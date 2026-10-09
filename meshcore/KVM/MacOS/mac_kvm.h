@@ -1,10 +1,17 @@
 /*
- *  mac_kvm.h
- *  
+ * Copyright 2011-2013 Intel Corporation
  *
- *  Created by Ylian Saint-Hilaire on 8/17/11.
- *  Copyright 2011 __MyCompanyName__. All rights reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #ifndef LINUX_KVM_H_
 #define LINUX_KVM_H_
@@ -36,4 +43,5 @@ void kvm_relay_reset(void *reserved);
 void kvm_cleanup();
 
 #endif /* LINUX_KVM_H_ */
+
 
