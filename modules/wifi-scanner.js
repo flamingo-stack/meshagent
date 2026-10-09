@@ -81,7 +81,7 @@ function WiFiScanner()
                 this.child.ms.on('end', function ()
                 {
                     var str = this.buffer.toString();
-                    tokens = str.split(' - Address: ');
+                    var tokens = str.split(' - Address: ');
                     for (var block in tokens)
                     {
                         if (block == 0) continue;
