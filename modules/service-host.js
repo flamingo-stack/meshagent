@@ -261,8 +261,8 @@ function serviceHost(serviceName)
             else
             {
                 this._checkpid = require('child_process').execFile('/bin/sh', ['sh']);
-                this._checkpid.stdout.result = '';
-                this._checkpid.stdout.on('data', function (chunk) { this.result += chunk.toString(); });
+                this._checkpid.stdout.str = '';
+                this._checkpid.stdout.on('data', function (chunk) { this.str += chunk.toString(); });
                 switch(platformType)
                 {
                     case 'init':
@@ -274,7 +274,7 @@ function serviceHost(serviceName)
                 }
                 this._checkpid.waitExit();
 
-                if(this._checkpid.stdout.result != '' && parseInt(this._checkpid.stdout.result) == process.pid)
+                if(this._checkpid.stdout.str != '' && parseInt(this._checkpid.stdout.str) == process.pid)
                 {
                     this.emit('serviceStart');
                 }
