@@ -27,6 +27,7 @@ unsigned char *jpeg_buffer = NULL;
 int jpeg_buffer_length = 0;
 char jpegLastError[JMSG_LENGTH_MAX];
 JPEG_error_handler default_JPEG_error_handler = NULL;
+static jmp_buf jpeg_error_jmpbuf;
 
 void jpeg_error_handler(j_common_ptr ptr)
 {
@@ -34,7 +35,7 @@ void jpeg_error_handler(j_common_ptr ptr)
 	(*(ptr->err->format_message)) (ptr, jpegLastError);
 
 	if (default_JPEG_error_handler != NULL) { default_JPEG_error_handler(jpegLastError); }
-	exit(1);
+	longjmp(jpeg_error_jmpbuf, 1);
 }
 
 void init_destination(j_compress_ptr cinfo)
@@ -89,9 +90,18 @@ int write_JPEG_buffer(JSAMPLE * image_buffer, int image_width, int image_height,
 	struct jpeg_error_mgr jerr;
 	JSAMPROW row_pointer[1];
 	int row_stride;
+	JDIMENSION written;
 
 	cinfo.err = jpeg_std_error(&jerr);
 	if (default_JPEG_error_handler != NULL) { jerr.error_exit = jpeg_error_handler; }
+
+	if (setjmp(jpeg_error_jmpbuf))
+	{
+		// A JPEG library error occurred - clean up and fail this frame instead of killing the process
+		if (cinfo.dest != NULL) { free(cinfo.dest); cinfo.dest = NULL; }
+		jpeg_destroy_compress(&cinfo);
+		return -1;
+	}
 
 	jpeg_create_compress(&cinfo);
 	cinfo.dest = (struct jpeg_destination_mgr *) malloc(sizeof(struct jpeg_destination_mgr));
@@ -121,7 +131,8 @@ int write_JPEG_buffer(JSAMPLE * image_buffer, int image_width, int image_height,
 	while (cinfo.next_scanline < cinfo.image_height)
 	{
 		row_pointer[0] = &image_buffer[cinfo.next_scanline * row_stride];
-		(void)jpeg_write_scanlines(&cinfo, row_pointer, 1);
+		written = jpeg_write_scanlines(&cinfo, row_pointer, 1);
+		if (written == 0) { break; }
 	}
 
 	jpeg_finish_compress(&cinfo);

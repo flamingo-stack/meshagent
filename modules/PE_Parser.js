@@ -21,6 +21,8 @@ function parse(exePath)
 {
     var retVal = {};
     var fd = fs.openSync(exePath, 'rb');
+    try
+    {
     var bytesRead;
     var dosHeader = Buffer.alloc(64);
     var ntHeader = Buffer.alloc(24);
@@ -135,8 +137,12 @@ function parse(exePath)
     }
     retVal.versionInfo = getVersionInfo(fd, retVal);
 
-    fs.closeSync(fd);
     return (retVal);
+    }
+    finally
+    {
+        fs.closeSync(fd);
+    }
 }
 
 // Read a unicode stting that starts with the string length as the first byte.

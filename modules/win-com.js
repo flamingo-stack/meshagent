@@ -37,16 +37,26 @@ ole32.CreateMethod('StringFromCLSID');          // https://learn.microsoft.com/e
 ole32.CreateMethod('StringFromIID');            // https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-stringfromiid
 
 
+// Tracks the number of successful CoInitializeEx() calls on this thread, so that
+// CoUninitialize() is only called once the matching number of createInstance()
+// created objects have been finalized.
+var _coInitializeCount = 0;
+
 function createInstance_finalizer()
 {
-    console.info1('CoUninitialize()');
-    ole32.CoUninitialize();
+    if (_coInitializeCount > 0)
+    {
+        --_coInitializeCount;
+        console.info1('CoUninitialize()');
+        ole32.CoUninitialize();
+    }
 }
 function createInstance(RFCLSID, RFIID, options)
 {
     // Start by initializing the Windows COM Library
     console.info1('CoInitializeEx()');
     ole32.CoInitializeEx(0, COINIT_MULTITHREADED);
+    ++_coInitializeCount;
 
     // Set default Security Values for COM
     ole32.CoInitializeSecurity(0, -1, 0, 0, RPC_C_AUTHN_LEVEL_DEFAULT, RPC_C_IMP_LEVEL_IMPERSONATE, 0, EOAC_NONE, 0);
@@ -63,9 +73,10 @@ function createInstance(RFCLSID, RFIID, options)
     else
     {
         // If it fails, we can tear down the COM library
+        --_coInitializeCount;
         ole32.CoUninitialize();
     }
-    throw ('Error calling CoCreateInstance(' + h.Val + ')');
+    throw (new Error('Error calling CoCreateInstance(' + h.Val + ')'));
 }
 
 // Convert from STRING to CLSID
@@ -80,7 +91,7 @@ function CLSIDFromString(CLSIDString)
     }
     else
     {
-        throw ('Error Converting CLSIDString');
+        throw (new Error('Error Converting CLSIDString'));
     }
 }
 
@@ -96,7 +107,7 @@ function IIDFromString(IIDString)
     }
     else
     {
-        throw ('Error Converting IIDString');
+        throw (new Error('Error Converting IIDString'));
     }
 }
 
@@ -164,3 +175,4 @@ function marshalInterface(arr)
     return (obj);
 }
 module.exports = { createInstance: createInstance, marshalFunctions: marshalFunctions, marshalInterface: marshalInterface, CLSIDFromString: CLSIDFromString, IIDFromString: IIDFromString, IID_IUnknown: IIDFromString('{00000000-0000-0000-C000-000000000046}') };
+

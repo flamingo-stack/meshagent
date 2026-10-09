@@ -144,7 +144,7 @@ jobs:
 
       - name: Create build report
         run: |
-          cat > BUILD_REPORT.md << 'EOF'
+          cat > BUILD_REPORT.md << EOF
           # OpenSSL 3.5.4 BSD Build Report
 
           ## Build Date
@@ -152,7 +152,7 @@ jobs:
 
           ## BSD Variants Built
           - **FreeBSD 14.1** (x86-64)
-          - **OpenBSD 7.5** (x86-64)
+          - **OpenBSD 7.8** (x86-64)
 
           ## Libraries Created
 
@@ -164,12 +164,12 @@ jobs:
 
           ## Build Configuration
           All builds use identical OpenSSL configure options:
-          ```
+          \`\`\`
           no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic
           no-threads no-dso no-shared no-asm no-rc5 no-idea
           no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast
           no-md2 no-mdc2
-          ```
+          \`\`\`
 
           ## Compiler
           - FreeBSD: Clang (system default)
@@ -178,10 +178,10 @@ jobs:
           ## Build Method
           - Built in native VMs using GitHub Actions vmactions
           - FreeBSD 14.1 VM
-          - OpenBSD 7.5 VM
+          - OpenBSD 7.8 VM
 
           ## GitHub Actions Workflow
-          Built using: `.github/workflows/build-openssl-bsd.yml`
+          Built using: \`.github/workflows/build-openssl-bsd.yml\`
 
           EOF
 
@@ -191,3 +191,4 @@ jobs:
           name: build-report-bsd
           path: BUILD_REPORT.md
           retention-days: 90
+

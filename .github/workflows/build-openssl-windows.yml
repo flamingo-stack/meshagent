@@ -7,6 +7,10 @@ on:
         description: 'OpenSSL version to build'
         required: false
         default: '3.5.4'
+      openssl_sha256:
+        description: 'Expected SHA-256 checksum of the openssl-<version>.tar.gz source tarball'
+        required: false
+        default: '817ce090e9852e9de9a6d63a08bbf5ad4b90c8dea51a3cf00c2b6e78d7c6893'
 
 jobs:
   build-windows:
@@ -48,8 +52,16 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ github.event.inputs.openssl_version || '3.5.4' }}"
+          EXPECTED_SHA256="${{ github.event.inputs.openssl_sha256 || '817ce090e9852e9de9a6d63a08bbf5ad4b90c8dea51a3cf00c2b6e78d7c6893' }}"
           BUILD_DIR="openssl-build-${{ matrix.arch.name }}-${{ matrix.config.suffix }}"
           curl -L "https://github.com/openssl/openssl/releases/download/openssl-$VERSION/openssl-$VERSION.tar.gz" -o openssl.tar.gz
+          ACTUAL_SHA256=$(sha256sum openssl.tar.gz | awk '{print $1}')
+          if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "ERROR: SHA-256 checksum mismatch for openssl-$VERSION.tar.gz"
+            echo "Expected: $EXPECTED_SHA256"
+            echo "Actual:   $ACTUAL_SHA256"
+            exit 1
+          fi
           mkdir -p "$BUILD_DIR"
           tar -xzf openssl.tar.gz -C "$BUILD_DIR" --strip-components=1
           rm openssl.tar.gz
@@ -128,14 +140,14 @@ jobs:
       - name: Upload combined artifact
         uses: actions/upload-artifact@v4
         with:
-          name: openssl-3.5.4-windows-all
+          name: openssl-${{ github.event.inputs.openssl_version || '3.5.4' }}-windows-all
           path: openssl-windows-libs/
           retention-days: 90
 
       - name: Create build report
         run: |
           cat > BUILD_REPORT.md << 'EOF'
-          # OpenSSL 3.5.4 Windows Build Report
+          # OpenSSL ${{ github.event.inputs.openssl_version || '3.5.4' }} Windows Build Report
 
           ## Build Date
           $(date -u +"%Y-%m-%d %H:%M:%S UTC")
@@ -185,3 +197,4 @@ jobs:
           name: build-report
           path: BUILD_REPORT.md
           retention-days: 90
+
