@@ -47,9 +47,9 @@ function IntToStrX(v) { return String.fromCharCode(v & 0xFF, (v >> 8) & 0xFF, (v
 function btoa(x) { return Buffer.from(x).toString('base64');}
 function atob(x) { var z = null; try { z = Buffer.from(x, 'base64').toString(); } catch (e) { console.log(e); } return z; }
 function passwordcheck(p) { if (p.length < 8) return false; var upper = 0, lower = 0, number = 0, nonalpha = 0; for (var i in p) { var c = p.charCodeAt(i); if ((c > 64) && (c < 91)) { upper = 1; } else if ((c > 96) && (c < 123)) { lower = 1; } else if ((c > 47) && (c < 58)) { number = 1; } else { nonalpha = 1; } } return ((upper + lower + number + nonalpha) == 4); }
-function hex2rstr(x) { Buffer.from(x, 'hex').toString(); }
-function rstr2hex(x) { Buffer.from(x).toString('hex'); }
-function random() { return Math.floor(Math.random()*max); }
+function hex2rstr(x) { return Buffer.from(x, 'hex').toString(); }
+function rstr2hex(x) { return Buffer.from(x).toString('hex'); }
+function random(max) { return Math.floor(Math.random()*max); }
 function rstr_md5(str) { return hex2rstr(hex_md5(str)); }
 function getItem(x, y, z) { for (var i in x) { if (x[i][y] == z) return x[i]; } return null; }
 
@@ -399,3 +399,4 @@ module.exports.decompile = function(binary, onecmd) {
     }
     return r;
 }
+

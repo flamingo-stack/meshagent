@@ -42,7 +42,7 @@ function filesearch()
                     c.on('end', function ()
                     {
                         var last = this.str.trim();
-                        if (last != '') { this.parent.promise.emit('result', lines.shift()); }
+                        if (last != '') { this.parent.promise.emit('result', last); }
                         console.info1('Powershell Search Client disconnected');
                         this.end(); 
                         this.parent._connection = null;
@@ -68,7 +68,10 @@ function filesearch()
                 ret.child.stdin.write('$pipe = new-object System.IO.Pipes.NamedPipeClientStream(".", "' + ret._clientpath + '", 3);\r\n');
                 ret.child.stdin.write('$pipe.Connect(); \r\n');
                 ret.child.stdin.write('$sw = new-object System.IO.StreamWriter($pipe);\r\n');
-                ret.child.stdin.write('Get-ChildItem -Path ' + root.split('\\').join('\\\\') + ' -Include ' + (Array.isArray(criteria)?criteria.join(','):criteria) + ' -File -Recurse -ErrorAction SilentlyContinue |');
+                var psEscape = function (s) { return ("'" + String(s).replace(/'/g, "''") + "'"); };
+                var criteriaList = Array.isArray(criteria) ? criteria : [criteria];
+                var criteriaArg = '@(' + criteriaList.map(psEscape).join(',') + ')';
+                ret.child.stdin.write('Get-ChildItem -Path ' + psEscape(root) + ' -Include ' + criteriaArg + ' -File -Recurse -ErrorAction SilentlyContinue |');
                 ret.child.stdin.write(' ForEach-Object -Process { $sw.WriteLine($_.FullName); $sw.Flush(); }\r\n');
                 ret.child.stdin.write('exit\r\n');
 

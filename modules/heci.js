@@ -253,7 +253,7 @@ function heci_create()
                 // Try again to get the device interface detail info
                 if (setup.SetupDiGetDeviceInterfaceDetailA(deviceInfo, interfaceData, deviceDetail, bufferSize, 0, 0).Val == 0)
                 {
-                    deviceDetail = NULL;
+                    deviceDetail = null;
                     continue;
                 }
                 break;

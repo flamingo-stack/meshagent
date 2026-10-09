@@ -203,12 +203,14 @@ function windows_registry()
         v = this._AdvApi.RegQueryInfoKeyW(h.Deref(), achClass, achClassSize, 0,
             numSubKeys, longestSubkeySize, longestClassString, numValues,
             longestValueName, longestValueData, securityDescriptor, lastWriteTime);
-        if (v.Val != 0) { throw ('RegQueryInfoKeyW() returned error: ' + v.Val); }
+        if (v.Val != 0) { this._AdvApi.RegCloseKey(h.Deref()); throw ('RegQueryInfoKeyW() returned error: ' + v.Val); }
 
         // Convert the time format
         var systime = this._marshal.CreateVariable(16);
-        if (this._Kernel32.FileTimeToSystemTime(lastWriteTime, systime).Val == 0) { throw ('Error parsing time'); }
-        return (require('fs').convertFileTime(lastWriteTime));
+        if (this._Kernel32.FileTimeToSystemTime(lastWriteTime, systime).Val == 0) { this._AdvApi.RegCloseKey(h.Deref()); throw ('Error parsing time'); }
+        var result = require('fs').convertFileTime(lastWriteTime);
+        this._AdvApi.RegCloseKey(h.Deref());
+        return (result);
     };
 
     this.WriteKey = function WriteKey(hkey, path, key, value)
