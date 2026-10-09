@@ -232,7 +232,21 @@ function dispatch(options)
     //
     console.info1('Using SCHTASKS...');
 
-    var taskoptions = { env: { _target: process.execPath, _args: '-b64exec ' + str, _user: '"' + options.user + '"' } };
+    //
+    // Sanitize options.user before embedding it into the PowerShell/SCHTASKS command line.
+    // Since this value is passed to PowerShell via an environment variable (not string-interpolated
+    // directly into the script), the primary risk is a value that breaks out of the expected
+    // "domain\user" shape. Reject/strip characters that have no legitimate place in a user name
+    // (double-quotes, backticks, dollar signs, and other PowerShell metacharacters) so the value
+    // cannot be used to inject additional PowerShell commands.
+    //
+    var sanitizedUser = null;
+    if (options.user)
+    {
+        sanitizedUser = ('' + options.user).replace(/["'`$;|&<>\r\n]/g, '');
+    }
+
+    var taskoptions = { env: { _target: process.execPath, _args: '-b64exec ' + str, _user: '"' + sanitizedUser + '"' } };
     for (var c1e in process.env)
     {
         taskoptions.env[c1e] = process.env[c1e];
@@ -246,7 +260,7 @@ function dispatch(options)
     child.stderr.on('data', empty_func2);
     child.stdout.on('data', empty_func2);
     child.stdin.write('SCHTASKS /CREATE /F /TN MeshUserTask /SC ONCE /ST 00:00 ');
-    if (options.user)
+    if (sanitizedUser)
     {
         child.stdin.write('/RU $env:_user ');
     }
