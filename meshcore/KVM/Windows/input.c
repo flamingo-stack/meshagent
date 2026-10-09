@@ -16,8 +16,10 @@ limitations under the License.
 
 #if defined(_LINKVM)
 
+#ifdef WIN32
 #include <Windows.h>
 #include <Winuser.h>
+#endif
 #include <stdio.h>
 #include "input.h"
 
@@ -611,3 +613,4 @@ int TouchAction2(char* data, int datalen, int scaling)
 }
 
 #endif
+
