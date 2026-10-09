@@ -19,12 +19,14 @@ limitations under the License.
 #include <crtdbg.h>
 #endif
 
+#if defined(WIN32)
 #if defined(WINSOCK2)
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #elif defined(WINSOCK1)
 #include <winsock.h>
 #include <wininet.h>
+#endif
 #endif
 
 #include "ILibParsers.h"
@@ -791,3 +793,4 @@ void ILibAsyncServerSocket_SSL_SetSink(ILibAsyncServerSocket_ServerModule AsyncS
 	((struct ILibAsyncServerSocketModule*)AsyncServerSocketModule)->OnSSLContext = handler;
 }
 #endif
+

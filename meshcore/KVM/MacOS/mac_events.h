@@ -1,13 +1,14 @@
 /*
- * linux_events.h
+ * mac_events.h
  *
  *  Created on: Jul 8, 2011
  *      Author: Intel
  */
 
-#ifndef LINUX_EVENTS_H_
-#define LINUX_EVENTS_H_
+#ifndef MAC_EVENTS_H_
+#define MAC_EVENTS_H_
 
+#ifdef __APPLE__
 #include <Carbon/Carbon.h>
 #include <string.h>
 #include <stdio.h>
@@ -379,4 +380,7 @@ extern void MouseAction(double absX, double absY, int button, short wheel);
 extern void KeyAction(unsigned char vk, int up);
 extern void KeyActionUnicode(uint16_t unicode, int up);
 
-#endif /* LINUX_EVENTS_H_ */
+#endif /* __APPLE__ */
+
+#endif /* MAC_EVENTS_H_ */
+
