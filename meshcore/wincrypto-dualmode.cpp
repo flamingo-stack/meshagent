@@ -391,10 +391,15 @@ error:
 	if (hKeyNode != NULL) CryptDestroyKey(hKeyNode);
 #endif
 	wincrypto_close();
+	if (subjectEncoded != NULL) free(subjectEncoded);
+	if (pbPolicyInfo2 != NULL) free(pbPolicyInfo2);
+	if (pbBasicConstraints != NULL) free(pbBasicConstraints);
 	return 1;
 
 end:
 	if (subjectEncoded != NULL) free(subjectEncoded);
+	if (pbPolicyInfo2 != NULL) free(pbPolicyInfo2);
+	if (pbBasicConstraints != NULL) free(pbBasicConstraints);
 	return 0;
 }
 

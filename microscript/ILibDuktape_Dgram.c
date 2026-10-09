@@ -329,7 +329,7 @@ duk_ret_t ILibDuktape_DGram_send(duk_context *ctx)
 		port = (unsigned short)duk_require_int(ctx, 3);
 		for (i = 4; i < nargs; ++i)
 		{
-			if (duk_is_string(ctx, i)) { ILibResolveEx((char*)duk_require_string(ctx, i), port, &local); }
+			if (duk_is_string(ctx, i)) { if (ILibResolveEx((char*)duk_require_string(ctx, i), port, &local) != 0) { local.sin6_family = AF_UNSPEC; } }
 			if (duk_is_function(ctx, i)) { onSendOk = duk_require_heapptr(ctx, i); }
 		}
 	}
@@ -338,7 +338,7 @@ duk_ret_t ILibDuktape_DGram_send(duk_context *ctx)
 		port = (unsigned short)duk_require_int(ctx, 1);
 		for (i = 2; i < nargs; ++i)
 		{
-			if (duk_is_string(ctx, i)) { ILibResolveEx((char*)duk_require_string(ctx, i), port, &local); }
+			if (duk_is_string(ctx, i)) { if (ILibResolveEx((char*)duk_require_string(ctx, i), port, &local) != 0) { local.sin6_family = AF_UNSPEC; } }
 			if (duk_is_function(ctx, i)) { onSendOk = duk_require_heapptr(ctx, i); }
 		}
 	}
@@ -650,3 +650,4 @@ public:
 
 
 #endif
+

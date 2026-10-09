@@ -138,6 +138,7 @@ function _meshName()
 
 function _resetNodeId()
 {
+    if (process.platform != 'win32') { return; }
     var name = _meshName();
     require('win-registry').WriteKey(require('win-registry').HKEY.LocalMachine, 'Software\\Open Source\\' + name, 'ResetNodeId', 1);
     console.log('Resetting NodeID for: ' + name);

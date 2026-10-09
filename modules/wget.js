@@ -81,7 +81,7 @@ function wget(remoteUri, localFilePath, wgetoptions)
     {
         if(imsg.statusCode != 200)
         {
-            this.promise._rej('Server responsed with Status Code: ' + imsg.statusCode);
+            this.promise._rej(new Error('Server responded with Status Code: ' + imsg.statusCode));
         }
         else
         {

@@ -179,7 +179,7 @@ OPENSSL_store_u64_le(unsigned char *out, uint64_t val)
 static ossl_inline ossl_unused unsigned char *
 OPENSSL_store_u64_be(unsigned char *out, uint64_t val)
 {
-# ifdef OSSL_HTOLE64
+# ifdef OSSL_HTOBE64
     uint64_t t = OSSL_HTOBE64(val);
 
     memcpy(out, (unsigned char *)&t, 8);
@@ -218,7 +218,7 @@ OPENSSL_load_u16_le(uint16_t *val, const unsigned char *in)
 static ossl_inline ossl_unused const unsigned char *
 OPENSSL_load_u16_be(uint16_t *val, const unsigned char *in)
 {
-# ifdef OSSL_LE16TOH
+# ifdef OSSL_BE16TOH
     uint16_t t;
 
     memcpy((unsigned char *)&t, in, 2);
@@ -256,7 +256,7 @@ OPENSSL_load_u32_le(uint32_t *val, const unsigned char *in)
 static ossl_inline ossl_unused const unsigned char *
 OPENSSL_load_u32_be(uint32_t *val, const unsigned char *in)
 {
-# ifdef OSSL_LE32TOH
+# ifdef OSSL_BE32TOH
     uint32_t t;
 
     memcpy((unsigned char *)&t, in, 4);
@@ -301,7 +301,7 @@ OPENSSL_load_u64_le(uint64_t *val, const unsigned char *in)
 static ossl_inline ossl_unused const unsigned char *
 OPENSSL_load_u64_be(uint64_t *val, const unsigned char *in)
 {
-# ifdef OSSL_LE64TOH
+# ifdef OSSL_BE64TOH
     uint64_t t;
 
     memcpy((unsigned char *)&t, in, 8);
