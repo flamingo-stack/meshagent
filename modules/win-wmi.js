@@ -254,6 +254,8 @@ function enumerateProperties(j, fields)
         {
             properties.push(nn.Deref().increment(i * GM.PointerSize).Deref().Wide2UTF8);
         }
+
+        OleAut32.SafeArrayUnaccessData(nme.Deref());
     }
 
     // Now we need to introspect the Array Fields
@@ -456,3 +458,4 @@ function query(resourceString, queryString, fields)
 }
 
 module.exports = { query: query, queryAsync: queryAsync };
+

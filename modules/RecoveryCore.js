@@ -17,7 +17,10 @@ function getOpenFrameMachineId() {
                 ? '/Library/Application Support/OpenFrame/machine_id'
                 : '/var/lib/openframe/machine_id');
         openframeMachineId = fs.readFileSync(machineIdPath).toString().trim();
-    } catch (ex) { openframeMachineId = null; }
+    } catch (ex) {
+        openframeMachineId = null;
+        try { sendConsoleText('getOpenFrameMachineId error: ' + ex); } catch (ex2) { console.log('getOpenFrameMachineId error: ' + ex); }
+    }
     return openframeMachineId;
 }
 
@@ -502,3 +505,4 @@ function deleteFolderRecursive(path, rec) {
         fs.unlinkSync(path);
     }
 };
+

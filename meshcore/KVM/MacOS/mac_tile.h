@@ -7,8 +7,8 @@
  *
  */
 
-#ifndef LINUX_TILE_H_
-#define LINUX_TILE_H_
+#ifndef MAC_TILE_H_
+#define MAC_TILE_H_
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,5 +37,6 @@ extern int getScreenBuffer(unsigned char **desktop, long long *desktopsize, CGIm
 extern void set_tile_compression(int type, int level);
 
 
-#endif /* LINUX_TILE_H_ */
+#endif /* MAC_TILE_H_ */
+
 
