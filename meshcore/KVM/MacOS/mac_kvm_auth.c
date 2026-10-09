@@ -15,7 +15,7 @@
 /**
  * Get our own code signature for comparison
  */
-SecCodeRef get_self_code(void) {
+SecCodeRef MeshAgent_KVM_GetSelfCode(void) {
     SecCodeRef self_code = NULL;
     OSStatus status;
 
@@ -37,7 +37,7 @@ SecCodeRef get_self_code(void) {
 /**
  * Check if two code signatures match (same binary)
  */
-int codesign_matches(SecCodeRef code1, SecCodeRef code2) {
+int MeshAgent_KVM_CodesignMatches(SecCodeRef code1, SecCodeRef code2) {
     OSStatus status;
     CFDictionaryRef info1 = NULL, info2 = NULL;
     CFDataRef cdhash1 = NULL, cdhash2 = NULL;
@@ -92,7 +92,7 @@ cleanup:
 /**
  * Verify peer process connected to socket is legitimate meshagent
  */
-int verify_peer_codesign(int socket_fd) {
+int MeshAgent_KVM_VerifyPeerCodesign(int socket_fd) {
     pid_t peer_pid = 0;
     socklen_t len = sizeof(peer_pid);
     OSStatus status;
@@ -118,7 +118,7 @@ int verify_peer_codesign(int socket_fd) {
     }
 
     // Get our own code signature
-    self_code = get_self_code();
+    self_code = MeshAgent_KVM_GetSelfCode();
     if (!self_code) {
         ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER_FAIL: Failed to get self code signature");
         return 0;
@@ -147,7 +147,7 @@ int verify_peer_codesign(int socket_fd) {
     ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER: Peer code is valid, comparing signatures...");
 
     // Compare code signatures - must be same binary
-    if (codesign_matches(self_code, peer_code)) {
+    if (MeshAgent_KVM_CodesignMatches(self_code, peer_code)) {
         ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER_SUCCESS: Peer verified successfully, PID=%d", peer_pid);
         result = 1;
     } else {
@@ -196,3 +196,4 @@ int verify_peer_codesign_audit(int socket_fd) {
 #endif
 
 #endif /* __APPLE__ */
+
