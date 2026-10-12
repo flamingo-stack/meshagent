@@ -287,7 +287,7 @@ void KeyAction(unsigned char vk, int up)
 		}
 	}
 
-	if (i == g_keymapLen) { return; }
+	if (i == g_keymapLen) { if (source != NULL) CFRelease(source); return; }
 	if (vk == VK_CAPITAL && up) { g_capsLock = g_capsLock ? 0 : 1; }
 
 	CGEventRef key = CGEventCreateKeyboardEvent(source, keycode, !up);
@@ -308,3 +308,4 @@ void KeyActionUnicode(uint16_t unicode, int up)
 		CFRelease(key);
 	}
 }
+
