@@ -17,17 +17,17 @@
 #include <Carbon/Carbon.h>
 #include "../Linux/linux_compression.h"
 
-enum TILE_FLAGS_ENUM {
+typedef enum TILE_FLAGS_ENUM {
 	TILE_TODO,						//The tile CRC needs to be calculated.
 	TILE_SENT,						//CRC has been calculated and the tile has been sent.
 	TILE_MARKED_NOT_SENT,   		//CRC has been calculated, but the tile was not sent.
 	TILE_DONT_SEND		  //CRC has been calculated, tile need not be sent.
 	//TILE_SKIPPED		  //CRC has been calculated, tile need not be sent, but was skipped to include a greater region
-};
+} TILE_FLAGS_ENUM;
 
 struct tileInfo_t {
 	int crc;
-	enum TILE_FLAGS_ENUM flag;
+	TILE_FLAGS_ENUM flag;
 };
 
 extern int reset_tile_info(int old_height_count);
