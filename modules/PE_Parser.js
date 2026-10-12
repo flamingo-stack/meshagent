@@ -133,7 +133,7 @@ function parse(exePath)
         retVal.certificate = retVal.certificate.toString('base64');
         retVal.certificateDwLength = hdr.readUInt32LE(0);
     }
-    retVal.versionInfo = getVersionInfo(fd, retVal);
+    retVal.versionInfo = getVersionInfo(fd, retVal, retVal.resources);
 
     fs.closeSync(fd);
     return (retVal);
@@ -192,14 +192,16 @@ function readResourceTable(fd, ptr, offset)
     return r;
 }
 // Return the version info data block
-function getVersionInfoData(fd, header)
+function getVersionInfoData(fd, header, resources)
 {
+    var res = resources || header.resources;
+    if ((res == null) || (res.entries == null)) return null;
     var ptr = header.sections['.rsrc'].rawAddr;
-    for (var i = 0; i < header.resources.entries.length; i++)
+    for (var i = 0; i < res.entries.length; i++)
     {
-        if (header.resources.entries[i].name == 16)
+        if (res.entries[i].name == 16)
         {
-            const verInfo = header.resources.entries[i].table.entries[0].table.entries[0].item;
+            const verInfo = res.entries[i].table.entries[0].table.entries[0].item;
             const actualPtr = (verInfo.offsetToData - header.sections['.rsrc'].virtualAddr) + ptr;
             var buffer = Buffer.alloc(verInfo.size);
             require('fs').readSync(fd, buffer, 0, buffer.length, actualPtr);
@@ -330,6 +332,7 @@ function getVersionInfo(fd, header, resources)
 {
     var r = {};
     var b = getVersionInfoData(fd, header, resources);
+    if (b == null) return null;
     var info = readVersionInfo(b, 0);
     if ((info == null) || (info.stringFiles == null)) return null;
     var StringFileInfo = null;
