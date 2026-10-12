@@ -249,6 +249,32 @@ BOOL CALLBACK DisplayInfoEnumProc_Info(HMONITOR hMonitor, HDC hdcMonitor, LPRECT
 	buffer[offset+4] = (unsigned short)htons((unsigned short)(h));						// HEIGHT
 	return(TRUE);
 }
+
+BOOL CALLBACK DisplayInfoEnumProc_Primary(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData)
+{
+	int *state = (int*)dwData;	// [0] = displays seen, [1] = primary display
+	MONITORINFO mi;
+	UNREFERENCED_PARAMETER(hdcMonitor);
+	UNREFERENCED_PARAMETER(lprcMonitor);
+
+	ZeroMemory(&mi, sizeof(mi));
+	mi.cbSize = sizeof(mi);
+
+	// Numbered like DisplayInfoEnumProc_Info, so the result matches the display IDs sent to the client
+	if (!GetMonitorInfo(hMonitor, &mi)) return TRUE;
+	state[0]++;
+	if (mi.dwFlags & MONITORINFOF_PRIMARY) { state[1] = state[0]; }
+	return TRUE;
+}
+
+// Display to stream when none is picked: the primary (or the first) with several displays, all (0) with one
+int kvm_default_display()
+{
+	int state[2] = { 0, 0 };
+	if (GetSystemMetrics(SM_CMONITORS) < 2 || !EnumDisplayMonitors(NULL, NULL, DisplayInfoEnumProc_Primary, (LPARAM)state)) { return 0; }
+	return state[1] != 0 ? state[1] : 1;
+}
+
 void kvm_send_display_list(ILibKVM_WriteHandler writeHandler, void *reserved)
 {
 	int i;
@@ -357,7 +383,12 @@ void CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *r
 
 	// See if the number of displays has changed
 	x = GetSystemMetrics(SM_CMONITORS);
-	if (SCREEN_COUNT != x) { SCREEN_COUNT = x; kvm_send_display_list(writeHandler, reserved); }
+	if (SCREEN_COUNT != x)
+	{
+		if (SCREEN_COUNT == -1) { SCREEN_SEL = SCREEN_SEL_TARGET = kvm_default_display(); }	// New KVM session, start on the primary display
+		SCREEN_COUNT = x;
+		kvm_send_display_list(writeHandler, reserved);
+	}
 
 	// Check resolution change
 	if (checkres != 0 && g_shutdown == 0)
@@ -407,6 +438,7 @@ void CheckDesktopSwitch(int checkres, ILibKVM_WriteHandler writeHandler, void *r
 					// Set the resolution
 					if (SCREEN_SEL_PROCESS & 1) kvm_server_SetResolution(writeHandler, reserved);
 					if (SCREEN_SEL_PROCESS & 2) kvm_send_display_list(writeHandler, reserved);
+					if ((int)selection > 0) { SCREEN_SEL_TARGET = kvm_default_display(); }	// Selected display no longer exists, fall back to the primary
 				}
 				SCREEN_SEL_PROCESS = 0;
 			}
