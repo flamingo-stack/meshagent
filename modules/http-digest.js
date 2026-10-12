@@ -42,6 +42,11 @@ function generateAuthHeaders(imsg, options, digest)
     {
         auth = { realm: null, nonce: null, opaque: null, qop: null };
         var www = imsg.headers['WWW-Authenticate'];
+        if (!www)
+        {
+            digest.emit('error', 'Missing WWW-Authenticate header in 401 response');
+            return;
+        }
         var tokens = www.splitEx(',');
 
         var pairs;
@@ -252,6 +257,7 @@ function http_digest_instance(options)
             {
                 if (this.digRequest._buffered && this.digRequest._ended) { this.digRequest.options.oneshotEntity = this.digRequest._buffered; }
                 var callend = this.digRequest._request._callend;
+                if (!imsg.headers['WWW-Authenticate']) { this.digRequest.emit('error', 'Missing WWW-Authenticate header in 401 response'); return; }
                 var auth = generateAuthHeaders(imsg, this.digRequest.options, this.digRequest._digest);
                 console.info1(JSON.stringify(auth, null, 1));
                 console.info1(JSON.stringify(this.digRequest.options, null, 1));
