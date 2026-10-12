@@ -53,7 +53,7 @@ function winutils()
                         // Windows will automatically restart explorer if you kill it
                         process.kill(pids[0]);
                     }
-                    return (this.autoHide(tsid));
+                    return (value === true);
                 }
             }
         };
