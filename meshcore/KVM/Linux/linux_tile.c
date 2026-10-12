@@ -70,8 +70,8 @@ int calc_opt_compr_send(int x, int y, int captureWidth, int captureHeight, void*
 	if (tilebuffersize != captureWidth * captureHeight * 3)
 	{
 		if (tilebuffer != NULL) free(tilebuffer);
+		if ((tilebuffer = malloc(captureWidth * captureHeight * 3)) == NULL) { tilebuffersize = 0; return 0; }
 		tilebuffersize = captureWidth * captureHeight * 3;
-		if ((tilebuffer = malloc(tilebuffersize)) == NULL) return 0;
 	}
 
 	//Get the final coalesced tile
@@ -499,3 +499,4 @@ void set_tile_compression(int type, int level)
 
 	//  TODO Make sure the all the types are handled. We ignore the type variable for now.
 }
+
