@@ -348,7 +348,7 @@ int main(int argc, char **argv)
 
 		// Stop the service
 		i = GetServiceState("Mesh Agent");
-		if (i == 100) { printf("Mesh Agent is not installed.\r\n"); return; }
+		if (i == 100) { printf("Mesh Agent is not installed.\r\n"); return 0; }
 		if (i != 1) { StopService("Mesh Agent"); }
 
 		// Remove the core from the .db file
