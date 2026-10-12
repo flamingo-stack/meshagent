@@ -65,7 +65,18 @@ ILibTransport_DoneState ILibDuktape_EncryptionStream_decrypted_WriteSink(ILibDuk
 
 	while (i < bufferLen)
 	{
-		EVP_EncryptUpdate(ptrs->encryptedCTX, (unsigned char*)out, &outLen, (unsigned char*)(buffer + i), bufferLen - i > 4096 ? 4096 : bufferLen - i);
+		if (!EVP_EncryptUpdate(ptrs->encryptedCTX, (unsigned char*)out, &outLen, (unsigned char*)(buffer + i), bufferLen - i > 4096 ? 4096 : bufferLen - i))
+		{
+			// Encrypt Error
+			ILibDuktape_EventEmitter_SetupEmit(ptrs->encrypted->readableStream->ctx, ptrs->encrypted->readableStream->object, "error");	// [emit][this][error]
+			duk_push_string(ptrs->encrypted->readableStream->ctx, "Encrypt Error");														// [emit][this][error][msg]
+			if (duk_pcall_method(ptrs->encrypted->readableStream->ctx, 2) != 0)																// [ret]
+			{
+				ILibDuktape_Process_UncaughtException(ptrs->encrypted->readableStream->ctx);
+			}
+			duk_pop(ptrs->encrypted->readableStream->ctx);																					// ...
+			return(ILibTransport_DoneState_ERROR);
+		}
 		result = ILibDuktape_DuplexStream_WriteData(ptrs->encrypted, out, outLen);
 		i += 4096;
 	}
@@ -278,3 +289,4 @@ public:
 	DuplexStream decryptedStream;
 };
 #endif
+
