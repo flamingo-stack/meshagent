@@ -52,7 +52,6 @@ function start(updatePath)
     {
         try
         {
-            require('fs').unlinkSync(updatePath);
             require('fs').copyFileSync(updatePath + '_unzipped', updatePath);
             require('fs').unlinkSync(updatePath + '_unzipped');
         }
