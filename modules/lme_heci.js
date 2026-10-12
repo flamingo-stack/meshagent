@@ -140,7 +140,9 @@ function lme_heci()
                     //console.log('Command = ' + cmd);
                     break;
                 case APF_SERVICE_REQUEST:     
+                    if (chunk.length < 5) { break; }
                     var nameLen = chunk.readUInt32BE(1);
+                    if (chunk.length < nameLen + 5) { break; }
                     var name = chunk.slice(5, nameLen + 5);
                     //console.log("Service Request for: " + name);
                     if (name == 'pfwd@amt.intel.com' || name == 'auth@amt.intel.com')
@@ -158,13 +160,17 @@ function lme_heci()
                     }
                     break;
                 case APF_GLOBAL_REQUEST:    
+                    if (chunk.length < 5) { break; }
                     var nameLen = chunk.readUInt32BE(1);
+                    if (chunk.length < nameLen + 5) { break; }
                     var name = chunk.slice(5, nameLen + 5).toString();
                     
                     switch(name)
                     {
                         case 'tcpip-forward':
+                            if (chunk.length < nameLen + 10) { break; }
                             var len = chunk.readUInt32BE(nameLen + 6);
+                            if (chunk.length < nameLen + 14 + len) { break; }
                             var port = chunk.readUInt32BE(nameLen + 10 + len);
                             //console.log("[" + chunk.length + "/" + len + "] APF_GLOBAL_REQUEST for: " + name + " on port " + port);
                             if (this[name] == undefined)
@@ -194,6 +200,7 @@ function lme_heci()
                     }
                     break;
                 case APF_CHANNEL_OPEN_CONFIRMATION:    
+                    if (chunk.length < 13) { break; }
 			        var rChannel = chunk.readUInt32BE(1);
 			        var sChannel = chunk.readUInt32BE(5);
 			        var wSize = chunk.readUInt32BE(9);
@@ -241,6 +248,7 @@ function lme_heci()
 
 		    	    break;
                 case APF_PROTOCOLVERSION:   
+                    if (chunk.length < 13) { break; }
                     var major = chunk.readUInt32BE(1);
                     var minor = chunk.readUInt32BE(5);
                     var reason = chunk.readUInt32BE(9);
@@ -253,6 +261,7 @@ function lme_heci()
                     this.write(outBuffer);
                     break;
                 case APF_CHANNEL_WINDOW_ADJUST:
+                    if (chunk.length < 9) { break; }
                     var rChannelId = chunk.readUInt32BE(1);
                     var bytesToAdd = chunk.readUInt32BE(5);
                     if (this.sockets[rChannelId] != undefined)
@@ -269,8 +278,10 @@ function lme_heci()
                     }
                     break;
                 case APF_CHANNEL_DATA:
+                    if (chunk.length < 9) { break; }
                     var rChannelId = chunk.readUInt32BE(1);
                     var dataLen = chunk.readUInt32BE(5);
+                    if (chunk.length < 9 + dataLen) { break; }
                     var data = chunk.slice(9, 9 + dataLen);
                     if (this.sockets[rChannelId] != undefined)
                     {
@@ -291,6 +302,7 @@ function lme_heci()
                     }
                     break;
                 case APF_CHANNEL_CLOSE:
+                    if (chunk.length < 5) { break; }
                     var rChannelId = chunk.readUInt32BE(1);
                     if (this.sockets[rChannelId] != undefined)
                     {
