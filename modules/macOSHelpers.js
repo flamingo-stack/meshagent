@@ -1,5 +1,17 @@
 /*
-Copyright 2024
+Copyright 2006 - 2024 Intel Corporation
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+	http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 
 macOS Platform Helper Functions
 Centralizes macOS-specific utilities for bundle detection, service naming, and system operations
@@ -169,19 +181,22 @@ function copyBundleWithDitto(sourcePath, targetPath) {
     var child_process = require('child_process');
     var fs = require('fs');
 
-    var dittoError = null;
     var child = child_process.execFile(MACOS_PATHS.DITTO, ['ditto', sourcePath, targetPath]);
 
+    child.stderr.str = '';
     child.stderr.on('data', function(d) {
-        dittoError = d.toString();
+        this.str += d.toString();
         process.stderr.write(d);
     });
 
     child.waitExit();
 
-    // Verify the copy succeeded by checking if target exists
-    if (dittoError || !fs.existsSync(targetPath)) {
-        throw new Error('Bundle copy failed: ' + (dittoError || 'Target not created'));
+    var dittoError = child.stderr.str || null;
+    var exitCode = child.exitCode;
+
+    // Verify the copy succeeded by checking the exit code, stderr output, and target existence
+    if ((exitCode !== undefined && exitCode !== null && exitCode !== 0) || dittoError || !fs.existsSync(targetPath)) {
+        throw new Error('Bundle copy failed: ' + (dittoError || ('Target not created (exit code: ' + exitCode + ')')));
     }
 
     return true;
