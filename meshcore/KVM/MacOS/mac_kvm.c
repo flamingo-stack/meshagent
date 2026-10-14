@@ -35,6 +35,7 @@ limitations under the License.
 
 #include "mac_kvm.h"
 #include "mac_kvm_auth.h"
+#include "mac_display.h"
 #include "../../meshdefines.h"
 #include "../../meshinfo.h"
 #include "../../../microstack/ILibParsers.h"
@@ -73,9 +74,11 @@ static char *KVM_Session_Signal_File = NULL;
 
 
 int KVM_AGENT_FD = -1;
+static pthread_mutex_t KVM_SEND_LOCK = PTHREAD_MUTEX_INITIALIZER;  // The input thread's direct replies must not land inside a tile the capture thread is writing
 int KVM_SEND(char *buffer, int bufferLen)
 {
 	int retVal = -1;
+	pthread_mutex_lock(&KVM_SEND_LOCK);
 	retVal = write(KVM_AGENT_FD == -1 ? STDOUT_FILENO : KVM_AGENT_FD, buffer, bufferLen);
 	if (KVM_AGENT_FD == -1) { fsync(STDOUT_FILENO); }
 	else
@@ -88,6 +91,7 @@ int KVM_SEND(char *buffer, int bufferLen)
 			fsync(STDOUT_FILENO);
 		}
 	}
+	pthread_mutex_unlock(&KVM_SEND_LOCK);
 	return(retVal);
 }
 
@@ -98,7 +102,12 @@ int SH_HANDLE = 0;
 int SCREEN_WIDTH = 0;
 int SCREEN_HEIGHT = 0;
 int SCREEN_SCALE = 1;
-int SCREEN_SCALE_SET = 0;
+static mac_display_list_t g_displays;          // Displays as listed to the console, ids 1..N
+static mac_display_view_t g_view;              // The display being captured: written by the capture thread, read by the input thread
+static pthread_mutex_t g_viewLock = PTHREAD_MUTEX_INITIALIZER;
+static volatile int g_displayRequest = 0;      // MNG_KVM_SET_DISPLAY id waiting for the capture loop, 0 = none
+static volatile int g_displayListRequest = 0;  // MNG_KVM_GET_DISPLAYS waiting for the capture loop
+static volatile int g_refreshRequest = 0;      // MNG_KVM_REFRESH waiting for the capture loop
 int SCREEN_DEPTH = 0;
 int TILE_WIDTH = 0;
 int TILE_HEIGHT = 0;
@@ -165,6 +174,58 @@ void kvm_send_resolution()
 	ILibQueue_Lock(g_messageQ);
 	ILibQueue_EnQueue(g_messageQ, buffer);
 	ILibQueue_UnLock(g_messageQ);
+}
+
+static void kvm_publish_view(const mac_display_view_t *view)
+{
+	pthread_mutex_lock(&g_viewLock);
+	g_view = *view;
+	pthread_mutex_unlock(&g_viewLock);
+}
+
+static void kvm_current_view(mac_display_view_t *view)
+{
+	pthread_mutex_lock(&g_viewLock);
+	*view = g_view;
+	pthread_mutex_unlock(&g_viewLock);
+}
+
+// Queues the display positions (82) and the display list with the selection (11), as the Windows agent does
+void kvm_send_display_list()
+{
+	unsigned char *info = ILibMemory_SmartAllocate(4 + (10 * g_displays.count));
+	unsigned char *list = ILibMemory_SmartAllocate(8 + (2 * g_displays.count));
+
+	mac_display_encode_info(&g_displays, info, (int)ILibMemory_Size(info));
+	mac_display_encode_list(&g_displays, mac_display_index(&g_displays, SCREEN_NUM), list, (int)ILibMemory_Size(list));
+
+	ILibQueue_Lock(g_messageQ);
+	ILibQueue_EnQueue(g_messageQ, info);
+	ILibQueue_EnQueue(g_messageQ, list);
+	ILibQueue_UnLock(g_messageQ);
+}
+
+// MNG_KVM_REFRESH, serviced by the capture thread: the screen size straight to the socket, then every tile again
+static void kvm_refresh()
+{
+	char buffer[8];
+	int row, col;
+
+	((unsigned short*)buffer)[0] = (unsigned short)htons((unsigned short)MNG_KVM_SCREEN);
+	((unsigned short*)buffer)[1] = (unsigned short)htons((unsigned short)8);
+	((unsigned short*)buffer)[2] = (unsigned short)htons((unsigned short)SCREEN_WIDTH);
+	((unsigned short*)buffer)[3] = (unsigned short)htons((unsigned short)SCREEN_HEIGHT);
+	KVM_SEND(buffer, 8);
+
+	if (g_tileInfo == NULL) { return; }
+	for (row = 0; row < TILE_HEIGHT_COUNT; row++)
+	{
+		for (col = 0; col < TILE_WIDTH_COUNT; col++)
+		{
+			g_tileInfo[row][col].crc = 0xFF;
+			g_tileInfo[row][col].flag = TILE_TODO;
+		}
+	}
 }
 
 #define BUFSIZE 65535
@@ -305,6 +366,7 @@ int kvm_init()
 {
 	ILibCriticalLogFilename = "KVMAgent.log";  // -kvm1 is a LaunchAgent, not a slave process
 	int old_height_count = TILE_HEIGHT_COUNT;
+	mac_display_view_t view;
 
 	{
 		char tmp[256];
@@ -313,28 +375,29 @@ int kvm_init()
 		fsync(STDOUT_FILENO);
 	}
 
-	SCREEN_NUM = CGMainDisplayID();
+	// The capture loop picks the display; without a pick (session start) this is the main display, as before
+	if (mac_display_view(&g_displays, SCREEN_NUM, &view) == 0)
+	{
+		mac_display_refresh(&g_displays);
+		SCREEN_NUM = mac_display_resolve(&g_displays, SCREEN_NUM, 0);
+		if (mac_display_view(&g_displays, SCREEN_NUM, &view) == 0)
+		{
+			write(STDOUT_FILENO, "KVM: No display to capture\n", 27);
+			fsync(STDOUT_FILENO);
+			g_shutdown = 1;
+			return -1;
+		}
+	}
+
+	kvm_publish_view(&view);
+	SCREEN_WIDTH = view.pxW;
+	SCREEN_HEIGHT = view.pxH;
+	SCREEN_SCALE = (view.ptW > 0 && view.pxW >= view.ptW) ? (view.pxW / view.ptW) : 1;
 
 	{
 		char tmp[256];
-		int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: CGMainDisplayID() returned screen_num=%d\n", SCREEN_NUM);
-		write(STDOUT_FILENO, tmp, tmplen);
-		fsync(STDOUT_FILENO);
-	}
-
-	if (SCREEN_WIDTH > 0)
-	{
-		CGDisplayModeRef mode = CGDisplayCopyDisplayMode(SCREEN_NUM);
-		SCREEN_SCALE = (int) CGDisplayModeGetPixelWidth(mode) / SCREEN_WIDTH;
-		CGDisplayModeRelease(mode);
-	}
-
-	SCREEN_HEIGHT = CGDisplayPixelsHigh(SCREEN_NUM) * SCREEN_SCALE;
-	SCREEN_WIDTH = CGDisplayPixelsWide(SCREEN_NUM) * SCREEN_SCALE;
-
-	{
-		char tmp[256];
-		int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Screen resolution: %dx%d, scale=%d\n", SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_SCALE);
+		int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Display %u (%d of %d) selected: %dx%d px, %dx%d pt at (%d,%d), scale=%d\n",
+			SCREEN_NUM, mac_display_index(&g_displays, SCREEN_NUM), g_displays.count, SCREEN_WIDTH, SCREEN_HEIGHT, view.ptW, view.ptH, view.x, view.y, SCREEN_SCALE);
 		write(STDOUT_FILENO, tmp, tmplen);
 		fsync(STDOUT_FILENO);
 	}
@@ -396,16 +459,17 @@ int kvm_server_inputdata(char* block, int blocklen)
 		}
 		case MNG_KVM_MOUSE: // Mouse
 		{
-			int x, y;
+			double x, y;
 			short w = 0;
+			mac_display_view_t view;
 			if (size == 10 || size == 12)
 			{
-				x = ((int)ntohs(((unsigned short*)(block))[3])) / SCREEN_SCALE;
-				y = ((int)ntohs(((unsigned short*)(block))[4])) / SCREEN_SCALE;
-				
+				// Capture pixels of the selected display to global display coordinates
+				kvm_current_view(&view);
+				mac_display_map_pointer(&view, (int)ntohs(((unsigned short*)(block))[3]), (int)ntohs(((unsigned short*)(block))[4]), &x, &y);
+
 				if (size == 12) w = ((short)ntohs(((short*)(block))[5]));
-				
-				//printf("x:%d, y:%d, b:%d, w:%d\n", x, y, block[5], w);
+
 				MouseAction(x, y, (int)(unsigned char)(block[5]), w);
 			}
 			break;
@@ -419,31 +483,9 @@ int kvm_server_inputdata(char* block, int blocklen)
 		}
 		case MNG_KVM_REFRESH: // Refresh
 		{
-			// FIX: Send resolution IMMEDIATELY, not via queue, to ensure it arrives before any tile data
-			// This fixes the race condition where tiles were sent before resolution, causing wrong canvas size
-			char resolution_buffer[8];
-			((unsigned short*)resolution_buffer)[0] = (unsigned short)htons((unsigned short)MNG_KVM_SCREEN);
-			((unsigned short*)resolution_buffer)[1] = (unsigned short)htons((unsigned short)8);
-			((unsigned short*)resolution_buffer)[2] = (unsigned short)htons((unsigned short)SCREEN_WIDTH);
-			((unsigned short*)resolution_buffer)[3] = (unsigned short)htons((unsigned short)SCREEN_HEIGHT);
-
-			KVM_SEND(resolution_buffer, 8);
-
-			int row, col;
+			// The capture thread owns the tile table and the order on the socket, so it answers
 			if (size != 4) break;
-			if (g_tileInfo == NULL) {
-				if ((g_tileInfo = (struct tileInfo_t **) malloc(TILE_HEIGHT_COUNT * sizeof(struct tileInfo_t *))) == NULL) ILIBCRITICALEXIT(254);
-				for (row = 0; row < TILE_HEIGHT_COUNT; row++) {
-					if ((g_tileInfo[row] = (struct tileInfo_t *) malloc(TILE_WIDTH_COUNT * sizeof(struct tileInfo_t))) == NULL) ILIBCRITICALEXIT(254);
-				}
-			}
-			for (row = 0; row < TILE_HEIGHT_COUNT; row++) {
-				for (col = 0; col < TILE_WIDTH_COUNT; col++) {
-					g_tileInfo[row][col].crc = 0xFF;
-					g_tileInfo[row][col].flag = 0;
-				}
-			}
-
+			g_refreshRequest = 1;
 			break;
 		}
 		case MNG_KVM_PAUSE: // Pause
@@ -456,6 +498,21 @@ int kvm_server_inputdata(char* block, int blocklen)
 		{
 			//int fr = ((int)ntohs(((unsigned short*)(block))[2]));
 			//if (fr > 20 && fr < 2000) FRAME_RATE_TIMER = fr;
+			break;
+		}
+		case MNG_KVM_GET_DISPLAYS:
+		{
+			g_displayListRequest = 1;
+			break;
+		}
+		case MNG_KVM_SET_DISPLAY:
+		{
+			// 0xFFFF ("all displays") is not offered on macOS; an id the capture loop does not know is dropped there
+			unsigned short id;
+			if (size < 6) break;
+			id = ntohs(((unsigned short*)(block))[2]);
+			if (id == 0 || id == 0xFFFF) break;
+			g_displayRequest = id;
 			break;
 		}
 	}
@@ -689,7 +746,7 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 	long long tilesize = 0;
 	void *desktop = NULL;
 	void *buf = NULL;
-	int screen_height, screen_width, screen_num;
+	int screen_num;
 	int written = 0;
 	struct sockaddr_un serveraddr;
 
@@ -904,32 +961,40 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 			}
 		}
 
-		screen_num = CGMainDisplayID();
+		// Displays: hot-plug, a pick from the console, a list request, a refresh
+		{
+			int resend = mac_display_refresh(&g_displays);
+			int requested = __sync_lock_test_and_set(&g_displayRequest, 0);
+			CGDirectDisplayID target;
+			mac_display_view_t view;
 
-		if (screen_num == 0) { g_shutdown = 1; senddebug(-2); break; }
-		
-		if (SCREEN_SCALE_SET == 0)
-		{
-			CGDisplayModeRef mode = CGDisplayCopyDisplayMode(screen_num);
-			if (SCREEN_WIDTH > 0 && SCREEN_SCALE < (int) CGDisplayModeGetPixelWidth(mode) / SCREEN_WIDTH)
+			if (g_displays.count == 0) { g_shutdown = 1; senddebug(-2); break; }
+
+			// A dropped pick (unknown id) gets the list again, so the console learns what is streamed
+			if (requested != 0 && mac_display_at(&g_displays, requested) == kCGNullDirectDisplay) { resend = 1; }
+
+			// The pick when it exists, else the current display while it is still there, else the main display
+			target = mac_display_resolve(&g_displays, SCREEN_NUM, requested);
+			mac_display_view(&g_displays, target, &view);
+			if (target != SCREEN_NUM || view.pxW != SCREEN_WIDTH || view.pxH != SCREEN_HEIGHT)
 			{
-				SCREEN_SCALE = (int) CGDisplayModeGetPixelWidth(mode) / SCREEN_WIDTH;
-				SCREEN_SCALE_SET = 1;
-			}			 
-			CGDisplayModeRelease(mode);
+				// New capture size, full repaint and the list with the new selection answer any pending request
+				SCREEN_NUM = target;
+				kvm_init();
+				kvm_send_display_list();
+				__sync_lock_test_and_set(&g_displayListRequest, 0);
+				__sync_lock_test_and_set(&g_refreshRequest, 0);
+				continue;
+			}
+			kvm_publish_view(&view);
+			if (resend || __sync_lock_test_and_set(&g_displayListRequest, 0)) { kvm_send_display_list(); }
+			if (__sync_lock_test_and_set(&g_refreshRequest, 0)) { kvm_refresh(); }
 		}
-		
-		screen_height = CGDisplayPixelsHigh(screen_num) * SCREEN_SCALE;
-		screen_width = CGDisplayPixelsWide(screen_num) * SCREEN_SCALE;
-		
-		if ((SCREEN_HEIGHT != screen_height || (SCREEN_WIDTH != screen_width) || SCREEN_NUM != screen_num)) 
-		{
-			kvm_init();
-			continue;
-		}
+		screen_num = SCREEN_NUM;
 
 		//senddebug(screen_num);
 		static int capture_attempt_count = 0;
+		static int captureFailures = 0;
 		capture_attempt_count++;
 		if (capture_attempt_count <= 3) {
 			char tmp[256];
@@ -951,7 +1016,20 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 		if (image == NULL)
 		{
 			char tmp[256];
-			int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: FATAL - Screen capture failed! Screen Recording permission is DENIED. g_shutdown=1\n");
+			int tmplen;
+
+			// A display that was just unplugged (or is reconfiguring) also captures nothing: the next pass falls back
+			mac_display_refresh(&g_displays);
+			if (mac_display_index(&g_displays, screen_num) == 0 || ++captureFailures < 5)
+			{
+				tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: CGDisplayCreateImage failed for display %u (listed=%d, failures=%d), retrying\n", screen_num, mac_display_index(&g_displays, screen_num) != 0, captureFailures);
+				write(STDOUT_FILENO, tmp, tmplen);
+				fsync(STDOUT_FILENO);
+				usleep(100000);
+				continue;
+			}
+
+			tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: FATAL - Screen capture failed! Screen Recording permission is DENIED. g_shutdown=1\n");
 			write(STDOUT_FILENO, tmp, tmplen);
 			fsync(STDOUT_FILENO);
 			g_shutdown = 1;
@@ -959,6 +1037,7 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 		}
 		else {
 			//senddebug(100);
+			captureFailures = 0;
 			getScreenBuffer((unsigned char **)&desktop, &desktopsize, image);
 
 			for (y = 0; y < TILE_HEIGHT_COUNT; y++)
@@ -969,6 +1048,8 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 					if (!g_shutdown && (g_pause)) { usleep(100000); g_pause = 0; } //HACK: Change this
 
 					if (g_shutdown) { x = TILE_WIDTH_COUNT; y = TILE_HEIGHT_COUNT; break; }
+					// A pick is waiting: the next pass switches displays, the rest of this one would be thrown away
+					if (g_displayRequest != 0) { x = TILE_WIDTH_COUNT; y = TILE_HEIGHT_COUNT; break; }
 
 					if (g_tileInfo[y][x].flag == TILE_SENT) continue;
 					if (g_tileInfo[y][x].flag == TILE_DONT_SEND) continue;
