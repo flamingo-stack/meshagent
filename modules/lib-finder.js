@@ -43,6 +43,8 @@ function find(name)
 	    case 'linux':
 	        return (require('monitor-info').getLibInfo(name));
 	        break;
+	    default:
+	        return ([]);
 	}
 }
 
@@ -74,3 +76,4 @@ function findBinary(bin)
 module.exports = find;
 module.exports.hasBinary = hasBinary;
 module.exports.findBinary = findBinary;
+
