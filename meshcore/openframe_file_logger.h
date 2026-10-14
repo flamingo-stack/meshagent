@@ -1,11 +1,28 @@
 /*
+ * Copyright (C) Intel Corporation
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/*
 OpenFrame File Logger - Duplicates printf to both console and file
 Usage: Call enable_file_logging() at the start of main()
 
 Features:
-- Single log file: meshagent.log
+- Single log file: meshcentral-agent.log
 - Auto-rotation at 10MB
-- Keeps only 1 archive (meshagent.log.old.gz)
+- Keeps only 1 archive (meshcentral-agent.log.old.gz)
 */
 
 #ifndef OPENFRAME_FILE_LOGGER_H
@@ -39,6 +56,7 @@ Features:
 #include <io.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <zlib.h>
 #endif
 
 /* Macro to ignore return values */
@@ -173,30 +191,6 @@ static inline long get_file_size(const char* filepath) {
 }
 
 static inline int compress_file_to_gzip(const char* source_path, const char* dest_path) {
-#ifdef WIN32
-    FILE* src = fopen(source_path, "rb");
-    FILE* dst = fopen(dest_path, "wb");
-    char buffer[8192];
-    size_t bytes;
-
-    if (!src || !dst) {
-        if (src) fclose(src);
-        if (dst) fclose(dst);
-        return 0;
-    }
-
-    while ((bytes = fread(buffer, 1, sizeof(buffer), src)) > 0) {
-        if (fwrite(buffer, 1, bytes, dst) != bytes) {
-            fclose(src);
-            fclose(dst);
-            return 0;
-        }
-    }
-
-    fclose(src);
-    fclose(dst);
-    return 1;
-#else
     FILE* src = fopen(source_path, "rb");
     gzFile dst = gzopen(dest_path, "wb9");
     char buffer[8192];
@@ -219,7 +213,6 @@ static inline int compress_file_to_gzip(const char* source_path, const char* des
     fclose(src);
     gzclose(dst);
     return 1;
-#endif
 }
 
 static inline int rotate_log_file(void) {
@@ -708,3 +701,4 @@ static inline void disable_file_logging(void)
 }
 
 #endif // OPENFRAME_FILE_LOGGER_H
+
