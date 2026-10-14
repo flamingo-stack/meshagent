@@ -246,17 +246,17 @@ jobs:
           mkdir -p openssl-linux-libs/riscv64
 
           # Copy all libraries to their respective architecture folders
-          cp artifacts/openssl-linux-x86-64/*.a openssl-linux-libs/x86-64/ || true
-          cp artifacts/openssl-linux-alpine-x86-64/*.a openssl-linux-libs/alpine-x86-64/ || true
-          cp artifacts/openssl-linux-openwrt-x86-64/*.a openssl-linux-libs/openwrt_x86_64/ || true
-          cp artifacts/openssl-linux-x86/*.a openssl-linux-libs/x86/ || true
-          cp artifacts/openssl-linux-arm64/*.a openssl-linux-libs/arm64/ || true
-          cp artifacts/openssl-linux-aarch64/*.a openssl-linux-libs/aarch64/ || true
-          cp artifacts/openssl-linux-armhf/*.a openssl-linux-libs/armhf/ || true
-          cp artifacts/openssl-linux-mips24kc/*.a openssl-linux-libs/mips24kc/ || true
-          cp artifacts/openssl-linux-mipsel24kc/*.a openssl-linux-libs/mipsel24kc/ || true
-          cp artifacts/openssl-linux-aarch64-cortex-a53/*.a openssl-linux-libs/aarch64-cortex-a53/ || true
-          cp artifacts/openssl-linux-riscv64/*.a openssl-linux-libs/riscv64/ || true
+          cp artifacts/openssl-linux-x86-64/*.a openssl-linux-libs/x86-64/
+          cp artifacts/openssl-linux-alpine-x86-64/*.a openssl-linux-libs/alpine-x86-64/
+          cp artifacts/openssl-linux-openwrt-x86-64/*.a openssl-linux-libs/openwrt_x86_64/
+          cp artifacts/openssl-linux-x86/*.a openssl-linux-libs/x86/
+          cp artifacts/openssl-linux-arm64/*.a openssl-linux-libs/arm64/
+          cp artifacts/openssl-linux-aarch64/*.a openssl-linux-libs/aarch64/
+          cp artifacts/openssl-linux-armhf/*.a openssl-linux-libs/armhf/
+          cp artifacts/openssl-linux-mips24kc/*.a openssl-linux-libs/mips24kc/
+          cp artifacts/openssl-linux-mipsel24kc/*.a openssl-linux-libs/mipsel24kc/
+          cp artifacts/openssl-linux-aarch64-cortex-a53/*.a openssl-linux-libs/aarch64-cortex-a53/
+          cp artifacts/openssl-linux-riscv64/*.a openssl-linux-libs/riscv64/
 
           # Display results
           echo "=== Build Results ==="
@@ -265,14 +265,14 @@ jobs:
       - name: Upload combined artifact
         uses: actions/upload-artifact@v4
         with:
-          name: openssl-3.5.4-linux-all
+          name: openssl-${{ github.event.inputs.openssl_version || '3.5.4' }}-linux-all
           path: openssl-linux-libs/
           retention-days: 90
 
       - name: Create build report
         run: |
-          cat > BUILD_REPORT.md << 'EOF'
-          # OpenSSL 3.5.4 Linux Build Report
+          cat > BUILD_REPORT.md << EOF
+          # OpenSSL ${{ github.event.inputs.openssl_version || '3.5.4' }} Linux Build Report
 
           ## Build Date
           $(date -u +"%Y-%m-%d %H:%M:%S UTC")
@@ -358,3 +358,4 @@ jobs:
           name: build-report
           path: BUILD_REPORT.md
           retention-days: 90
+

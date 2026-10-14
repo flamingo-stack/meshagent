@@ -151,7 +151,7 @@ function dispatchRead(sid)
         var childProperties = { sessionId: id };
         if (process.platform == 'linux')
         {
-            xinfo = require('monitor-info').getXInfo(id);
+            var xinfo = require('monitor-info').getXInfo(id);
             childProperties.env = { XAUTHORITY: xinfo.xauthority, DISPLAY: xinfo.display };
         }
 
@@ -211,7 +211,7 @@ function dispatchWrite(data, sid)
         var childProperties = { sessionId: id };
         if (process.platform == 'linux')
         {
-            xinfo = require('monitor-info').getXInfo(id);
+            var xinfo = require('monitor-info').getXInfo(id);
             childProperties.env = { XAUTHORITY: xinfo.xauthority, DISPLAY: xinfo.display };
         }
 
@@ -380,8 +380,8 @@ function lin_xclip_copy(txt)
     var xinfo = require('monitor-info').getXInfo(id);
     ret.child = require('child_process').execFile(require('clipboard').xclip, ['xclip(' + ret._hashCode() + ')', '-selection', 'c'], { uid: id, env: xinfo.exportEnv() });
     ret.child.promise = ret;
-    ret.child.stderr.on('data', function (c) { console.log(c.toString()); });
-    ret.child.stdout.on('data', function (c) { console.log(c.toString()); });
+    ret.child.stderr.str = ''; ret.child.stderr.on('data', function (c) { this.str += c.toString(); console.log(c.toString()); });
+    ret.child.stdout.str = ''; ret.child.stdout.on('data', function (c) { this.str += c.toString(); console.log(c.toString()); });
     ret.child._helper = function _helper(p)
     {
         var ch = require('child_process').execFile('/bin/sh', ['sh']);

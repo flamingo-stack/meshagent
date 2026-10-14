@@ -273,7 +273,7 @@ function upnpaction(service, xmlDoc)
             {
                 parameters += ('<u:' + this.arguments[i].name + '>' + args[this.arguments[i].name] + '</u:' + this.arguments[i].name + '>');
             }
-            else if(this.arguments.direction == 'in')
+            else if(this.arguments[i].direction == 'in')
             {
                 ret._rej('missing parameter: [' + this.arguments[i].name + '] when invoking Action: ' + this.name);
                 return (ret);

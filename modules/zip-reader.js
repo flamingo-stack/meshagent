@@ -46,6 +46,7 @@ function extractNext(p)
 {
     if (p.pending.length == 0) { p.source.close(); p._res(); return; }
     var next = p.pending.pop();
+    if (next.indexOf('..') !== -1) { p.source.close(); p._rej(new Error('Illegal path in archive entry: ' + next)); return; }
     var dest = p.baseFolder + (process.platform == 'win32' ? '\\' : '/') + next;
     if (process.platform == 'win32')
     {
@@ -75,7 +76,7 @@ function extractNext(p)
     {
         if (this.promise._stream.crc != this.promise.source.crc(this.name))
         {
-            this.promise._rej('CRC Check failed');
+            this.promise._rej(new Error('CRC Check failed'));
             return;
         }
         extractNext(this.promise);
