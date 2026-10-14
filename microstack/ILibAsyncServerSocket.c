@@ -385,7 +385,17 @@ void ILibAsyncServerSocket_OnConnectSink(ILibAsyncSocket_SocketModule socketModu
 {
 	struct ILibAsyncServerSocket_Data *data = (struct ILibAsyncServerSocket_Data*)user;
 	if (data == NULL) return;
-	if (Connected == 0) { free(data); data = NULL; return; } // Connection Failed, clean up
+	if (Connected == 0)
+	{
+		// Connection Failed, clean up
+		if (ILibAsyncSocket_GetUser(socketModule) != NULL)
+		{
+			ILibAsyncSocket_SetUser(socketModule, NULL);
+		}
+		free(data);
+		data = NULL;
+		return;
+	}
 	if (data->module->OnConnect != NULL) data->module->OnConnect(data->module, socketModule, &(data->user));
 }
 // 
@@ -791,3 +801,4 @@ void ILibAsyncServerSocket_SSL_SetSink(ILibAsyncServerSocket_ServerModule AsyncS
 	((struct ILibAsyncServerSocketModule*)AsyncServerSocketModule)->OnSSLContext = handler;
 }
 #endif
+

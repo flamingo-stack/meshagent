@@ -3,6 +3,10 @@
 const fs = require('fs');
 const zlib = require('zlib');
 
+function escapeRegExp(str) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function embedModule(moduleName) {
     const filePath = `modules_expanded/${moduleName}.js`;
     const cFilePath = 'microscript/ILibDuktape_Polyfills.c';
@@ -69,13 +73,14 @@ function embedModule(moduleName) {
     }
     
     // Проверяем, не встроен ли уже этот модуль
-    const existingModulePattern = new RegExp(`addCompressedModule\\('${moduleName}'`);
+    const escapedModuleName = escapeRegExp(moduleName);
+    const existingModulePattern = new RegExp(`addCompressedModule\\('${escapedModuleName}'(?=[',])`);
     const bodySection = cFileContent.substring(beginIndex, endIndex);
     
     if (existingModulePattern.test(bodySection)) {
         console.log(`- Module '${moduleName}' is already embedded, replacing...`);
         // Удаляем старую версию модуля
-        const modulePattern = new RegExp(`\\s*duk_peval_string_noresult\\(ctx, "addCompressedModule\\('${moduleName}'[^;]+;\\);\\s*`, 'g');
+        const modulePattern = new RegExp(`\\s*duk_peval_string_noresult\\(ctx, "addCompressedModule\\('${escapedModuleName}'(?=[',])[^;]+;\\);\\s*`, 'g');
         const cleanedContent = cFileContent.replace(modulePattern, '');
         
         // Создаем новое содержимое
@@ -110,3 +115,4 @@ console.log('MeshAgent Module Embedder');
 console.log('='.repeat(50));
 
 embedModule(moduleName);
+

@@ -193,7 +193,6 @@ function WinCrypto()
                 if (delimiter == '') { delimiter = ', '; }
             }
         }
-        console.log('Certificate Options: ' + inStr);
 
         // Check Extensions
         if (options._keyRestrictions)
@@ -285,10 +284,6 @@ function WinCrypto()
         expiration.toBuffer().writeUInt16LE(year, 0);
 
         var pCert = this._Crypt32.CertCreateSelfSignCertificate(0, blob, 0, keyProvider, cryptAlgorithm, 0, expiration, ext ? ext : 0);
-        if (pCert.Val == 0) {
-            console.log('Error Code = ' + this._Kernel32.GetLastError().Val);
-        }
-        console.log('pCert = ' + pCert.Val);
 
         var privateKey = this._marshal.CreatePointer();
         var keyspec = this._marshal.CreateVariable(4);
@@ -300,10 +295,6 @@ function WinCrypto()
             pCert.privateKey = privateKey.Deref();
             pCert.privateKey.keySpec = keyspec.toBuffer().readUInt32LE();
             pCert.privateKey.needFree = needFree.toBuffer().readUInt32LE();
-            console.log('keyResult=' + keyResult.Val);
-            console.log('NeedFree=' + needFree.toBuffer().readUInt32LE());
-            console.log('KeySpec=' + keyspec.toBuffer().readUInt32LE());
-
 
             var certInfo = pCert.Deref(this._marshal.PointerSize == 4 ? 12 : 24, this._marshal.PointerSize).Deref(this._marshal.PointerSize == 4 ? 112 : 208);
             var signatureAlgorithm = certInfo.Deref(this._marshal.PointerSize == 4 ? 12 : 24, this._marshal.PointerSize);
@@ -317,7 +308,6 @@ function WinCrypto()
             pCert.publicKey.oid = keyAlgorithm.Deref().String;
             pCert.SubjectPublicKeyInfo = publicKeyInfo;
             pCert.Subject = certInfo.Deref(this._marshal.PointerSize == 4 ? 48 : 80, this._marshal.PointerSize == 4 ? 112 : 208);
-            console.log('PublicKey/OID: ' + pCert.publicKey.oid);
         }
         pCert.parent = this;
         pCert.signMessage = function signMessage(message, options)
@@ -390,7 +380,6 @@ function WinCrypto()
         {
             var signerCert = this._marshal.CreatePointer();
             var decoded = this._marshal.CreateVariable(decodedLength.toBuffer().readUInt32LE());
-            console.log('Decoded Length = ' + decodedLength.toBuffer().readUInt32LE());
 
             if (this._Crypt32.CryptVerifyMessageSignature(verifyParam, 0, signedMessage, message.length, decoded, decodedLength, 0).Val != 0)
             {
@@ -410,7 +399,6 @@ function WinCrypto()
     };
     this.loadCert = function loadCert(encodedCert, options)
     {
-        console.log('LoadCert: ' + options.encodingType, 'Length: ' + encodedCert.length);
         var pbCertEncoded = this._marshal.CreateVariable(encodedCert.length);
         encodedCert.copy(pbCertEncoded.toBuffer());
 
@@ -635,9 +623,7 @@ function WinCrypto()
         {
             // success
             var pbEncoded = this._marshal.CreateVariable(dwSize.toBuffer().readUInt32LE());
-            console.log('KeySpec: ' + signingCert.privateKey.keySpec);
-            console.log(this._Crypt32.CryptSignAndEncodeCertificate(signingCert.privateKey, signingCert.privateKey.keySpec, X509_ASN_ENCODING, X509_CERT_TO_BE_SIGNED, certinfo, sig, 0, pbEncoded, dwSize).Val);
-            console.log('dwSize: ' + dwSize.toBuffer().readUInt32LE());
+            this._Crypt32.CryptSignAndEncodeCertificate(signingCert.privateKey, signingCert.privateKey.keySpec, X509_ASN_ENCODING, X509_CERT_TO_BE_SIGNED, certinfo, sig, 0, pbEncoded, dwSize);
             pbEncoded._size = dwSize.toBuffer().readUInt32LE();
             return (pbEncoded);
         }
@@ -664,9 +650,7 @@ function WinCrypto()
         {
             // success
             var pbEncoded = this._marshal.CreateVariable(dwSize.toBuffer().readUInt32LE());
-            console.log('KeySpec: ' + signingCert.privateKey.keySpec);
-            console.log(this._Crypt32.CryptSignAndEncodeCertificate(signingCert.privateKey, signingCert.privateKey.keySpec, X509_ASN_ENCODING, X509_CERT_REQUEST_TO_BE_SIGNED, certRequestInfo, sig, 0, pbEncoded, dwSize).Val);
-            console.log('dwSize: ' + dwSize.toBuffer().readUInt32LE());
+            this._Crypt32.CryptSignAndEncodeCertificate(signingCert.privateKey, signingCert.privateKey.keySpec, X509_ASN_ENCODING, X509_CERT_REQUEST_TO_BE_SIGNED, certRequestInfo, sig, 0, pbEncoded, dwSize);
             pbEncoded._size = dwSize.toBuffer().readUInt32LE();
             return (pbEncoded);
         }

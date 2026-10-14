@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-#if defined(_LINKVM)
+#if defined(_LINKVM) && defined(WIN32)
 
 #include <Windows.h>
 #include <Winuser.h>
@@ -611,3 +611,4 @@ int TouchAction2(char* data, int datalen, int scaling)
 }
 
 #endif
+

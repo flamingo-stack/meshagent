@@ -32,6 +32,7 @@ console.canonical = false;  // This takes the console out of canonical mode, whi
 process.stdin.chars = '';   // This is where we will store the result
 process.stdin.on('data', function (c)
 {
+    var i;
     switch(c[0])
     {
         case 127: // Linux Backspace
