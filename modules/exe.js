@@ -157,7 +157,7 @@ function OnWroteExe() {
 
     this.write(js, function () {
         // Write the size of the javascript without padding
-        var sz = new Buffer(4);
+        var sz = Buffer.alloc(4);
         sz.writeInt32BE(js.length, 0);
         this.write(sz);
 
@@ -182,3 +182,4 @@ function escapeCodeString(str) {
     }
     return r;
 }
+
