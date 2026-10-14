@@ -95,6 +95,7 @@ int write_JPEG_buffer(JSAMPLE * image_buffer, int image_width, int image_height,
 
 	jpeg_create_compress(&cinfo);
 	cinfo.dest = (struct jpeg_destination_mgr *) malloc(sizeof(struct jpeg_destination_mgr));
+	if (cinfo.dest == NULL) { ILIBCRITICALEXIT(254); }
 	cinfo.dest->init_destination = &init_destination;
 	cinfo.dest->empty_output_buffer = &empty_output_buffer;
 	cinfo.dest->term_destination = &term_destination;
@@ -132,3 +133,4 @@ int write_JPEG_buffer(JSAMPLE * image_buffer, int image_width, int image_height,
 
 	return 0;
 }
+

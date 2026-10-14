@@ -367,7 +367,6 @@ function getFirewallRulesAsync2(p)
             }
             p.emit('rule', obj);
             if (p.options.noResult != true) { p.arr.push(obj); }
-            p.arr.push(obj);
         }
         rule.funcs.Release(rule.Deref());
         setImmediate(getFirewallRulesAsync2, p);

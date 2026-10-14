@@ -134,7 +134,7 @@ jobs:
 
       - name: Create build report
         run: |
-          cat > BUILD_REPORT.md << 'EOF'
+          cat > BUILD_REPORT.md << EOF
           # OpenSSL 3.5.4 Windows Build Report
 
           ## Build Date
@@ -163,19 +163,19 @@ jobs:
 
           ## Build Configuration
           All builds use identical OpenSSL configure options:
-          ```
+          \`\`\`
           no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic
           no-threads no-err no-dso no-shared no-asm no-rc5 no-idea
           no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast
           no-md2 no-mdc2
-          ```
+          \`\`\`
 
           ## Compiler
           - Visual Studio 2022 (MSVC)
           - Static runtime linking (/MT and /MTd)
 
           ## GitHub Actions Workflow
-          Built using: `.github/workflows/build-openssl-windows.yml`
+          Built using: \`.github/workflows/build-openssl-windows.yml\`
 
           EOF
 
@@ -185,3 +185,4 @@ jobs:
           name: build-report
           path: BUILD_REPORT.md
           retention-days: 90
+

@@ -145,8 +145,8 @@ function childContainer()
                 if (u[0] == '"') { u = u.substring(1, u.length - 1); }
                 var tokens = u.split('\\');
                 if (tokens.length != 2) { throw ('invalid user format'); }
-                user = tokens[1];
-                domain = tokens[0];
+                var user = tokens[1];
+                var domain = tokens[0];
 
                 var task = { name: 'MeshUserTask', user: user, domain: domain, execPath: process.execPath, arguments: ['-b64exec ' + script] };
                 require('win-tasks').addTask(task);

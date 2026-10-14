@@ -113,14 +113,15 @@ jobs:
       - name: Upload combined artifact
         uses: actions/upload-artifact@v4
         with:
-          name: openssl-3.5.4-macos-all
+          name: openssl-${{ github.event.inputs.openssl_version || '3.5.4' }}-macos-all
           path: openssl-macos-libs/
           retention-days: 90
 
       - name: Create build report
         run: |
-          cat > BUILD_REPORT.md << 'EOF'
-          # OpenSSL 3.5.4 macOS Build Report
+          OPENSSL_VERSION="${{ github.event.inputs.openssl_version || '3.5.4' }}"
+          cat > BUILD_REPORT.md << EOF
+          # OpenSSL $OPENSSL_VERSION macOS Build Report
 
           ## Build Date
           $(date -u +"%Y-%m-%d %H:%M:%S UTC")
@@ -139,12 +140,12 @@ jobs:
 
           ## Build Configuration
           All builds use identical OpenSSL configure options:
-          ```
+          \`\`\`
           no-weak-ssl-ciphers no-srp no-psk no-comp no-zlib no-zlib-dynamic
           no-threads no-dso no-shared no-asm no-rc5 no-idea
           no-md4 no-rmd160 no-ssl no-ssl3 no-seed no-camellia no-bf no-cast
           no-md2 no-mdc2
-          ```
+          \`\`\`
 
           ## Compiler
           - Xcode Command Line Tools (Clang)
@@ -152,7 +153,7 @@ jobs:
           - ARM64: darwin64-arm64-cc target with -mmacosx-version-min=11.0
 
           ## GitHub Actions Workflow
-          Built using: `.github/workflows/build-openssl-macos.yml`
+          Built using: \`.github/workflows/build-openssl-macos.yml\`
 
           EOF
 
@@ -162,3 +163,4 @@ jobs:
           name: build-report
           path: BUILD_REPORT.md
           retention-days: 90
+

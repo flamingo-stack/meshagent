@@ -66,10 +66,10 @@ cpu_feature.X86_FEATURE_LONGRUN		= ( 2*32+ 1); /* Longrun power control */
 cpu_feature.X86_FEATURE_LRTI        = (2 * 32 + 3); /* LongRun table interface */
 
 /* Other features, Linux-defined mapping, word 3 */
-cpu_Feature.X86_FEATURE_CXMMX		= ( 3*32+ 0); /* Cyrix MMX extensions */
-cpu_Feature.X86_FEATURE_K6_MTRR		= ( 3*32+ 1); /* AMD K6 nonstandard MTRRs */
-cpu_Feature.X86_FEATURE_CYRIX_ARR	= ( 3*32+ 2); /* Cyrix ARRs (= MTRRs) */
-cpu_Feature.X86_FEATURE_CENTAUR_MCR = (3 * 32 + 3); /* Centaur MCRs (= MTRRs) */
+cpu_feature.X86_FEATURE_CXMMX		= ( 3*32+ 0); /* Cyrix MMX extensions */
+cpu_feature.X86_FEATURE_K6_MTRR		= ( 3*32+ 1); /* AMD K6 nonstandard MTRRs */
+cpu_feature.X86_FEATURE_CYRIX_ARR	= ( 3*32+ 2); /* Cyrix ARRs (= MTRRs) */
+cpu_feature.X86_FEATURE_CENTAUR_MCR = (3 * 32 + 3); /* Centaur MCRs (= MTRRs) */
 cpu_feature.X86_FEATURE_K8			= ( 3*32+ 4); /* "" Opteron, Athlon64 */
 cpu_feature.X86_FEATURE_K7			= ( 3*32+ 5); /* "" Athlon */
 cpu_feature.X86_FEATURE_P3			= ( 3*32+ 6); /* "" P3 */

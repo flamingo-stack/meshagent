@@ -46,6 +46,7 @@ function extractNext(p)
 {
     if (p.pending.length == 0) { p.source.close(); p._res(); return; }
     var next = p.pending.pop();
+    if (next.indexOf('..') !== -1) { p.source.close(); p._rej('Illegal path in zip entry: ' + next); return; }
     var dest = p.baseFolder + (process.platform == 'win32' ? '\\' : '/') + next;
     if (process.platform == 'win32')
     {
