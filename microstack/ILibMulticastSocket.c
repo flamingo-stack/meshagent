@@ -214,7 +214,7 @@ void ILibMulticastSocket_BroadcastUdpPacketV4(struct ILibMulticastSocket_StateMo
 			#ifndef NACL
 			if (module->UDPServers[i] != NULL)
 			{
-				socket = ILibAsyncUDPSocket_GetSocket(module->UDPServer);
+				socket = ILibAsyncUDPSocket_GetSocket(module->UDPServers[i]);
 				setsockopt(socket, IPPROTO_IP, IP_MULTICAST_IF, (const char*)&(module->AddressListV4[i].sin_addr), sizeof(struct in_addr));
 				setsockopt(socket, IPPROTO_IP, IP_MULTICAST_TTL, (const char*)&(module->TTL), sizeof(int));
 				for (j = 0; j < count; j++) sendto(socket, data, datalen, 0, (struct sockaddr*)addr, sizeof(struct sockaddr_in));
@@ -397,3 +397,4 @@ void ILibMulticastSocket_WakeOnLan(void *module, char* mac)
 		ILibMulticastSocket_Broadcast((struct ILibMulticastSocket_StateModule*)module, ILibScratchPad, 102, 1);
 	}
 }
+

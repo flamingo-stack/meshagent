@@ -141,7 +141,7 @@ function lme_heci()
                     break;
                 case APF_SERVICE_REQUEST:     
                     var nameLen = chunk.readUInt32BE(1);
-                    var name = chunk.slice(5, nameLen + 5);
+                    var name = chunk.slice(5, nameLen + 5).toString();
                     //console.log("Service Request for: " + name);
                     if (name == 'pfwd@amt.intel.com' || name == 'auth@amt.intel.com')
                     {
@@ -353,3 +353,4 @@ function lme_heci()
 }
 
 module.exports = lme_heci;
+
