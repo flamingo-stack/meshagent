@@ -1,8 +1,18 @@
 /*
- * mac_display.c
- *
- * Display enumeration, selection and pointer mapping for the macOS KVM
- */
+Copyright 2010 - 2018 Intel Corporation
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 
 #include "mac_display.h"
 #include "../../meshdefines.h"
@@ -102,19 +112,23 @@ int mac_display_view(const mac_display_list_t *list, CGDirectDisplayID id, mac_d
 	view->pxW = item->w;
 	view->pxH = item->h;
 
-	// The capture has the mode's pixel size: twice the point size on a Retina display
 	mode = CGDisplayCopyDisplayMode(id);
 	if (mode != NULL)
 	{
-		if (CGDisplayModeGetPixelWidth(mode) > 0 && CGDisplayModeGetPixelHeight(mode) > 0)
+		size_t modePtW = CGDisplayModeGetWidth(mode), modePxW = CGDisplayModeGetPixelWidth(mode);
+		if (item->w > 0 && item->h > 0 && modePtW > 0 && modePxW > 0)
 		{
-			view->pxW = (int)CGDisplayModeGetPixelWidth(mode);
-			view->pxH = (int)CGDisplayModeGetPixelHeight(mode);
+			// Pixels per point from the mode, applied to the bounds: a rotated display's mode is reported unrotated
+			double scale = (double)modePxW / (double)modePtW;
+			view->pxW = (int)((double)item->w * scale + 0.5);
+			view->pxH = (int)((double)item->h * scale + 0.5);
 		}
-		if (CGDisplayModeGetWidth(mode) > 0 && CGDisplayModeGetHeight(mode) > 0)
+		else if (modePxW > 0 && CGDisplayModeGetPixelHeight(mode) > 0)
 		{
-			view->ptW = (int)CGDisplayModeGetWidth(mode);
+			view->ptW = (int)modePtW;
 			view->ptH = (int)CGDisplayModeGetHeight(mode);
+			view->pxW = (int)modePxW;
+			view->pxH = (int)CGDisplayModeGetPixelHeight(mode);
 		}
 		CGDisplayModeRelease(mode);
 	}

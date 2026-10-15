@@ -231,17 +231,12 @@ static void kvm_flush_messages()
 	ILibQueue_UnLock(g_messageQ);
 }
 
-// MNG_KVM_REFRESH, serviced by the capture thread: the screen size straight to the socket, then every tile again
+// MNG_KVM_REFRESH, serviced by the capture thread: the screen size through the queue, then every tile again
 static void kvm_refresh()
 {
-	char buffer[8];
 	int row, col;
 
-	((unsigned short*)buffer)[0] = (unsigned short)htons((unsigned short)MNG_KVM_SCREEN);
-	((unsigned short*)buffer)[1] = (unsigned short)htons((unsigned short)8);
-	((unsigned short*)buffer)[2] = (unsigned short)htons((unsigned short)SCREEN_WIDTH);
-	((unsigned short*)buffer)[3] = (unsigned short)htons((unsigned short)SCREEN_HEIGHT);
-	KVM_SEND(buffer, 8);
+	kvm_send_resolution();
 
 	if (g_tileInfo == NULL) { return; }
 	for (row = 0; row < TILE_HEIGHT_COUNT; row++)
@@ -388,6 +383,15 @@ int get_kbd_state()
 }
 
 
+// Session defaults: tile size, compression and frame timer; the console adjusts compression later
+static void kvm_session_defaults()
+{
+	TILE_WIDTH = 32;
+	TILE_HEIGHT = 32;
+	COMPRESSION_RATIO = 50;
+	FRAME_RATE_TIMER = 100;
+}
+
 int kvm_init()
 {
 	ILibCriticalLogFilename = "KVMAgent.log";  // -kvm1 is a LaunchAgent, not a slave process
@@ -427,11 +431,8 @@ int kvm_init()
 		fsync(STDOUT_FILENO);
 	}
 
-	// Some magic numbers.
-	TILE_WIDTH = 32;
-	TILE_HEIGHT = 32;
-	COMPRESSION_RATIO = 50;
-	FRAME_RATE_TIMER = 100;
+	// A display switch keeps the compression the console set
+	if (TILE_WIDTH == 0) { kvm_session_defaults(); }
 
 	TILE_HEIGHT_COUNT = SCREEN_HEIGHT / TILE_HEIGHT;
 	TILE_WIDTH_COUNT = SCREEN_WIDTH / TILE_WIDTH;
@@ -931,7 +932,13 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 			g_resetipc = 0;
 			close(KVM_AGENT_FD);
 
+			// A new console session: the main display again, session defaults, requests of the old session dropped
 			SCREEN_HEIGHT = SCREEN_WIDTH = 0;
+			SCREEN_NUM = kCGNullDirectDisplay;
+			kvm_session_defaults();
+			__sync_lock_test_and_set(&g_displayRequest, 0);
+			__sync_lock_test_and_set(&g_displayListRequest, 0);
+			__sync_lock_test_and_set(&g_refreshRequest, 0);
 
 			written = write(STDOUT_FILENO, "KVM: Reconnecting to daemon socket...\n", 39);
 			fsync(STDOUT_FILENO);
@@ -986,6 +993,13 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 			CGDirectDisplayID target;
 			mac_display_view_t view;
 
+			if (resend)
+			{
+				char tmp[256];
+				int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Display list changed: %d display(s)\n", g_displays.count);
+				write(STDOUT_FILENO, tmp, tmplen);
+				fsync(STDOUT_FILENO);
+			}
 			if (g_displays.count == 0)
 			{
 				// No display at all gets the same patience as a failed capture
@@ -1117,8 +1131,8 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 					if (!g_shutdown && (g_pause)) { usleep(100000); g_pause = 0; } //HACK: Change this
 
 					if (g_shutdown) { x = TILE_WIDTH_COUNT; y = TILE_HEIGHT_COUNT; break; }
-					// A pick is waiting: the next pass switches displays, the rest of this one would be thrown away
-					if (g_displayRequest != 0) { x = TILE_WIDTH_COUNT; y = TILE_HEIGHT_COUNT; break; }
+					// A pick or a refresh is waiting: the next pass repaints anyway, the rest of this one would be thrown away
+					if (g_displayRequest != 0 || g_refreshRequest != 0) { x = TILE_WIDTH_COUNT; y = TILE_HEIGHT_COUNT; break; }
 
 					if (g_tileInfo[y][x].flag == TILE_SENT) continue;
 					if (g_tileInfo[y][x].flag == TILE_DONT_SEND) continue;

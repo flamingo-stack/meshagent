@@ -402,7 +402,8 @@ int getTileAt(int x, int y, void** buffer, long long *bufferSize, void *desktop,
 // Get screen buffer from the CGImageRef structure
 int getScreenBuffer(unsigned char **desktop, long long *desktopsize, CGImageRef image)
 {	
-	unsigned int row, col, bpp, len, width_padding_size, height_padding_size, i;
+	unsigned int row, col, bpp, width_padding_size, height_padding_size, i;
+	long long len;
 	unsigned char *output;
 	int height = CGImageGetHeight(image);
 	int width = CGImageGetWidth(image);
@@ -414,12 +415,13 @@ int getScreenBuffer(unsigned char **desktop, long long *desktopsize, CGImageRef 
 	// A display that is reconfiguring can hand out an image without pixel data
 	if (dataRef == NULL) { return -1; }
 	sourceBytesPtr = CFDataGetBytePtr(dataRef);
-	len = CFDataGetLength(dataRef);
+	// The tile code reads the capture padded to whole tiles, three bytes per pixel
+	len = (long long)adjust_screen_size(SCREEN_WIDTH) * (long long)adjust_screen_size(SCREEN_HEIGHT) * 3;
 	
-	if (*desktopsize != len) {
+	if (*desktopsize != len || *desktop == NULL) {
 		if (*desktop != NULL) { free(*desktop); }
 		*desktopsize = len;
-		*desktop = (unsigned char *) malloc (*desktopsize);
+		if ((*desktop = (unsigned char *) malloc (*desktopsize)) == NULL) { *desktopsize = 0; CFRelease(dataRef); return -1; }
 	}
 	
 	output = *desktop;
