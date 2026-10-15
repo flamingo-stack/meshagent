@@ -1,18 +1,8 @@
 /*
-Copyright 2010 - 2018 Intel Corporation
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+ * mac_display.c
+ *
+ * Display enumeration, selection and pointer mapping for the macOS KVM
+ */
 
 #include "mac_display.h"
 #include "../../meshdefines.h"
@@ -41,13 +31,15 @@ int mac_display_refresh(mac_display_list_t *list)
 	mac_display_list_t fresh;
 	uint32_t count = 0;
 	uint32_t i;
+	int pinned = 0;
 	int changed;
 
 	memset(&fresh, 0, sizeof(fresh));
 	// Online rather than active: a sleeping display is still captured, as it was before this list existed
 	if (CGGetOnlineDisplayList(MAC_DISPLAY_MAX, ids, &count) != kCGErrorSuccess) { count = 0; }
 
-	if (main != kCGNullDirectDisplay) { mac_display_add(&fresh, main); }
+	// The main display comes first, unless it is itself a mirror and the display it shows is the one listed
+	if (main != kCGNullDirectDisplay && CGDisplayMirrorsDisplay(main) == kCGNullDirectDisplay) { mac_display_add(&fresh, main); pinned = 1; }
 	for (i = 0; i < count; i++)
 	{
 		if (ids[i] == main || ids[i] == kCGNullDirectDisplay) { continue; }
@@ -57,11 +49,11 @@ int mac_display_refresh(mac_display_list_t *list)
 	}
 
 	// Main first, the others by display id: an added display does not renumber the ones before it
-	for (i = (main != kCGNullDirectDisplay) ? 2 : 1; i < (uint32_t)fresh.count; i++)
+	for (i = (uint32_t)pinned + 1; i < (uint32_t)fresh.count; i++)
 	{
 		mac_display_t item = fresh.items[i];
 		int j = (int)i - 1;
-		while (j >= ((main != kCGNullDirectDisplay) ? 1 : 0) && fresh.items[j].id > item.id) { fresh.items[j + 1] = fresh.items[j]; j--; }
+		while (j >= pinned && fresh.items[j].id > item.id) { fresh.items[j + 1] = fresh.items[j]; j--; }
 		fresh.items[j + 1] = item;
 	}
 

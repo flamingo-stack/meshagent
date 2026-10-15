@@ -15,7 +15,6 @@
 extern CGDirectDisplayID SCREEN_NUM;
 extern int SCREEN_WIDTH;
 extern int SCREEN_HEIGHT;
-extern int SCREEN_SCALE;
 extern int SCREEN_DEPTH;
 extern int TILE_WIDTH;
 extern int TILE_HEIGHT;

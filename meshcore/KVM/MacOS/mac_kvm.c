@@ -74,7 +74,7 @@ static char *KVM_Session_Signal_File = NULL;
 
 
 int KVM_AGENT_FD = -1;
-static pthread_mutex_t KVM_SEND_LOCK = PTHREAD_MUTEX_INITIALIZER;  // The input thread's direct replies must not land inside a tile the capture thread is writing
+static pthread_mutex_t KVM_SEND_LOCK = PTHREAD_MUTEX_INITIALIZER;  // Every socket write goes through here, so no reply can land inside a tile
 int KVM_SEND(char *buffer, int bufferLen)
 {
 	int retVal = -1;
@@ -101,7 +101,6 @@ CGDirectDisplayID SCREEN_NUM = 0;
 int SH_HANDLE = 0;
 int SCREEN_WIDTH = 0;
 int SCREEN_HEIGHT = 0;
-int SCREEN_SCALE = 1;
 static mac_display_list_t g_displays;          // Displays as listed to the console, ids 1..N
 static mac_display_view_t g_view;              // The display being captured: written by the capture thread, read by the input thread
 static pthread_mutex_t g_viewLock = PTHREAD_MUTEX_INITIALIZER;
@@ -190,8 +189,19 @@ static void kvm_current_view(mac_display_view_t *view)
 	pthread_mutex_unlock(&g_viewLock);
 }
 
+// A display whose captures keep coming at another size than its mode says is streamed at the captured size
+static struct { CGDirectDisplayID id; int modeW; int modeH; int pxW; int pxH; } g_adoptedSize = { kCGNullDirectDisplay, 0, 0, 0, 0 };
+
+// The capture view of a listed display, at the adopted size while its mode still disagrees with the capture
+static int kvm_display_view(CGDirectDisplayID id, mac_display_view_t *view)
+{
+	if (mac_display_view(&g_displays, id, view) == 0) { return 0; }
+	if (g_adoptedSize.id == id && g_adoptedSize.modeW == view->pxW && g_adoptedSize.modeH == view->pxH) { view->pxW = g_adoptedSize.pxW; view->pxH = g_adoptedSize.pxH; }
+	return 1;
+}
+
 // Queues the display positions (82) and the display list with the selection (11), as the Windows agent does
-void kvm_send_display_list()
+static void kvm_send_display_list()
 {
 	unsigned char *info = ILibMemory_SmartAllocate(4 + (10 * g_displays.count));
 	unsigned char *list = ILibMemory_SmartAllocate(8 + (2 * g_displays.count));
@@ -202,6 +212,22 @@ void kvm_send_display_list()
 	ILibQueue_Lock(g_messageQ);
 	ILibQueue_EnQueue(g_messageQ, info);
 	ILibQueue_EnQueue(g_messageQ, list);
+	ILibQueue_UnLock(g_messageQ);
+}
+
+// Writes every queued message in order
+static void kvm_flush_messages()
+{
+	char *buf;
+	ILibQueue_Lock(g_messageQ);
+	while (ILibQueue_IsEmpty(g_messageQ) == 0)
+	{
+		if ((buf = (char*)ILibQueue_DeQueue(g_messageQ)) != NULL)
+		{
+			KVM_SEND(buf, (int)ILibMemory_Size(buf));
+			ILibMemory_Free(buf);
+		}
+	}
 	ILibQueue_UnLock(g_messageQ);
 }
 
@@ -376,11 +402,11 @@ int kvm_init()
 	}
 
 	// The capture loop picks the display; without a pick (session start) this is the main display, as before
-	if (mac_display_view(&g_displays, SCREEN_NUM, &view) == 0)
+	if (kvm_display_view(SCREEN_NUM, &view) == 0)
 	{
 		mac_display_refresh(&g_displays);
 		SCREEN_NUM = mac_display_resolve(&g_displays, SCREEN_NUM, 0);
-		if (mac_display_view(&g_displays, SCREEN_NUM, &view) == 0)
+		if (kvm_display_view(SCREEN_NUM, &view) == 0)
 		{
 			write(STDOUT_FILENO, "KVM: No display to capture\n", 27);
 			fsync(STDOUT_FILENO);
@@ -392,12 +418,11 @@ int kvm_init()
 	kvm_publish_view(&view);
 	SCREEN_WIDTH = view.pxW;
 	SCREEN_HEIGHT = view.pxH;
-	SCREEN_SCALE = (view.ptW > 0 && view.pxW >= view.ptW) ? (view.pxW / view.ptW) : 1;
 
 	{
 		char tmp[256];
 		int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Display %u (%d of %d) selected: %dx%d px, %dx%d pt at (%d,%d), scale=%d\n",
-			SCREEN_NUM, mac_display_index(&g_displays, SCREEN_NUM), g_displays.count, SCREEN_WIDTH, SCREEN_HEIGHT, view.ptW, view.ptH, view.x, view.y, SCREEN_SCALE);
+			SCREEN_NUM, mac_display_index(&g_displays, SCREEN_NUM), g_displays.count, SCREEN_WIDTH, SCREEN_HEIGHT, view.ptW, view.ptH, view.x, view.y, (view.ptW > 0) ? (view.pxW / view.ptW) : 1);
 		write(STDOUT_FILENO, tmp, tmplen);
 		fsync(STDOUT_FILENO);
 	}
@@ -746,7 +771,7 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 	long long tilesize = 0;
 	void *desktop = NULL;
 	void *buf = NULL;
-	int screen_num;
+	CGDirectDisplayID screen_num;
 	int written = 0;
 	struct sockaddr_un serveraddr;
 
@@ -897,6 +922,7 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 	}
 	pthread_create(&kvmthread, NULL, kvm_mainloopinput, param);
 	int captureFailures = 0;
+	int mismatchW = 0, mismatchH = 0, mismatchCount = 0;
 
 	while (!g_shutdown) 
 	{
@@ -939,18 +965,7 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 			}
 		}
 		
-		// Check if there are pending messages to be sent
-		ILibQueue_Lock(g_messageQ);
-		while (ILibQueue_IsEmpty(g_messageQ) == 0)
-		{
-			if ((buf = (char*)ILibQueue_DeQueue(g_messageQ)) != NULL)
-			{
-				int msg_size = (int)ILibMemory_Size(buf);
-				KVM_SEND(buf, msg_size);
-				ILibMemory_Free(buf);
-			}
-		}
-		ILibQueue_UnLock(g_messageQ);
+		kvm_flush_messages();
 
 
 		for (r = 0; r < TILE_HEIGHT_COUNT; r++) 
@@ -971,19 +986,25 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 			CGDirectDisplayID target;
 			mac_display_view_t view;
 
-			if (g_displays.count == 0) { g_shutdown = 1; senddebug(-2); break; }
+			if (g_displays.count == 0)
+			{
+				// No display at all gets the same patience as a failed capture
+				if (++captureFailures < 30) { usleep(100000); continue; }
+				g_shutdown = 1; senddebug(-2); break;
+			}
 
 			// A dropped pick (unknown id) gets the list again, so the console learns what is streamed
 			if (requested != 0 && mac_display_at(&g_displays, requested) == kCGNullDirectDisplay) { resend = 1; }
 
 			// The pick when it exists, else the current display while it is still there, else the main display
 			target = mac_display_resolve(&g_displays, SCREEN_NUM, requested);
-			mac_display_view(&g_displays, target, &view);
+			kvm_display_view(target, &view);
 			if (target != SCREEN_NUM || view.pxW != SCREEN_WIDTH || view.pxH != SCREEN_HEIGHT)
 			{
 				// New capture size, full repaint, a fresh retry budget; the list with the new selection answers any pending request
 				SCREEN_NUM = target;
 				captureFailures = 0;
+				mismatchCount = 0;
 				kvm_init();
 				kvm_send_display_list();
 				__sync_lock_test_and_set(&g_displayListRequest, 0);
@@ -994,6 +1015,8 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 			if (resend || __sync_lock_test_and_set(&g_displayListRequest, 0)) { kvm_send_display_list(); }
 			if (__sync_lock_test_and_set(&g_refreshRequest, 0)) { kvm_refresh(); }
 		}
+		// A list answer or a hot-plug notice goes out before this pass's tiles
+		kvm_flush_messages();
 		screen_num = SCREEN_NUM;
 
 		//senddebug(screen_num);
@@ -1001,7 +1024,7 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 		capture_attempt_count++;
 		if (capture_attempt_count <= 3) {
 			char tmp[256];
-			int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Attempting CGDisplayCreateImage (attempt #%d, screen_num=%d)\n", capture_attempt_count, screen_num);
+			int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Attempting CGDisplayCreateImage (attempt #%d, screen_num=%u)\n", capture_attempt_count, screen_num);
 			write(STDOUT_FILENO, tmp, tmplen);
 			fsync(STDOUT_FILENO);
 		}
@@ -1019,12 +1042,28 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 		if (image != NULL && (CGImageGetWidth(image) != (size_t)SCREEN_WIDTH || CGImageGetHeight(image) != (size_t)SCREEN_HEIGHT))
 		{
 			char tmp[256];
-			// The framebuffer changed under the capture (mode change, mirror set, unplug) and the tiles are laid out for the old size
-			int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Display %u captured at %zux%zu instead of %dx%d, re-reading the display\n", screen_num, CGImageGetWidth(image), CGImageGetHeight(image), SCREEN_WIDTH, SCREEN_HEIGHT);
-			write(STDOUT_FILENO, tmp, tmplen);
-			fsync(STDOUT_FILENO);
+			int w = (int)CGImageGetWidth(image), h = (int)CGImageGetHeight(image);
+			int tmplen;
 			CGImageRelease(image);
 			image = NULL;
+			if (w == mismatchW && h == mismatchH) { mismatchCount++; } else { mismatchW = w; mismatchH = h; mismatchCount = 1; }
+			// The framebuffer changed under the capture (mode change, mirror set, unplug) and the tiles are laid out for the old size
+			tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Display %u captured at %dx%d instead of %dx%d (%d in a row), re-reading the display\n", screen_num, w, h, SCREEN_WIDTH, SCREEN_HEIGHT, mismatchCount);
+			write(STDOUT_FILENO, tmp, tmplen);
+			fsync(STDOUT_FILENO);
+			// The same other size for a second is no transition: the display is streamed at the size it captures
+			if (mismatchCount >= 10)
+			{
+				mac_display_view_t modeView;
+				if (mac_display_view(&g_displays, screen_num, &modeView) != 0)
+				{
+					g_adoptedSize.id = screen_num; g_adoptedSize.modeW = modeView.pxW; g_adoptedSize.modeH = modeView.pxH; g_adoptedSize.pxW = w; g_adoptedSize.pxH = h;
+					tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Display %u streams at %dx%d, its mode says %dx%d\n", screen_num, w, h, modeView.pxW, modeView.pxH);
+					write(STDOUT_FILENO, tmp, tmplen);
+					fsync(STDOUT_FILENO);
+				}
+				mismatchCount = 0;
+			}
 		}
 		if (image != NULL && getScreenBuffer((unsigned char **)&desktop, &desktopsize, image) != 0)
 		{
@@ -1045,9 +1084,12 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 			if (mac_display_refresh(&g_displays)) { __sync_lock_test_and_set(&g_displayListRequest, 1); }
 			if (mac_display_index(&g_displays, screen_num) == 0 || ++captureFailures < 30)
 			{
-				tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: CGDisplayCreateImage failed for display %u (listed=%d, failures=%d), retrying\n", screen_num, mac_display_index(&g_displays, screen_num) != 0, captureFailures);
-				write(STDOUT_FILENO, tmp, tmplen);
-				fsync(STDOUT_FILENO);
+				if (captureFailures <= 1 || captureFailures % 10 == 0)
+				{
+					tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: CGDisplayCreateImage failed for display %u (listed=%d, failures=%d), retrying\n", screen_num, mac_display_index(&g_displays, screen_num) != 0, captureFailures);
+					write(STDOUT_FILENO, tmp, tmplen);
+					fsync(STDOUT_FILENO);
+				}
 				usleep(100000);
 				continue;
 			}
@@ -1065,6 +1107,7 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 		else {
 			//senddebug(100);
 			captureFailures = 0;
+			mismatchCount = 0;
 
 			for (y = 0; y < TILE_HEIGHT_COUNT; y++)
 			{
