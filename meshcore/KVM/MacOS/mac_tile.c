@@ -409,8 +409,11 @@ int getScreenBuffer(unsigned char **desktop, long long *desktopsize, CGImageRef 
 	int width = CGImageGetWidth(image);
 
 	CGImageAlphaInfo alphaInfo = CGImageGetAlphaInfo(image);
-	
-	CFDataRef dataRef = CGDataProviderCopyData(CGImageGetDataProvider(image));
+	CFDataRef dataRef;
+
+	// The buffer and the padding below are laid out for the capture size, so the image must have it
+	if (width != SCREEN_WIDTH || height != SCREEN_HEIGHT) { return -1; }
+	dataRef = CGDataProviderCopyData(CGImageGetDataProvider(image));
 	const unsigned char *sourceBytesPtr;
 	// A display that is reconfiguring can hand out an image without pixel data
 	if (dataRef == NULL) { return -1; }
