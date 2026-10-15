@@ -411,7 +411,10 @@ int getScreenBuffer(unsigned char **desktop, long long *desktopsize, CGImageRef 
 	CGImageAlphaInfo alphaInfo = CGImageGetAlphaInfo(image);
 	
 	CFDataRef dataRef = CGDataProviderCopyData(CGImageGetDataProvider(image));
-	const unsigned char *sourceBytesPtr = CFDataGetBytePtr(dataRef);
+	const unsigned char *sourceBytesPtr;
+	// A display that is reconfiguring can hand out an image without pixel data
+	if (dataRef == NULL) { return -1; }
+	sourceBytesPtr = CFDataGetBytePtr(dataRef);
 	len = CFDataGetLength(dataRef);
 	
 	if (*desktopsize != len) {
@@ -512,6 +515,7 @@ int getScreenBuffer(unsigned char **desktop, long long *desktopsize, CGImageRef 
 		break;
 		default:
 			fprintf(stderr, "This image depth is not supported.\n");
+			CFRelease(dataRef);
 			return -1;
 	}
 	

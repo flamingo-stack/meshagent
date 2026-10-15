@@ -896,6 +896,7 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 		fsync(STDOUT_FILENO);
 	}
 	pthread_create(&kvmthread, NULL, kvm_mainloopinput, param);
+	int captureFailures = 0;
 
 	while (!g_shutdown) 
 	{
@@ -980,8 +981,9 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 			mac_display_view(&g_displays, target, &view);
 			if (target != SCREEN_NUM || view.pxW != SCREEN_WIDTH || view.pxH != SCREEN_HEIGHT)
 			{
-				// New capture size, full repaint and the list with the new selection answer any pending request
+				// New capture size, full repaint, a fresh retry budget; the list with the new selection answers any pending request
 				SCREEN_NUM = target;
+				captureFailures = 0;
 				kvm_init();
 				kvm_send_display_list();
 				__sync_lock_test_and_set(&g_displayListRequest, 0);
@@ -996,7 +998,6 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 
 		//senddebug(screen_num);
 		static int capture_attempt_count = 0;
-		static int captureFailures = 0;
 		capture_attempt_count++;
 		if (capture_attempt_count <= 3) {
 			char tmp[256];
@@ -1025,13 +1026,23 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 			CGImageRelease(image);
 			image = NULL;
 		}
+		if (image != NULL && getScreenBuffer((unsigned char **)&desktop, &desktopsize, image) != 0)
+		{
+			char tmp[256];
+			// No pixel data behind the image: the display is reconfiguring, like a wrong-size capture
+			int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Display %u captured without pixel data, re-reading the display\n", screen_num);
+			write(STDOUT_FILENO, tmp, tmplen);
+			fsync(STDOUT_FILENO);
+			CGImageRelease(image);
+			image = NULL;
+		}
 		if (image == NULL)
 		{
 			char tmp[256];
 			int tmplen;
 
 			// A display that was just unplugged (or is reconfiguring) also captures nothing: the next pass falls back
-			if (mac_display_refresh(&g_displays)) { g_displayListRequest = 1; }
+			if (mac_display_refresh(&g_displays)) { __sync_lock_test_and_set(&g_displayListRequest, 1); }
 			if (mac_display_index(&g_displays, screen_num) == 0 || ++captureFailures < 30)
 			{
 				tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: CGDisplayCreateImage failed for display %u (listed=%d, failures=%d), retrying\n", screen_num, mac_display_index(&g_displays, screen_num) != 0, captureFailures);
@@ -1041,7 +1052,11 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 				continue;
 			}
 
-			tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: FATAL - Screen capture failed %d times! Screen Recording permission is DENIED, or the display never settled. g_shutdown=1\n", captureFailures);
+			{
+				const char *why = "Screen Recording permission unknown";
+				if (__builtin_available(macOS 10.15, *)) { why = CGPreflightScreenCaptureAccess() ? "Screen Recording granted, the display never settled" : "Screen Recording permission DENIED"; }
+				tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: FATAL - Screen capture failed %d times (%s). g_shutdown=1\n", captureFailures, why);
+			}
 			write(STDOUT_FILENO, tmp, tmplen);
 			fsync(STDOUT_FILENO);
 			g_shutdown = 1;
@@ -1050,7 +1065,6 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 		else {
 			//senddebug(100);
 			captureFailures = 0;
-			getScreenBuffer((unsigned char **)&desktop, &desktopsize, image);
 
 			for (y = 0; y < TILE_HEIGHT_COUNT; y++)
 			{
