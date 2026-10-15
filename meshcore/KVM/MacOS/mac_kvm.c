@@ -884,6 +884,8 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 	// Init the kvm
 	g_messageQ = ILibQueue_Create();
 	if (kvm_init() != 0) { return (void*)-1; }
+	// The console learns the displays without asking, as it does from the Windows agent
+	kvm_send_display_list();
 
 
 	g_shutdown = 0;
@@ -1013,14 +1015,24 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 		}
 
 		//senddebug(99);
+		if (image != NULL && (CGImageGetWidth(image) != (size_t)SCREEN_WIDTH || CGImageGetHeight(image) != (size_t)SCREEN_HEIGHT))
+		{
+			char tmp[256];
+			// The framebuffer changed under the capture (mode change, mirror set, unplug) and the tiles are laid out for the old size
+			int tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: Display %u captured at %zux%zu instead of %dx%d, re-reading the display\n", screen_num, CGImageGetWidth(image), CGImageGetHeight(image), SCREEN_WIDTH, SCREEN_HEIGHT);
+			write(STDOUT_FILENO, tmp, tmplen);
+			fsync(STDOUT_FILENO);
+			CGImageRelease(image);
+			image = NULL;
+		}
 		if (image == NULL)
 		{
 			char tmp[256];
 			int tmplen;
 
 			// A display that was just unplugged (or is reconfiguring) also captures nothing: the next pass falls back
-			mac_display_refresh(&g_displays);
-			if (mac_display_index(&g_displays, screen_num) == 0 || ++captureFailures < 5)
+			if (mac_display_refresh(&g_displays)) { g_displayListRequest = 1; }
+			if (mac_display_index(&g_displays, screen_num) == 0 || ++captureFailures < 30)
 			{
 				tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: CGDisplayCreateImage failed for display %u (listed=%d, failures=%d), retrying\n", screen_num, mac_display_index(&g_displays, screen_num) != 0, captureFailures);
 				write(STDOUT_FILENO, tmp, tmplen);
@@ -1029,7 +1041,7 @@ void* kvm_server_mainloop(void* param, char *serviceID)
 				continue;
 			}
 
-			tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: FATAL - Screen capture failed! Screen Recording permission is DENIED. g_shutdown=1\n");
+			tmplen = sprintf_s(tmp, sizeof(tmp), "KVM: FATAL - Screen capture failed %d times! Screen Recording permission is DENIED, or the display never settled. g_shutdown=1\n", captureFailures);
 			write(STDOUT_FILENO, tmp, tmplen);
 			fsync(STDOUT_FILENO);
 			g_shutdown = 1;
