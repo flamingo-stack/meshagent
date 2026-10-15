@@ -2980,9 +2980,7 @@ function serviceManager()
             var keepAlive = ((options.failureRestart == null || options.failureRestart > 0) ? '<true/>' : '<false/>'); // launchd restart-on-exit
 
             // Apply OpenFrame parameters formatting for macOS
-            console.log('[DEBUG service-manager] options.parameters before processing: ' + JSON.stringify(options.parameters));
             var processedParams = options.parameters ? applyOpenFrameParamsDarwin(options.parameters) : null;
-            console.log('[DEBUG service-manager] processedParams after applyOpenFrameParamsDarwin: ' + JSON.stringify(processedParams));
 
             var params =  '     <key>ProgramArguments</key>\n';
             params += '     <array>\n';
@@ -3530,15 +3528,12 @@ function serviceManager()
     {
         require('code-utils');
         console.log('PATH => ' + JSON.stringify(path, null, 1));
-        console.log('parameters => ' + JSON.stringify(parameters, null, 1));
-        console.log('options => ' + JSON.stringify(options, null, 1));
     
         var z =  parameters.getParameterIndex('meshServiceName');
         console.log('meshServiceName => ' + z);
         if (z >= 0)
         {
             parameters.splice(z, 1);
-            console.log('parameters => ' + JSON.stringify(parameters, null, 1));
         }
 
         var tmp = JSON.stringify(parameters);
