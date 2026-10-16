@@ -120,16 +120,34 @@ function restart(delay)
     child.waitExit();
 }
 
+//
+// Stub used on the 32-bit agent on 64-bit windows branch, where bcdedit cannot be invoked from a 32 bit process
+//
+function notSupported()
+{
+    throw ('win-bcd: this function is not supported when running a 32 bit agent on 64 bit windows');
+}
+
 if (require('_GenericMarshal').PointerSize == 4 && require('os').arch() == 'x64')
 {
     //
     // 32 bit agent running on 64 bit windows, we do not expose BCD functions, because bcdedit does not work from a 32 bit process on 64 bit windows
+    // We still export the full API surface, but the unsupported functions throw a descriptive error instead of being undefined
     //
     module.exports =
     {
+        getKeys: notSupported, setKey: notSupported, deleteKey: notSupported, getKey: notSupported,
         enableSafeModeService: enableSafeModeService,
         disableSafeModeService: disableSafeModeService, restart: restart, isSafeModeService: isSafeModeService
     };
+
+    Object.defineProperty(module.exports, "bootMode",
+        {
+            get: function ()
+            {
+                return ('NORMAL');
+            }
+        });
 }
 else
 {
