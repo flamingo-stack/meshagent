@@ -1,6 +1,6 @@
 /*
 OpenFrame File Logger - Duplicates printf to both console and file
-Usage: Call enable_file_logging() at the start of main()
+Usage: Call MeshAgent_EnableFileLogging() at the start of main()
 
 Features:
 - Single log file: meshagent.log
@@ -54,9 +54,9 @@ Features:
 #define LOG_ARCHIVE_FILENAME "meshcentral-agent.log.old.gz"
 
 /* Global file handle for logging */
-static FILE* g_log_file = NULL;
-static char g_log_directory[LOG_PATH_SIZE] = {0};
-static long g_current_log_size = 0;
+static FILE* MeshAgent_g_log_file = NULL;
+static char MeshAgent_g_log_directory[LOG_PATH_SIZE] = {0};
+static long MeshAgent_g_current_log_size = 0;
 
 #ifdef WIN32
 static int g_original_stdout_fd = -1;
@@ -83,10 +83,12 @@ static DWORD WINAPI tee_thread_func(LPVOID lpParam) {
         }
 
         /* Write to log file */
-        if (g_log_file != NULL) {
-            fwrite(buffer, 1, bytes_read, g_log_file);
-            fflush(g_log_file);
+        MeshAgent_LockLog();
+        if (MeshAgent_g_log_file != NULL) {
+            fwrite(buffer, 1, bytes_read, MeshAgent_g_log_file);
+            fflush(MeshAgent_g_log_file);
         }
+        MeshAgent_UnlockLog();
     }
 
     return 0;
@@ -118,10 +120,12 @@ static void* tee_thread_func(void* arg) {
         }
 
         /* Write to log file */
-        if (g_log_file != NULL) {
-            fwrite(buffer, 1, bytes_read, g_log_file);
-            fflush(g_log_file);
+        MeshAgent_LockLog();
+        if (MeshAgent_g_log_file != NULL) {
+            fwrite(buffer, 1, bytes_read, MeshAgent_g_log_file);
+            fflush(MeshAgent_g_log_file);
         }
+        MeshAgent_UnlockLog();
     }
 
     return NULL;
@@ -148,7 +152,7 @@ static inline void init_log_mutex(void) {
 #endif
 }
 
-static inline void lock_log(void) {
+static inline void MeshAgent_LockLog(void) {
 #ifdef WIN32
     EnterCriticalSection(&g_log_mutex);
 #else
@@ -156,7 +160,7 @@ static inline void lock_log(void) {
 #endif
 }
 
-static inline void unlock_log(void) {
+static inline void MeshAgent_UnlockLog(void) {
 #ifdef WIN32
     LeaveCriticalSection(&g_log_mutex);
 #else
@@ -222,6 +226,7 @@ static inline int compress_file_to_gzip(const char* source_path, const char* des
 #endif
 }
 
+/* Caller must hold the log mutex (MeshAgent_LockLog) before calling this. */
 static inline int rotate_log_file(void) {
     char log_path[LOG_PATH_SIZE];
     char archive_path[LOG_PATH_SIZE];
@@ -229,34 +234,34 @@ static inline int rotate_log_file(void) {
     struct tm* tm_info;
     int pid;
 
-    if (g_log_file == NULL) return 0;
+    if (MeshAgent_g_log_file == NULL) return 0;
 
     /* Build file paths */
-    if (g_log_directory[0] != '\0') {
-        snprintf(log_path, sizeof(log_path), "%s/%s", g_log_directory, LOG_FILENAME);
-        snprintf(archive_path, sizeof(archive_path), "%s/%s", g_log_directory, LOG_ARCHIVE_FILENAME);
+    if (MeshAgent_g_log_directory[0] != '\0') {
+        snprintf(log_path, sizeof(log_path), "%s/%s", MeshAgent_g_log_directory, LOG_FILENAME);
+        snprintf(archive_path, sizeof(archive_path), "%s/%s", MeshAgent_g_log_directory, LOG_ARCHIVE_FILENAME);
     } else {
         snprintf(log_path, sizeof(log_path), "%s", LOG_FILENAME);
         snprintf(archive_path, sizeof(archive_path), "%s", LOG_ARCHIVE_FILENAME);
     }
 
-    fprintf(g_log_file, "\n========================================\n");
-    fprintf(g_log_file, "LOG ROTATION - File size limit reached\n");
-    fprintf(g_log_file, "========================================\n");
-    fflush(g_log_file);
-    fclose(g_log_file);
-    g_log_file = NULL;
+    fprintf(MeshAgent_g_log_file, "\n========================================\n");
+    fprintf(MeshAgent_g_log_file, "LOG ROTATION - File size limit reached\n");
+    fprintf(MeshAgent_g_log_file, "========================================\n");
+    fflush(MeshAgent_g_log_file);
+    fclose(MeshAgent_g_log_file);
+    MeshAgent_g_log_file = NULL;
 
     remove(archive_path);
     compress_file_to_gzip(log_path, archive_path);
     remove(log_path);
 
-    g_log_file = fopen(log_path, "a");
-    if (g_log_file == NULL) {
+    MeshAgent_g_log_file = fopen(log_path, "a");
+    if (MeshAgent_g_log_file == NULL) {
         return 0;
     }
-    setvbuf(g_log_file, NULL, _IONBF, 0);
-    g_current_log_size = 0;
+    setvbuf(MeshAgent_g_log_file, NULL, _IONBF, 0);
+    MeshAgent_g_current_log_size = 0;
 
     now = time(NULL);
     tm_info = localtime(&now);
@@ -266,28 +271,29 @@ static inline int rotate_log_file(void) {
     pid = getpid();
 #endif
 
-    fprintf(g_log_file, "========================================\n");
-    fprintf(g_log_file, "MeshAgent Log Started (after rotation)\n");
-    fprintf(g_log_file, "Time: %04d-%02d-%02d %02d:%02d:%02d\n",
+    fprintf(MeshAgent_g_log_file, "========================================\n");
+    fprintf(MeshAgent_g_log_file, "MeshAgent Log Started (after rotation)\n");
+    fprintf(MeshAgent_g_log_file, "Time: %04d-%02d-%02d %02d:%02d:%02d\n",
             tm_info->tm_year + 1900,
             tm_info->tm_mon + 1,
             tm_info->tm_mday,
             tm_info->tm_hour,
             tm_info->tm_min,
             tm_info->tm_sec);
-    fprintf(g_log_file, "PID: %d\n", pid);
-    fprintf(g_log_file, "Log file: %s\n", log_path);
-    fprintf(g_log_file, "Previous log archived to: %s\n", archive_path);
-    fprintf(g_log_file, "========================================\n\n");
-    fflush(g_log_file);
+    fprintf(MeshAgent_g_log_file, "PID: %d\n", pid);
+    fprintf(MeshAgent_g_log_file, "Log file: %s\n", log_path);
+    fprintf(MeshAgent_g_log_file, "Previous log archived to: %s\n", archive_path);
+    fprintf(MeshAgent_g_log_file, "========================================\n\n");
+    fflush(MeshAgent_g_log_file);
 
     return 1;
 }
 
+/* Caller must hold the log mutex (MeshAgent_LockLog) before calling this. */
 static inline void check_and_rotate(int bytes_written) {
-    g_current_log_size += bytes_written;
+    MeshAgent_g_current_log_size += bytes_written;
 
-    if (g_current_log_size >= LOG_MAX_SIZE) {
+    if (MeshAgent_g_current_log_size >= LOG_MAX_SIZE) {
         rotate_log_file();
     }
 }
@@ -298,14 +304,16 @@ static inline void check_and_rotate(int bytes_written) {
  *
  * Returns: 1 on success, 0 on failure
  */
-static inline int enable_file_logging(const char* log_directory, const char* log_prefix)
+static inline int MeshAgent_EnableFileLogging(const char* log_directory, const char* log_prefix)
 {
     char logfile_path[LOG_PATH_SIZE];
     int pid;
 
     (void)log_prefix;
 
-    if (g_log_file != NULL) {
+    init_log_mutex();
+
+    if (MeshAgent_g_log_file != NULL) {
         fprintf(stderr, "WARNING: File logging is already enabled\n");
         return 1;
     }
@@ -317,65 +325,70 @@ static inline int enable_file_logging(const char* log_directory, const char* log
 #endif
 
     if (log_directory != NULL && strlen(log_directory) > 0) {
-        strncpy(g_log_directory, log_directory, sizeof(g_log_directory) - 1);
-        g_log_directory[sizeof(g_log_directory) - 1] = '\0';
+        strncpy(MeshAgent_g_log_directory, log_directory, sizeof(MeshAgent_g_log_directory) - 1);
+        MeshAgent_g_log_directory[sizeof(MeshAgent_g_log_directory) - 1] = '\0';
         snprintf(logfile_path, sizeof(logfile_path), "%s/%s", log_directory, LOG_FILENAME);
     } else {
-        g_log_directory[0] = '\0';
+        MeshAgent_g_log_directory[0] = '\0';
         snprintf(logfile_path, sizeof(logfile_path), "%s", LOG_FILENAME);
     }
 
-    g_log_file = fopen(logfile_path, "a");
-    if (g_log_file == NULL) {
+    MeshAgent_LockLog();
+
+    MeshAgent_g_log_file = fopen(logfile_path, "a");
+    if (MeshAgent_g_log_file == NULL) {
+        MeshAgent_UnlockLog();
         fprintf(stderr, "WARNING: Failed to open log file: %s\n", logfile_path);
         return 0;
     }
-    setvbuf(g_log_file, NULL, _IONBF, 0);
-    g_current_log_size = get_file_size(logfile_path);
+    setvbuf(MeshAgent_g_log_file, NULL, _IONBF, 0);
+    MeshAgent_g_current_log_size = get_file_size(logfile_path);
 
     time_t now = time(NULL);
     struct tm* tm_info = localtime(&now);
 
-    fprintf(g_log_file, "========================================\n");
-    fprintf(g_log_file, "MeshAgent Log Started\n");
-    fprintf(g_log_file, "Time: %04d-%02d-%02d %02d:%02d:%02d\n",
+    fprintf(MeshAgent_g_log_file, "========================================\n");
+    fprintf(MeshAgent_g_log_file, "MeshAgent Log Started\n");
+    fprintf(MeshAgent_g_log_file, "Time: %04d-%02d-%02d %02d:%02d:%02d\n",
             tm_info->tm_year + 1900,
             tm_info->tm_mon + 1,
             tm_info->tm_mday,
             tm_info->tm_hour,
             tm_info->tm_min,
             tm_info->tm_sec);
-    fprintf(g_log_file, "PID: %d\n", pid);
-    fprintf(g_log_file, "Log file: %s\n", logfile_path);
-    fprintf(g_log_file, "Max size before rotation: %d MB\n", LOG_MAX_SIZE / (1024 * 1024));
-    fprintf(g_log_file, "========================================\n\n");
-    fflush(g_log_file);
+    fprintf(MeshAgent_g_log_file, "PID: %d\n", pid);
+    fprintf(MeshAgent_g_log_file, "Log file: %s\n", logfile_path);
+    fprintf(MeshAgent_g_log_file, "Max size before rotation: %d MB\n", LOG_MAX_SIZE / (1024 * 1024));
+    fprintf(MeshAgent_g_log_file, "========================================\n\n");
+    fflush(MeshAgent_g_log_file);
+
+    MeshAgent_UnlockLog();
 
 #ifdef WIN32
     /* Create pipe for tee functionality */
     if (_pipe(g_pipe_fds, LOG_BUFFER_SIZE, _O_BINARY) != 0) {
         fprintf(stderr, "WARNING: Failed to create pipe for logging\n");
-        fclose(g_log_file);
-        g_log_file = NULL;
+        fclose(MeshAgent_g_log_file);
+        MeshAgent_g_log_file = NULL;
         return 0;
     }
 
     /* Save original stdout and check if we're running as service */
     g_original_stdout_fd = _dup(1); /* 1 is stdout */
     if (g_original_stdout_fd < 0) {
-        fprintf(g_log_file, "WARNING: Failed to duplicate stdout - running as service\n");
-        fflush(g_log_file);
+        fprintf(MeshAgent_g_log_file, "WARNING: Failed to duplicate stdout - running as service\n");
+        fflush(MeshAgent_g_log_file);
         g_daemon_mode = 1;
     } else {
         /* Check if stdout is redirected (common in service mode) */
         if (!_isatty(g_original_stdout_fd)) {
             /* stdout is not a console - likely service mode */
             g_daemon_mode = 1;
-            fprintf(g_log_file, "INFO: Detected service mode - console output disabled\n");
-            fflush(g_log_file);
+            fprintf(MeshAgent_g_log_file, "INFO: Detected service mode - console output disabled\n");
+            fflush(MeshAgent_g_log_file);
         } else {
-            fprintf(g_log_file, "INFO: Console mode detected - output will go to both console and file\n");
-            fflush(g_log_file);
+            fprintf(MeshAgent_g_log_file, "INFO: Console mode detected - output will go to both console and file\n");
+            fflush(MeshAgent_g_log_file);
         }
     }
 
@@ -383,35 +396,35 @@ static inline int enable_file_logging(const char* log_directory, const char* log
     g_logging_active = 1;
     g_tee_thread = CreateThread(NULL, 0, tee_thread_func, NULL, 0, NULL);
     if (g_tee_thread == NULL) {
-        fprintf(g_log_file, "WARNING: Failed to create logging thread\n");
-        fflush(g_log_file);
+        fprintf(MeshAgent_g_log_file, "WARNING: Failed to create logging thread\n");
+        fflush(MeshAgent_g_log_file);
         if (g_original_stdout_fd >= 0) _close(g_original_stdout_fd);
         _close(g_pipe_fds[0]);
         _close(g_pipe_fds[1]);
-        fclose(g_log_file);
-        g_log_file = NULL;
+        fclose(MeshAgent_g_log_file);
+        MeshAgent_g_log_file = NULL;
         g_logging_active = 0;
         return 0;
     }
 
     /* Redirect stdout to pipe */
     if (_dup2(g_pipe_fds[1], 1) < 0) { /* 1 is stdout */
-        fprintf(g_log_file, "WARNING: Failed to redirect stdout\n");
-        fflush(g_log_file);
+        fprintf(MeshAgent_g_log_file, "WARNING: Failed to redirect stdout\n");
+        fflush(MeshAgent_g_log_file);
         g_logging_active = 0;
         _close(g_pipe_fds[1]); /* Close write end to signal thread to exit */
         WaitForSingleObject(g_tee_thread, 1000);
         CloseHandle(g_tee_thread);
         if (g_original_stdout_fd >= 0) _close(g_original_stdout_fd);
         _close(g_pipe_fds[0]);
-        fclose(g_log_file);
-        g_log_file = NULL;
+        fclose(MeshAgent_g_log_file);
+        MeshAgent_g_log_file = NULL;
         return 0;
     }
 
     if (_dup2(g_pipe_fds[1], 2) < 0) { /* 2 is stderr */
-        fprintf(g_log_file, "WARNING: Failed to redirect stderr\n");
-        fflush(g_log_file);
+        fprintf(MeshAgent_g_log_file, "WARNING: Failed to redirect stderr\n");
+        fflush(MeshAgent_g_log_file);
         if (g_original_stdout_fd >= 0) _dup2(g_original_stdout_fd, 1);
         g_logging_active = 0;
         _close(g_pipe_fds[1]); /* Close write end to signal thread to exit */
@@ -419,8 +432,8 @@ static inline int enable_file_logging(const char* log_directory, const char* log
         CloseHandle(g_tee_thread);
         if (g_original_stdout_fd >= 0) _close(g_original_stdout_fd);
         _close(g_pipe_fds[0]);
-        fclose(g_log_file);
-        g_log_file = NULL;
+        fclose(MeshAgent_g_log_file);
+        MeshAgent_g_log_file = NULL;
         return 0;
     }
 
@@ -435,16 +448,16 @@ static inline int enable_file_logging(const char* log_directory, const char* log
     /* Create pipe for tee functionality */
     if (pipe(g_pipe_fds) != 0) {
         fprintf(stderr, "WARNING: Failed to create pipe for logging\n");
-        fclose(g_log_file);
-        g_log_file = NULL;
+        fclose(MeshAgent_g_log_file);
+        MeshAgent_g_log_file = NULL;
         return 0;
     }
 
     /* Save original stdout and check if we're running as daemon */
     g_original_stdout_fd = dup(STDOUT_FILENO);
     if (g_original_stdout_fd < 0) {
-        fprintf(g_log_file, "WARNING: Failed to duplicate stdout - running in daemon mode\n");
-        fflush(g_log_file);
+        fprintf(MeshAgent_g_log_file, "WARNING: Failed to duplicate stdout - running in daemon mode\n");
+        fflush(MeshAgent_g_log_file);
         g_daemon_mode = 1;
     } else {
         /* Check if stdout is redirected (common in daemon mode) */
@@ -453,11 +466,11 @@ static inline int enable_file_logging(const char* log_directory, const char* log
             if (!isatty(g_original_stdout_fd)) {
                 /* stdout is not a terminal - likely daemon mode */
                 g_daemon_mode = 1;
-                fprintf(g_log_file, "INFO: Detected daemon mode - console output disabled\n");
-                fflush(g_log_file);
+                fprintf(MeshAgent_g_log_file, "INFO: Detected daemon mode - console output disabled\n");
+                fflush(MeshAgent_g_log_file);
             } else {
-                fprintf(g_log_file, "INFO: Console mode detected - output will go to both console and file\n");
-                fflush(g_log_file);
+                fprintf(MeshAgent_g_log_file, "INFO: Console mode detected - output will go to both console and file\n");
+                fflush(MeshAgent_g_log_file);
             }
         }
     }
@@ -465,13 +478,13 @@ static inline int enable_file_logging(const char* log_directory, const char* log
     /* Start tee thread */
     g_logging_active = 1;
     if (pthread_create(&g_tee_thread, NULL, tee_thread_func, NULL) != 0) {
-        fprintf(g_log_file, "WARNING: Failed to create logging thread\n");
-        fflush(g_log_file);
+        fprintf(MeshAgent_g_log_file, "WARNING: Failed to create logging thread\n");
+        fflush(MeshAgent_g_log_file);
         if (g_original_stdout_fd >= 0) close(g_original_stdout_fd);
         close(g_pipe_fds[0]);
         close(g_pipe_fds[1]);
-        fclose(g_log_file);
-        g_log_file = NULL;
+        fclose(MeshAgent_g_log_file);
+        MeshAgent_g_log_file = NULL;
         g_logging_active = 0;
         return 0;
     }
@@ -498,9 +511,9 @@ static inline int enable_file_logging(const char* log_directory, const char* log
 /*
  * Simpler version - auto-generates filename in current directory
  */
-static inline int enable_file_logging_simple(void)
+static inline int MeshAgent_EnableFileLoggingSimple(void)
 {
-    return enable_file_logging(NULL, NULL);
+    return MeshAgent_EnableFileLogging(NULL, NULL);
 }
 
 static volatile int g_at_line_start = 1;
@@ -556,15 +569,15 @@ static inline int openframe_printf(const char *format, ...)
     }
 
     init_log_mutex();
-    lock_log();
+    MeshAgent_LockLog();
 
     /* Try to write to log file with error handling */
-    if (g_log_file != NULL && g_disk_available) {
-        size_t written = fwrite(buffer, 1, len, g_log_file);
+    if (MeshAgent_g_log_file != NULL && g_disk_available) {
+        size_t written = fwrite(buffer, 1, len, MeshAgent_g_log_file);
 
         if (written == (size_t)len) {
             /* Successful write - try to flush */
-            if (fflush(g_log_file) == 0) {
+            if (fflush(MeshAgent_g_log_file) == 0) {
                 success = 1;
                 g_disk_error_count = 0; /* Reset error counter */
 
@@ -583,15 +596,15 @@ static inline int openframe_printf(const char *format, ...)
             if (g_disk_error_count >= 3) {
                 g_disk_available = 0;
 
-                if (g_log_file != NULL) {
-                    fprintf(g_log_file, "\n*** LOG ERROR: Disk write failures detected, switching to stdout-only mode ***\n");
-                    fflush(g_log_file);
+                if (MeshAgent_g_log_file != NULL) {
+                    fprintf(MeshAgent_g_log_file, "\n*** LOG ERROR: Disk write failures detected, switching to stdout-only mode ***\n");
+                    fflush(MeshAgent_g_log_file);
                 }
             }
         }
     }
 
-    unlock_log();
+    MeshAgent_UnlockLog();
 
     /* ALWAYS write to stdout - this is our backup */
 #ifdef WIN32
@@ -603,9 +616,9 @@ static inline int openframe_printf(const char *format, ...)
 
     /* Periodically try to re-enable disk writes */
     if (!g_disk_available && (g_disk_error_count % 50 == 0)) {
-        lock_log();
+        MeshAgent_LockLog();
         g_disk_available = 1; /* Try again */
-        unlock_log();
+        MeshAgent_UnlockLog();
     }
 
     return len;
@@ -623,9 +636,9 @@ static inline int openframe_printf(const char *format, ...)
 /*
  * Disable file logging and clean up resources
  */
-static inline void disable_file_logging(void)
+static inline void MeshAgent_DisableFileLogging(void)
 {
-    if (g_log_file == NULL) {
+    if (MeshAgent_g_log_file == NULL) {
         return; /* Logging not active */
     }
 
@@ -681,21 +694,25 @@ static inline void disable_file_logging(void)
     }
 #endif
 
+    MeshAgent_LockLog();
+
     /* Close log file */
-    if (g_log_file != NULL) {
-        fprintf(g_log_file, "\n========================================\n");
-        fprintf(g_log_file, "MeshAgent Log Ended\n");
-        fprintf(g_log_file, "========================================\n");
-        fclose(g_log_file);
-        g_log_file = NULL;
+    if (MeshAgent_g_log_file != NULL) {
+        fprintf(MeshAgent_g_log_file, "\n========================================\n");
+        fprintf(MeshAgent_g_log_file, "MeshAgent Log Ended\n");
+        fprintf(MeshAgent_g_log_file, "========================================\n");
+        fclose(MeshAgent_g_log_file);
+        MeshAgent_g_log_file = NULL;
     }
 
     /* Reset state */
     g_daemon_mode = 0;
     g_disk_available = 1;
     g_disk_error_count = 0;
-    g_current_log_size = 0;
-    g_log_directory[0] = '\0';
+    MeshAgent_g_current_log_size = 0;
+    MeshAgent_g_log_directory[0] = '\0';
+
+    MeshAgent_UnlockLog();
 
 #ifdef WIN32
     if (g_log_mutex_initialized) {
