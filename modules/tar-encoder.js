@@ -68,7 +68,8 @@ function generateUstarHeader(path, basePath, uidtable, gidtable)
 
     Buffer.from(name, 'binary').copy(ret, 0, 0, 100);
     ret[156] = stats.isFile() ? 48 : 53;
-    Buffer.from((Date.parse(stats.mtime) / 1000).toString(8), 'binary').copy(ret, 136, 0, 12);
+    var mtimeMs = (stats.mtime instanceof Date) ? stats.mtime.getTime() : Number(stats.mtime);
+    Buffer.from((mtimeMs / 1000).toString(8), 'binary').copy(ret, 136, 0, 12);
     Buffer.from('USTAR', 'binary').copy(ret, 257, 0, 5);
 
     if (process.platform == 'win32')
