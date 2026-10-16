@@ -15,7 +15,6 @@
 extern CGDirectDisplayID SCREEN_NUM;
 extern int SCREEN_WIDTH;
 extern int SCREEN_HEIGHT;
-extern int SCREEN_SCALE;
 extern int SCREEN_DEPTH;
 extern int TILE_WIDTH;
 extern int TILE_HEIGHT;
@@ -403,21 +402,29 @@ int getTileAt(int x, int y, void** buffer, long long *bufferSize, void *desktop,
 // Get screen buffer from the CGImageRef structure
 int getScreenBuffer(unsigned char **desktop, long long *desktopsize, CGImageRef image)
 {	
-	unsigned int row, col, bpp, len, width_padding_size, height_padding_size, i;
+	unsigned int row, col, bpp, width_padding_size, height_padding_size, i;
+	long long len;
 	unsigned char *output;
 	int height = CGImageGetHeight(image);
 	int width = CGImageGetWidth(image);
 
 	CGImageAlphaInfo alphaInfo = CGImageGetAlphaInfo(image);
+	CFDataRef dataRef;
+
+	// The buffer and the padding below are laid out for the capture size, so the image must have it
+	if (width != SCREEN_WIDTH || height != SCREEN_HEIGHT) { return -1; }
+	dataRef = CGDataProviderCopyData(CGImageGetDataProvider(image));
+	const unsigned char *sourceBytesPtr;
+	// A display that is reconfiguring can hand out an image without pixel data
+	if (dataRef == NULL) { return -1; }
+	sourceBytesPtr = CFDataGetBytePtr(dataRef);
+	// The tile code reads the capture padded to whole tiles, three bytes per pixel
+	len = (long long)adjust_screen_size(SCREEN_WIDTH) * (long long)adjust_screen_size(SCREEN_HEIGHT) * 3;
 	
-	CFDataRef dataRef = CGDataProviderCopyData(CGImageGetDataProvider(image));
-	const unsigned char *sourceBytesPtr = CFDataGetBytePtr(dataRef);
-	len = CFDataGetLength(dataRef);
-	
-	if (*desktopsize != len) {
+	if (*desktopsize != len || *desktop == NULL) {
 		if (*desktop != NULL) { free(*desktop); }
 		*desktopsize = len;
-		*desktop = (unsigned char *) malloc (*desktopsize);
+		if ((*desktop = (unsigned char *) malloc (*desktopsize)) == NULL) { *desktopsize = 0; CFRelease(dataRef); return -1; }
 	}
 	
 	output = *desktop;
@@ -512,6 +519,7 @@ int getScreenBuffer(unsigned char **desktop, long long *desktopsize, CGImageRef 
 		break;
 		default:
 			fprintf(stderr, "This image depth is not supported.\n");
+			CFRelease(dataRef);
 			return -1;
 	}
 	
