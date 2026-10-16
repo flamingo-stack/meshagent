@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-#if defined(WINSOCK2)
+#ifdef WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #endif

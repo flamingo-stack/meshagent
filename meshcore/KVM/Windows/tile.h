@@ -16,8 +16,10 @@ limitations under the License.
 
 #if defined(_LINKVM)
 
+#ifdef WIN32
 #include <Windows.h>
 #include <tchar.h>
+#endif
 
 #if defined(_cplus_plus) || defined(__cplusplus) || defined(_cplusplus)
 extern "C"
@@ -50,3 +52,4 @@ void switch_to_desktop_context();
 #endif
 
 #endif
+
