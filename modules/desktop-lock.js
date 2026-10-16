@@ -19,28 +19,36 @@ function desktopLock()
     this._ObjectID = 'desktop-lock';
     this.lock = function lock()
     {
-        switch(process.platform)
+        try
         {
-            case 'win32':
-                var child = require('child_process').execFile(process.env['windir'] + '\\system32\\cmd.exe', ['/c', 'RunDll32.exe user32.dll,LockWorkStation'], { type: require('user-sessions').isRoot()?1:undefined });                
-                child.waitExit();
-                break;
-            case 'linux':
-                var child = require('child_process').execFile('/bin/sh', ['sh']);
-                child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
-                child.stderr.str = ''; child.stderr.on('data', function (c) { this.str += c.toString(); });
-                child.stdin.write('loginctl lock-sessions\nexit\n');
-                child.waitExit();
-                if (child.stderr.str != '') { throw ('Failed'); }
-                break;
-            case 'darwin':
-                return(require('message-box').lock());
-                break;
-            default:
-                throw ('Not supported on ' + process.platform);
-                break;
+            switch(process.platform)
+            {
+                case 'win32':
+                    var child = require('child_process').execFile(process.env['windir'] + '\\system32\\cmd.exe', ['/c', 'RunDll32.exe user32.dll,LockWorkStation'], { type: require('user-sessions').isRoot()?1:undefined });                
+                    child.waitExit();
+                    break;
+                case 'linux':
+                    var child = require('child_process').execFile('/bin/sh', ['sh']);
+                    child.stdout.str = ''; child.stdout.on('data', function (c) { this.str += c.toString(); });
+                    child.stderr.str = ''; child.stderr.on('data', function (c) { this.str += c.toString(); });
+                    child.stdin.write('loginctl lock-sessions\nexit\n');
+                    child.waitExit();
+                    if (child.stderr.str != '') { throw (new Error('Failed')); }
+                    break;
+                case 'darwin':
+                    return(require('message-box').lock());
+                    break;
+                default:
+                    throw (new Error('Not supported on ' + process.platform));
+                    break;
+            }
+        }
+        catch (e)
+        {
+            throw (e instanceof Error ? e : new Error(e));
         }
     };
 }
 
 module.exports = new desktopLock();
+
