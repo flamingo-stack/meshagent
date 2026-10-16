@@ -17,12 +17,27 @@ limitations under the License.
 
 function stdoutHandler(c)
 {
-    if (this.parent.parent.options.stdout) { process.stdout.write(c); }
+    if (this.parent.parent.options.stdout) { try { process.stdout.write(c); } catch (ex) { } }
 }
 function exitHandler(code)
 {
     if (this.parent.options.crashRestart && code != this.parent.options.exit)
     {
+        var now = Date.now();
+        if (this.parent.lastRestart != null && (now - this.parent.lastRestart) < 1000)
+        {
+            this.parent.restartCount = (this.parent.restartCount == null) ? 1 : (this.parent.restartCount + 1);
+        }
+        else
+        {
+            this.parent.restartCount = 0;
+        }
+        this.parent.lastRestart = now;
+        if (this.parent.restartCount > 10)
+        {
+            this.parent.emit('done');
+            return;
+        }
         var tmp = start(this.parent.path, this.parent.parameters, this.parent.options);
         this.parent.child = tmp.child;
         this.parent.child.parent = this.parent;
@@ -40,7 +55,10 @@ function start(path, parameters, options)
     var ret = { options: options, path: path, parameters: parameters };
     require('events').EventEmitter.call(ret, true)
         .createEvent('done');
-    ret.sighandler = function sighandler() { process.exit(); };
+    ret.sighandler = function sighandler()
+    {
+        process.exit();
+    };
     ret.sighandler.self = ret;
     if (process.platform != 'win32') { process.on('SIGTERM', ret.sighandler); }
     ret.child = require('child_process').execFile(path, parameters, ret.options);
@@ -55,7 +73,10 @@ function agent()
 {
     var args = process.argv;
     args.splice(1, 1);
-    start(process.execPath, args, { crashRestart: true, exit: 6565 }).on('done', function () { process.exit(); });
+    start(process.execPath, args, { crashRestart: true, exit: 6565 }).on('done', function ()
+    {
+        process.exit();
+    });
 }
 
 module.exports = { start: start, agent: agent };
