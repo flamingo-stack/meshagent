@@ -9,20 +9,20 @@ extern "C" {
  * Installation mode selection
  */
 typedef enum {
-    INSTALL_MODE_UPGRADE = 0,
-    INSTALL_MODE_NEW = 1
-} InstallMode;
+    MeshAgent_INSTALL_MODE_UPGRADE = 0,
+    MeshAgent_INSTALL_MODE_NEW = 1
+} MeshAgent_InstallMode;
 
 /**
  * Installation result structure
  */
 typedef struct {
-    InstallMode mode;
+    MeshAgent_InstallMode mode;
     char installPath[1024];
     char mshFilePath[1024];
     int enableDisableUpdate;  // 1 to enable, 0 to disable
     int cancelled;  // 1 if user cancelled, 0 if user clicked Install
-} InstallResult;
+} MeshAgent_InstallResult;
 
 /**
  * Display the MeshAgent Installation Assistant
@@ -32,14 +32,15 @@ typedef struct {
  * - New installation (browse for install folder + .msh file)
  *
  * Returns:
- *   InstallResult structure with user's selections
+ *   MeshAgent_InstallResult structure with user's selections
  *   cancelled=1 if user clicked Cancel
  *   cancelled=0 if user clicked Install/Upgrade
  */
-InstallResult show_install_assistant_window(void);
+MeshAgent_InstallResult MeshAgent_show_install_assistant_window(void);
 
 #ifdef __cplusplus
 }
 #endif
 
 #endif // MAC_INSTALL_WINDOW_H
+
