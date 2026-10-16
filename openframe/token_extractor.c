@@ -7,6 +7,7 @@
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
 #include <openssl/err.h>
+#include <openssl/crypto.h>
 #include "token_extractor.h"
 
 #define MAX_FILE_SIZE 4096
@@ -45,6 +46,7 @@ char* extract_token(const char* secret, const char* token_path) {
     const int GCM_NONCE_SIZE = 12;
 
     if (decoded_len < GCM_NONCE_SIZE) {
+        OPENSSL_cleanse(encrypted_data, decoded_len);
         free(encrypted_data);
         return NULL;
     }
@@ -52,7 +54,9 @@ char* extract_token(const char* secret, const char* token_path) {
     size_t ciphertext_len = decoded_len; // Full decoded data for GCM decryption
     size_t plaintext_len;
     char* decrypted_token = decrypt_aes_gcm((const unsigned char*)encrypted_data, ciphertext_len, (const unsigned char*)secret, &plaintext_len);
+    OPENSSL_cleanse(encrypted_data, decoded_len);
     free(encrypted_data);
+    OPENSSL_cleanse((void*)secret, 32);
 
     return decrypted_token;
 }
@@ -118,7 +122,7 @@ char* base64_decode(const char* input, size_t* output_len) {
         return NULL;
     }
     
-    buffer[*output_len] = '\0'; // если нужна null-terminated строка
+    buffer[*output_len] = '\0'; // null-terminate the string if needed
     return buffer;
 }
 
@@ -198,6 +202,7 @@ char* decrypt_aes_gcm(const unsigned char* ciphertext, size_t ciphertext_len,
         char err_buf[256];
         ERR_error_string_n(err, err_buf, sizeof(err_buf));
         printf("OpenSSL error: %s\n", err_buf);
+        OPENSSL_cleanse(plaintext, actual_ciphertext_len + 1);
         free(plaintext);
         EVP_CIPHER_CTX_free(ctx);
         return NULL;
@@ -207,6 +212,7 @@ char* decrypt_aes_gcm(const unsigned char* ciphertext, size_t ciphertext_len,
     // Set expected tag
     if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, GCM_TAG_SIZE, (void*)tag) != 1) {
         printf("Failed to set authentication tag\n");
+        OPENSSL_cleanse(plaintext, actual_ciphertext_len + 1);
         free(plaintext);
         EVP_CIPHER_CTX_free(ctx);
         return NULL;
@@ -219,6 +225,7 @@ char* decrypt_aes_gcm(const unsigned char* ciphertext, size_t ciphertext_len,
         char err_buf[256];
         ERR_error_string_n(err, err_buf, sizeof(err_buf));
         printf("OpenSSL error: %s\n", err_buf);
+        OPENSSL_cleanse(plaintext, actual_ciphertext_len + 1);
         free(plaintext);
         EVP_CIPHER_CTX_free(ctx);
         return NULL;
@@ -232,3 +239,4 @@ char* decrypt_aes_gcm(const unsigned char* ciphertext, size_t ciphertext_len,
     
     return plaintext;
 }
+

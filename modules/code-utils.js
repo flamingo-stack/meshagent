@@ -419,7 +419,7 @@ function compress(data)
         }
     });
     zip.end(data);
-    return(vstring = zip.buffer.toString('base64'));
+    return(zip.buffer.toString('base64'));
 }
 
 module.exports = { expand: expand, shrink: shrink, update: update }
