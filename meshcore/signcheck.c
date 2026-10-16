@@ -211,7 +211,7 @@ int signcheck_verifysign(char* filename, int upgrade)
 	util_sha384(certbuf, certbuflen, certhash);
 
 	// Check if the certificate is trusted
-	for (j = 0; j < TrustedCertificatesCount; j++) if (memcmp(TrustedCertificates[j], certhash, 48) == 0) found = 1;
+	for (j = 0; j < TrustedCertificatesCount; j++) if (memcmp(TrustedCertificates[j], certhash, 32) == 0) found = 1;
 
 error:
 	// Clean up
@@ -228,3 +228,4 @@ error:
 	return (ver == MESH_AGENT_VERSION ? 1 : 0);
 #endif
 }
+

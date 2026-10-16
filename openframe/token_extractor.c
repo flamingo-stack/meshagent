@@ -232,3 +232,4 @@ char* decrypt_aes_gcm(const unsigned char* ciphertext, size_t ciphertext_len,
     
     return plaintext;
 }
+
