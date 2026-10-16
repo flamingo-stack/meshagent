@@ -25,12 +25,14 @@ limitations under the License.
 #include <crtdbg.h>
 #endif
 
+#ifdef WIN32
 #if defined(WINSOCK2)
 	#include <winsock2.h>
 	#include <ws2ipdef.h>
 #elif defined(WINSOCK1)
 	#include <winsock.h>
 	#include <wininet.h>
+#endif
 #endif
 
 #include "ILibParsers.h"
@@ -91,13 +93,11 @@ void ILibAsyncUDPSocket_OnDisconnect(ILibAsyncSocket_SocketModule socketModule, 
 	UNREFERENCED_PARAMETER( socketModule );
 	free(user);
 }
-/*! \fn ILibAsyncUDPSocket_SocketModule ILibAsyncUDPSocket_CreateEx(void *Chain, int BufferSize, int localInterface, unsigned short localPortStartRange, unsigned short localPortEndRange, enum ILibAsyncUDPSocket_Reuse reuse, ILibAsyncUDPSocket_OnData OnData, ILibAsyncUDPSocket_OnSendOK OnSendOK, void *user)
-	\brief Creates a new instance of an ILibAsyncUDPSocket module, using a random port number between \a localPortStartRange and \a localPortEndRange inclusive.
+/*! \fn ILibAsyncUDPSocket_SocketModule ILibAsyncUDPSocket_CreateEx(void *Chain, int BufferSize, struct sockaddr *localInterface, enum ILibAsyncUDPSocket_Reuse reuse, ILibAsyncUDPSocket_OnData OnData, ILibAsyncUDPSocket_OnSendOK OnSendOK, void *user)
+	\brief Creates a new instance of an ILibAsyncUDPSocket module, bound to the specified local interface.
 	\param Chain The chain to add this object to. (Chain must <B>not</B> not be running)
 	\param BufferSize The size of the buffer to use
-	\param localInterface The IP address to bind this socket to, in network order
-	\param localPortStartRange The begin range to select a port number from (host order)
-	\param localPortEndRange The end range to select a port number from (host order)
+	\param localInterface The local sockaddr to bind this socket to
 	\param reuse Reuse type
 	\param OnData The handler to receive data
 	\param OnSendOK The handler to receive notification that pending sends have completed
@@ -310,3 +310,4 @@ void ILibAsyncUDPSocket_SetMulticastLoopback(ILibAsyncUDPSocket_SocketModule mod
 	ILibAsyncSocket_GetLocalInterface(module, (struct sockaddr*)&localAddress);
 	if (setsockopt(s, localAddress.sin6_family == PF_INET6 ? IPPROTO_IPV6 : IPPROTO_IP, localAddress.sin6_family == PF_INET6 ? IPV6_MULTICAST_LOOP : IP_MULTICAST_LOOP, (char*)&loopback, sizeof(loopback)) != 0) ILIBCRITICALERREXIT(253);
 }
+

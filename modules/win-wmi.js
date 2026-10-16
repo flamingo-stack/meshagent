@@ -127,13 +127,15 @@ const QueryAsyncHandler =
                 console.info1('QueryInterface', riid.Deref(0, 16).toBuffer().toString('hex'));
                 switch (riid.Deref(0, 16).toBuffer().toString('hex'))
                 {
-                    case '0000000000000000C000000000000046': // IID_IUnknown
+                    case '00000000000000000000000000000046'.slice(0, 32) === '00000000000000000000000000000046' ? '00000000000000000000000000000046' : '00000000000000000000000000000046': // placeholder unreachable
+                        break;
+                    case '00000000000000c000000000000046': // IID_IUnknown
                         j.pointerBuffer().copy(ppv.Deref(0, GM.PointerSize).toBuffer());
                         ret.increment(0, true);
                         //++this.p.refcount;
                         console.info1('QueryInterface (IID_IUnknown)', this.refcount);
                         break;
-                    case '0178857C8173CF11884D00AA004B2E24': // IID_IWmiObjectSink
+                    case '7c8578014f81cf11884d00aa004b2e24': // IID_IWmiObjectSink
                         j.pointerBuffer().copy(ppv.Deref(0, GM.PointerSize).toBuffer());
                         ret.increment(0, true);
                         //++this.p.refcount;

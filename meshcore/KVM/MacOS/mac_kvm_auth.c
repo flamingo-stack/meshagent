@@ -11,6 +11,7 @@
 #include "../../../microstack/ILibParsers.h"
 #include <stdio.h>
 #include <string.h>
+#include <Availability.h>
 
 /**
  * Get our own code signature for comparison
@@ -91,31 +92,57 @@ cleanup:
 
 /**
  * Verify peer process connected to socket is legitimate meshagent
+ *
+ * Prefers the audit token (LOCAL_PEERTOKEN, macOS 10.14+) to identify the
+ * peer, since the audit token is bound to the specific process instance at
+ * connection time and cannot be confused with a later process that reused
+ * the same PID. Falls back to PID-based lookup (LOCAL_PEERPID) only when
+ * the audit token is unavailable (e.g. running on an older macOS release).
  */
 int verify_peer_codesign(int socket_fd) {
     pid_t peer_pid = 0;
-    socklen_t len = sizeof(peer_pid);
+    socklen_t len;
     OSStatus status;
     SecCodeRef self_code = NULL;
     SecCodeRef peer_code = NULL;
     int result = 0;
+#ifdef LOCAL_PEERTOKEN
+    audit_token_t audit_token;
+    int have_audit_token = 0;
+
+    memset(&audit_token, 0, sizeof(audit_token));
+    len = sizeof(audit_token);
+    if (getsockopt(socket_fd, SOL_LOCAL, LOCAL_PEERTOKEN, &audit_token, &len) == 0) {
+        have_audit_token = 1;
+        ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER: Got peer audit token");
+    } else {
+        ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER: getsockopt(LOCAL_PEERTOKEN) failed: %s, falling back to PID", strerror(errno));
+    }
+#endif
 
     ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER: Starting peer verification for socket_fd=%d", socket_fd);
 
-    // Get PID of connecting process
-    if (getsockopt(socket_fd, SOL_LOCAL, LOCAL_PEERPID, &peer_pid, &len) < 0) {
-        ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER_FAIL: getsockopt(LOCAL_PEERPID) failed: %s", strerror(errno));
-        fprintf(stderr, "KVM Auth: Failed to get peer PID: %s\n", strerror(errno));
-        return 0;
-    }
+#ifdef LOCAL_PEERTOKEN
+    if (!have_audit_token) {
+#endif
+        // Get PID of connecting process
+        len = sizeof(peer_pid);
+        if (getsockopt(socket_fd, SOL_LOCAL, LOCAL_PEERPID, &peer_pid, &len) < 0) {
+            ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER_FAIL: getsockopt(LOCAL_PEERPID) failed: %s", strerror(errno));
+            fprintf(stderr, "KVM Auth: Failed to get peer PID: %s\n", strerror(errno));
+            return 0;
+        }
 
-    ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER: Got peer PID=%d", peer_pid);
+        ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER: Got peer PID=%d", peer_pid);
 
-    if (peer_pid <= 0) {
-        ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER_FAIL: Invalid peer PID=%d", peer_pid);
-        fprintf(stderr, "KVM Auth: Invalid peer PID: %d\n", peer_pid);
-        return 0;
+        if (peer_pid <= 0) {
+            ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER_FAIL: Invalid peer PID=%d", peer_pid);
+            fprintf(stderr, "KVM Auth: Invalid peer PID: %d\n", peer_pid);
+            return 0;
+        }
+#ifdef LOCAL_PEERTOKEN
     }
+#endif
 
     // Get our own code signature
     self_code = get_self_code();
@@ -125,14 +152,28 @@ int verify_peer_codesign(int socket_fd) {
     }
 
     // Get peer process code signature
-    ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER: Getting peer code signature for PID=%d", peer_pid);
-    status = SecCodeCreateWithPID(peer_pid, kSecCSDefaultFlags, &peer_code);
-    if (status != errSecSuccess) {
-        ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER_FAIL: SecCodeCreateWithPID failed, PID=%d, status=%d", peer_pid, status);
-        fprintf(stderr, "KVM Auth: Failed to get peer code signature (PID %d): %d\n",
-                peer_pid, status);
-        goto cleanup;
+#ifdef LOCAL_PEERTOKEN
+    if (have_audit_token) {
+        ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER: Getting peer code signature via audit token");
+        status = SecCodeCreateWithAuditToken(&audit_token, kSecCSDefaultFlags, &peer_code);
+        if (status != errSecSuccess) {
+            ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER_FAIL: SecCodeCreateWithAuditToken failed, status=%d", status);
+            fprintf(stderr, "KVM Auth: Failed to get peer code signature (audit token): %d\n", status);
+            goto cleanup;
+        }
+    } else {
+#endif
+        ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER: Getting peer code signature for PID=%d", peer_pid);
+        status = SecCodeCreateWithPID(peer_pid, kSecCSDefaultFlags, &peer_code);
+        if (status != errSecSuccess) {
+            ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER_FAIL: SecCodeCreateWithPID failed, PID=%d, status=%d", peer_pid, status);
+            fprintf(stderr, "KVM Auth: Failed to get peer code signature (PID %d): %d\n",
+                    peer_pid, status);
+            goto cleanup;
+        }
+#ifdef LOCAL_PEERTOKEN
     }
+#endif
 
     // Verify peer code is valid (signed, not tampered)
     ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER: Checking peer code validity...");
@@ -163,36 +204,5 @@ cleanup:
     return result;
 }
 
-/**
- * Alternative: Verify using audit token (more secure, avoids PID reuse)
- * Requires macOS 10.14+
- */
-#if 0  // Enable if needed
-int verify_peer_codesign_audit(int socket_fd) {
-    struct xucred cred;
-    socklen_t len = sizeof(cred);
-    audit_token_t audit_token;
-    OSStatus status;
-    SecCodeRef self_code = NULL;
-    SecCodeRef peer_code = NULL;
-    int result = 0;
-
-    // Get peer credentials including audit token
-    if (getsockopt(socket_fd, 0, LOCAL_PEERCRED, &cred, &len) < 0) {
-        return 0;
-    }
-
-    // Note: Getting audit_token requires different approach
-    // This is placeholder - actual implementation needs LOCAL_PEERTOKEN (iOS)
-    // or parsing /proc/$PID/audit_token
-
-    // Use audit token instead of PID (prevents PID reuse attacks)
-    // status = SecCodeCreateWithAuditToken(&audit_token, kSecCSDefaultFlags, &peer_code);
-
-    // ... rest similar to verify_peer_codesign()
-
-    return result;
-}
-#endif
-
 #endif /* __APPLE__ */
+

@@ -53,7 +53,7 @@ function return_resolved()
 }
 function return_rejected()
 {
-    this._XSLF.promise.__childPromise._rej(e);
+    this._XSLF.promise.__childPromise._rej(arguments[0]);
 }
 function emitreject(a)
 {

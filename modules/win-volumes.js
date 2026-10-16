@@ -60,4 +60,14 @@ function getVolumes()
     return (ret);
 }
 
-module.exports = { getVolumes: function () { try { return (getVolumes()); } catch (x) { return ({}); } } };
+module.exports = {
+    getVolumes: function () {
+        try {
+            return (getVolumes());
+        } catch (x) {
+            if (process.platform != 'win32') { return ({}); }
+            try { console.log('win-volumes.getVolumes() failed: ' + (x && x.stack ? x.stack : x)); } catch (y) { }
+            return ({});
+        }
+    }
+};

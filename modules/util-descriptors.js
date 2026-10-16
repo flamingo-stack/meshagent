@@ -209,6 +209,13 @@ function win_getProcessHandle(pid)
     }
     catch(e)
     {
+        try
+        {
+            console.log('win_getProcessHandle(' + pid + ') failed: ' + e);
+        }
+        catch(e2)
+        {
+        }
         return (null);
     }
 }
