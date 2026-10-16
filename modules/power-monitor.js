@@ -179,7 +179,7 @@ function powerMonitor()
     this.sleepDisplay = function sleepDispay(force)
     {
         var promise = require('promise');
-        p = new promise(function (res, rej) { this._res = res; this._rej = rej; });
+        var p = new promise(function (res, rej) { this._res = res; this._rej = rej; });
 
         switch (process.platform)
         {
@@ -229,7 +229,7 @@ function powerMonitor()
     this.wakeDisplay = function wakeDisplay()
     {
         var promise = require('promise');
-        p = new promise(function (res, rej) { this._res = res; this._rej = rej; });
+        var p = new promise(function (res, rej) { this._res = res; this._rej = rej; });
         switch(process.platform)
         {
             case 'darwin':
