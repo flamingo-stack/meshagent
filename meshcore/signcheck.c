@@ -143,7 +143,7 @@ int signcheck_verifysign(char* filename, int upgrade)
 	char* certbuf = NULL;
 	int certbuflen = 0;
 	int found = 0;
-	char certhash[32];
+	char certhash[48];
 	int agentid = 0;
 	int ver = 0;
 
@@ -228,3 +228,4 @@ error:
 	return (ver == MESH_AGENT_VERSION ? 1 : 0);
 #endif
 }
+

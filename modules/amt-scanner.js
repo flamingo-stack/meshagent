@@ -85,6 +85,10 @@ function AMTScanner() {
 
     this.scan = function (rangestr, timeout, callback) {
         var iprange = this.parseIPv4Range(rangestr);
+        if (iprange == null) {
+            if (callback) { callback([]); }
+            return;
+        }
         var rmcp = this.buildRmcpPing(0);
         var server = this.dgram.createSocket({ type: 'udp4' });
         server.parent = this;
@@ -101,7 +105,7 @@ function AMTScanner() {
                 callback(server.scanResults);
             }
             server.parent.emit('found', server.scanResults);
-            delete server;
+            server.parent = null;
         }, timeout);
     };
 }

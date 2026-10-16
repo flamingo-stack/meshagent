@@ -51,6 +51,7 @@ function dbus(address, uid, env)
         this._pendingTimeout = null;
         var sig = {};
         var tmp, tmp2;
+        var i;
 
         var info = this._pending[0].split(';');
         for (i = 1; i < info.length; ++i)
@@ -93,13 +94,16 @@ function dbus(address, uid, env)
 				            console.log('OOPS: ' + tmpString);
 				            console.log('\n');
 			            }
-			            if(tmpVal.startsWith('string '))
+			            if(tmpVal != null)
 			            {
-			               tmpVal = tmpVal.split('"')[1];
-			            }
-			            if(tmpVal.startsWith('uint') || tmpVal.startsWith('int'))
-			            {
-			               tmpVal = tmpVal.split(' ')[1];
+				            if(tmpVal.startsWith('string '))
+				            {
+				               tmpVal = tmpVal.split('"')[1];
+				            }
+				            if(tmpVal.startsWith('uint') || tmpVal.startsWith('int'))
+				            {
+				               tmpVal = tmpVal.split(' ')[1];
+				            }
 			            }
 			            dictEntry[tmpString.split('"')[1]] = tmpVal;
 			            sig['data'].push(dictEntry);
@@ -206,3 +210,4 @@ module.exports.getServices = function getServices()
     }
     return (ret);
 }
+

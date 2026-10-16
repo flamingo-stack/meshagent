@@ -58,6 +58,39 @@ static FILE* g_log_file = NULL;
 static char g_log_directory[LOG_PATH_SIZE] = {0};
 static long g_current_log_size = 0;
 
+/* Thread-safe mutex for logging */
+#ifdef WIN32
+static CRITICAL_SECTION g_log_mutex;
+static int g_log_mutex_initialized = 0;
+#else
+static pthread_mutex_t g_log_mutex = PTHREAD_MUTEX_INITIALIZER;
+#endif
+
+static inline void init_log_mutex(void) {
+#ifdef WIN32
+    if (!g_log_mutex_initialized) {
+        InitializeCriticalSection(&g_log_mutex);
+        g_log_mutex_initialized = 1;
+    }
+#endif
+}
+
+static inline void lock_log(void) {
+#ifdef WIN32
+    EnterCriticalSection(&g_log_mutex);
+#else
+    pthread_mutex_lock(&g_log_mutex);
+#endif
+}
+
+static inline void unlock_log(void) {
+#ifdef WIN32
+    LeaveCriticalSection(&g_log_mutex);
+#else
+    pthread_mutex_unlock(&g_log_mutex);
+#endif
+}
+
 #ifdef WIN32
 static int g_original_stdout_fd = -1;
 static HANDLE g_tee_thread = INVALID_HANDLE_VALUE;
@@ -83,10 +116,13 @@ static DWORD WINAPI tee_thread_func(LPVOID lpParam) {
         }
 
         /* Write to log file */
+        init_log_mutex();
+        lock_log();
         if (g_log_file != NULL) {
             fwrite(buffer, 1, bytes_read, g_log_file);
             fflush(g_log_file);
         }
+        unlock_log();
     }
 
     return 0;
@@ -118,51 +154,21 @@ static void* tee_thread_func(void* arg) {
         }
 
         /* Write to log file */
+        init_log_mutex();
+        lock_log();
         if (g_log_file != NULL) {
             fwrite(buffer, 1, bytes_read, g_log_file);
             fflush(g_log_file);
         }
+        unlock_log();
     }
 
     return NULL;
 }
 #endif
 
-/* Thread-safe mutex for logging */
-#ifdef WIN32
-static CRITICAL_SECTION g_log_mutex;
-static int g_log_mutex_initialized = 0;
-#else
-static pthread_mutex_t g_log_mutex = PTHREAD_MUTEX_INITIALIZER;
-#endif
-
 static volatile int g_disk_error_count = 0;
 static volatile int g_disk_available = 1;
-
-static inline void init_log_mutex(void) {
-#ifdef WIN32
-    if (!g_log_mutex_initialized) {
-        InitializeCriticalSection(&g_log_mutex);
-        g_log_mutex_initialized = 1;
-    }
-#endif
-}
-
-static inline void lock_log(void) {
-#ifdef WIN32
-    EnterCriticalSection(&g_log_mutex);
-#else
-    pthread_mutex_lock(&g_log_mutex);
-#endif
-}
-
-static inline void unlock_log(void) {
-#ifdef WIN32
-    LeaveCriticalSection(&g_log_mutex);
-#else
-    pthread_mutex_unlock(&g_log_mutex);
-#endif
-}
 
 static inline long get_file_size(const char* filepath) {
     struct stat st;
@@ -222,6 +228,7 @@ static inline int compress_file_to_gzip(const char* source_path, const char* des
 #endif
 }
 
+/* Caller must hold g_log_mutex (via lock_log()) before calling this. */
 static inline int rotate_log_file(void) {
     char log_path[LOG_PATH_SIZE];
     char archive_path[LOG_PATH_SIZE];
@@ -284,6 +291,7 @@ static inline int rotate_log_file(void) {
     return 1;
 }
 
+/* Caller must hold g_log_mutex (via lock_log()) before calling this. */
 static inline void check_and_rotate(int bytes_written) {
     g_current_log_size += bytes_written;
 
@@ -305,6 +313,8 @@ static inline int enable_file_logging(const char* log_directory, const char* log
 
     (void)log_prefix;
 
+    init_log_mutex();
+
     if (g_log_file != NULL) {
         fprintf(stderr, "WARNING: File logging is already enabled\n");
         return 1;
@@ -325,8 +335,10 @@ static inline int enable_file_logging(const char* log_directory, const char* log
         snprintf(logfile_path, sizeof(logfile_path), "%s", LOG_FILENAME);
     }
 
+    lock_log();
     g_log_file = fopen(logfile_path, "a");
     if (g_log_file == NULL) {
+        unlock_log();
         fprintf(stderr, "WARNING: Failed to open log file: %s\n", logfile_path);
         return 0;
     }
@@ -350,32 +362,41 @@ static inline int enable_file_logging(const char* log_directory, const char* log
     fprintf(g_log_file, "Max size before rotation: %d MB\n", LOG_MAX_SIZE / (1024 * 1024));
     fprintf(g_log_file, "========================================\n\n");
     fflush(g_log_file);
+    unlock_log();
 
 #ifdef WIN32
     /* Create pipe for tee functionality */
     if (_pipe(g_pipe_fds, LOG_BUFFER_SIZE, _O_BINARY) != 0) {
         fprintf(stderr, "WARNING: Failed to create pipe for logging\n");
+        lock_log();
         fclose(g_log_file);
         g_log_file = NULL;
+        unlock_log();
         return 0;
     }
 
     /* Save original stdout and check if we're running as service */
     g_original_stdout_fd = _dup(1); /* 1 is stdout */
     if (g_original_stdout_fd < 0) {
+        lock_log();
         fprintf(g_log_file, "WARNING: Failed to duplicate stdout - running as service\n");
         fflush(g_log_file);
+        unlock_log();
         g_daemon_mode = 1;
     } else {
         /* Check if stdout is redirected (common in service mode) */
         if (!_isatty(g_original_stdout_fd)) {
             /* stdout is not a console - likely service mode */
             g_daemon_mode = 1;
+            lock_log();
             fprintf(g_log_file, "INFO: Detected service mode - console output disabled\n");
             fflush(g_log_file);
+            unlock_log();
         } else {
+            lock_log();
             fprintf(g_log_file, "INFO: Console mode detected - output will go to both console and file\n");
             fflush(g_log_file);
+            unlock_log();
         }
     }
 
@@ -383,35 +404,45 @@ static inline int enable_file_logging(const char* log_directory, const char* log
     g_logging_active = 1;
     g_tee_thread = CreateThread(NULL, 0, tee_thread_func, NULL, 0, NULL);
     if (g_tee_thread == NULL) {
+        lock_log();
         fprintf(g_log_file, "WARNING: Failed to create logging thread\n");
         fflush(g_log_file);
+        unlock_log();
         if (g_original_stdout_fd >= 0) _close(g_original_stdout_fd);
         _close(g_pipe_fds[0]);
         _close(g_pipe_fds[1]);
+        lock_log();
         fclose(g_log_file);
         g_log_file = NULL;
+        unlock_log();
         g_logging_active = 0;
         return 0;
     }
 
     /* Redirect stdout to pipe */
     if (_dup2(g_pipe_fds[1], 1) < 0) { /* 1 is stdout */
+        lock_log();
         fprintf(g_log_file, "WARNING: Failed to redirect stdout\n");
         fflush(g_log_file);
+        unlock_log();
         g_logging_active = 0;
         _close(g_pipe_fds[1]); /* Close write end to signal thread to exit */
         WaitForSingleObject(g_tee_thread, 1000);
         CloseHandle(g_tee_thread);
         if (g_original_stdout_fd >= 0) _close(g_original_stdout_fd);
         _close(g_pipe_fds[0]);
+        lock_log();
         fclose(g_log_file);
         g_log_file = NULL;
+        unlock_log();
         return 0;
     }
 
     if (_dup2(g_pipe_fds[1], 2) < 0) { /* 2 is stderr */
+        lock_log();
         fprintf(g_log_file, "WARNING: Failed to redirect stderr\n");
         fflush(g_log_file);
+        unlock_log();
         if (g_original_stdout_fd >= 0) _dup2(g_original_stdout_fd, 1);
         g_logging_active = 0;
         _close(g_pipe_fds[1]); /* Close write end to signal thread to exit */
@@ -419,8 +450,10 @@ static inline int enable_file_logging(const char* log_directory, const char* log
         CloseHandle(g_tee_thread);
         if (g_original_stdout_fd >= 0) _close(g_original_stdout_fd);
         _close(g_pipe_fds[0]);
+        lock_log();
         fclose(g_log_file);
         g_log_file = NULL;
+        unlock_log();
         return 0;
     }
 
@@ -435,16 +468,20 @@ static inline int enable_file_logging(const char* log_directory, const char* log
     /* Create pipe for tee functionality */
     if (pipe(g_pipe_fds) != 0) {
         fprintf(stderr, "WARNING: Failed to create pipe for logging\n");
+        lock_log();
         fclose(g_log_file);
         g_log_file = NULL;
+        unlock_log();
         return 0;
     }
 
     /* Save original stdout and check if we're running as daemon */
     g_original_stdout_fd = dup(STDOUT_FILENO);
     if (g_original_stdout_fd < 0) {
+        lock_log();
         fprintf(g_log_file, "WARNING: Failed to duplicate stdout - running in daemon mode\n");
         fflush(g_log_file);
+        unlock_log();
         g_daemon_mode = 1;
     } else {
         /* Check if stdout is redirected (common in daemon mode) */
@@ -453,11 +490,15 @@ static inline int enable_file_logging(const char* log_directory, const char* log
             if (!isatty(g_original_stdout_fd)) {
                 /* stdout is not a terminal - likely daemon mode */
                 g_daemon_mode = 1;
+                lock_log();
                 fprintf(g_log_file, "INFO: Detected daemon mode - console output disabled\n");
                 fflush(g_log_file);
+                unlock_log();
             } else {
+                lock_log();
                 fprintf(g_log_file, "INFO: Console mode detected - output will go to both console and file\n");
                 fflush(g_log_file);
+                unlock_log();
             }
         }
     }
@@ -465,13 +506,17 @@ static inline int enable_file_logging(const char* log_directory, const char* log
     /* Start tee thread */
     g_logging_active = 1;
     if (pthread_create(&g_tee_thread, NULL, tee_thread_func, NULL) != 0) {
+        lock_log();
         fprintf(g_log_file, "WARNING: Failed to create logging thread\n");
         fflush(g_log_file);
+        unlock_log();
         if (g_original_stdout_fd >= 0) close(g_original_stdout_fd);
         close(g_pipe_fds[0]);
         close(g_pipe_fds[1]);
+        lock_log();
         fclose(g_log_file);
         g_log_file = NULL;
+        unlock_log();
         g_logging_active = 0;
         return 0;
     }
@@ -682,6 +727,7 @@ static inline void disable_file_logging(void)
 #endif
 
     /* Close log file */
+    lock_log();
     if (g_log_file != NULL) {
         fprintf(g_log_file, "\n========================================\n");
         fprintf(g_log_file, "MeshAgent Log Ended\n");
@@ -696,6 +742,7 @@ static inline void disable_file_logging(void)
     g_disk_error_count = 0;
     g_current_log_size = 0;
     g_log_directory[0] = '\0';
+    unlock_log();
 
 #ifdef WIN32
     if (g_log_mutex_initialized) {

@@ -343,7 +343,6 @@ int __fastcall wincrypto_open(int newcert)
 	sa.pszObjId = szOID_RSA_SHA384RSA; // Using SHA384
 
 #ifdef _WIN64
-	wincrypto_certCtx = CertCreateSelfSignCertificate(NULL, &sib, 0, &kpi, NULL, NULL, NULL, NULL);
 	wincrypto_certCtx = CertCreateSelfSignCertificate(NULL, &sib, 0, &kpi, &sa, &st1, &st2, &exts);
 #else
 	wincrypto_certCtx = CertCreateSelfSignCertificate(wincrypto_hProv, &sib, 0, &kpi, &sa, &st1, &st2, &exts);
@@ -870,3 +869,4 @@ end:
 }
 
 #endif
+

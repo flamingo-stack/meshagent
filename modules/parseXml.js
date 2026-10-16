@@ -44,7 +44,7 @@ function _treeBuilder()
         this.tree.peek().nsTable[prefix] = namespace;
         if(this.tree.peek().attributes.length > 0)
         {
-            for(var i = 0; i<this.tree.peek().attributes; ++i)
+            for(var i = 0; i<this.tree.peek().attributes.length; ++i)
             {
                 var a = this.tree.peek().attributes[i];
                 if(prefix == '*' && a.name == a.localName)

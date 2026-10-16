@@ -91,10 +91,23 @@ cleanup:
 
 /**
  * Verify peer process connected to socket is legitimate meshagent
+ *
+ * NOTE: This verification is PID-based (SecCodeCreateWithPID). PIDs are
+ * recycled by the OS, so there is a narrow TOCTOU window between the
+ * connection being accepted and this lookup during which the original
+ * process could exit and the PID be reassigned to a different process.
+ * To reduce this window, we re-read the peer PID immediately before
+ * creating the SecCode reference and re-validate it immediately after,
+ * rejecting the connection if the PID changed underneath us. This does
+ * not fully eliminate the race (only an audit-token based check can do
+ * that - see verify_peer_codesign_audit() below), but it narrows the
+ * window significantly for this actively-used code path.
  */
 int verify_peer_codesign(int socket_fd) {
     pid_t peer_pid = 0;
+    pid_t peer_pid_recheck = 0;
     socklen_t len = sizeof(peer_pid);
+    socklen_t len_recheck = sizeof(peer_pid_recheck);
     OSStatus status;
     SecCodeRef self_code = NULL;
     SecCodeRef peer_code = NULL;
@@ -141,6 +154,21 @@ int verify_peer_codesign(int socket_fd) {
         ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER_FAIL: SecCodeCheckValidity failed, PID=%d, status=%d", peer_pid, status);
         fprintf(stderr, "KVM Auth: Peer code signature invalid (PID %d): %d\n",
                 peer_pid, status);
+        goto cleanup;
+    }
+
+    // Re-check that the socket peer PID has not changed since we started
+    // validating. If it has, the original process has exited and the PID
+    // may have been reassigned to a different (attacker-controlled)
+    // process - reject the connection to narrow the PID-reuse TOCTOU window.
+    if (getsockopt(socket_fd, SOL_LOCAL, LOCAL_PEERPID, &peer_pid_recheck, &len_recheck) < 0) {
+        ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER_FAIL: getsockopt(LOCAL_PEERPID) recheck failed: %s", strerror(errno));
+        fprintf(stderr, "KVM Auth: Failed to recheck peer PID: %s\n", strerror(errno));
+        goto cleanup;
+    }
+    if (peer_pid_recheck != peer_pid) {
+        ILIBLOGMESSAGEX("MSG_KVM_AUTH_VERIFY_PEER_FAIL: Peer PID changed during verification (was %d, now %d) - possible PID reuse", peer_pid, peer_pid_recheck);
+        fprintf(stderr, "KVM Auth: Peer PID changed during verification (possible PID reuse), rejecting\n");
         goto cleanup;
     }
 
