@@ -1,11 +1,25 @@
+/*
+Copyright 2024 Intel Corporation
 
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 
 function getUsers()
 {
     var res, i, uu = {};
     require('user-sessions').Current(function (u) { res = u; });
 
-    for (i in res)
+    for (var i in res)
     {
         if (process.platform != 'win32') { res[i].SessionId = res[i].uid; }
         if (res[i].State == 'Active' || res[i].State == 'Connected') { uu[process.platform == 'win32' ? res[i].SessionId : res[i].uid] = res[i]; }
@@ -14,7 +28,7 @@ function getUsers()
     if (process.platform == 'linux')
     {
         var spawnable = this.loginUids();
-        for (i in spawnable)
+        for (var i in spawnable)
         {
             if (uu[spawnable[i].uid] == null)
             {
@@ -108,7 +122,7 @@ if (process.platform == 'linux')
     {
         var lids = module.exports.allowed
         var uu = {};
-        for (i in lids)
+        for (var i in lids)
         {
             try
             {
@@ -243,7 +257,7 @@ if (process.platform == 'linux')
     module.exports =
         {
             createVirtualSession: spawnVirtualSession,
-            hasVirtualSessionSupport: hasVirtualSessionSupport(),
+            hasVirtualSessionSupport: hasVirtualSessionSupport,
             users: getUsers,
             loginUids: loginUids,
             allowed: allowedUIDs,
