@@ -26,6 +26,7 @@ limitations under the License.
 
 #include "agentcore.h"
 #include "openframe_file_logger.h"
+#include "openframe_tls_check.h"
 #include "signcheck.h"
 #include "meshdefines.h"
 #include "meshinfo.h"
@@ -3926,6 +3927,15 @@ void MeshServer_ControlChannel_PongSink(ILibWebClient_StateObject WebStateObject
 #endif
 }
 
+#ifndef MICROSTACK_NOTLS
+// Sink of the OpenFrame server TLS check. Runs on the chain thread or on the check's worker thread;
+// openframe_printf takes the log lock.
+static void MeshServer_OpenFrameTlsCheck_Log(const char *line)
+{
+	printf("%s\n", line);
+}
+#endif
+
 void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int InterruptFlag, struct packetheader *header, char *bodyBuffer, int *beginPointer, int endPointer, ILibWebClient_ReceiveStatus recvStatus, void *user1, void *user2, int *PAUSE)
 {
 	MeshAgentHostContainer *agent = (MeshAgentHostContainer*)user1;
@@ -4009,6 +4019,18 @@ void MeshServer_OnResponse(ILibWebClient_StateObject WebStateObject, int Interru
 			}
 
 #ifndef MICROSTACK_NOTLS
+			if (agent->openFrameMode)
+			{
+				// Server TLS check, release 1: log only. The connection goes on whatever the verdict.
+				char *tlsHost = NULL, *tlsPath = NULL;
+				unsigned short tlsPort = 0;
+				if (ILibParseUri(agent->serveruri, &tlsHost, &tlsPort, &tlsPath, NULL) == ILibParseUriResult_TLS)
+				{
+					OpenFrameTlsCheck_Observe(ILibWebClient_SslGetCerts(WebStateObject), tlsHost, MeshServer_OpenFrameTlsCheck_Log);
+				}
+				free(tlsHost);
+				free(tlsPath);
+			}
 			X509* peer = ILibWebClient_SslGetCert(WebStateObject);
 			agent->serverAuthState = 0; // We are not authenticated. Bitmask: 1 = Server Auth, 2 = Agent Auth.
 			agent->serverConnectionState = 2;
