@@ -136,6 +136,9 @@
     <ClCompile Include="..\meshcore\meshinfo.c">
       <Filter>Meshcore</Filter>
     </ClCompile>
+    <ClCompile Include="..\meshcore\openframe_tls_check.c">
+      <Filter>Meshcore</Filter>
+    </ClCompile>
     <ClCompile Include="..\microscript\ILibDuktape_Dgram.c">
       <Filter>Microscript</Filter>
     </ClCompile>
@@ -297,6 +300,9 @@
     </ClInclude>
     <ClInclude Include="resource.h" />
     <ClInclude Include="..\meshcore\meshinfo.h">
+      <Filter>Meshcore</Filter>
+    </ClInclude>
+    <ClInclude Include="..\meshcore\openframe_tls_check.h">
       <Filter>Meshcore</Filter>
     </ClInclude>
     <ClInclude Include="..\microscript\ILibDuktape_Dgram.h">

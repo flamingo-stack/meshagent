@@ -127,6 +127,9 @@
     <ClInclude Include="..\meshcore\meshinfo.h">
       <Filter>Meshcore</Filter>
     </ClInclude>
+    <ClInclude Include="..\meshcore\openframe_tls_check.h">
+      <Filter>Meshcore</Filter>
+    </ClInclude>
     <ClInclude Include="..\microscript\ILibDuktape_ScriptContainer.h">
       <Filter>Microscript</Filter>
     </ClInclude>
@@ -288,6 +291,9 @@
       <Filter>Microstack</Filter>
     </ClCompile>
     <ClCompile Include="..\meshcore\meshinfo.c">
+      <Filter>Meshcore</Filter>
+    </ClCompile>
+    <ClCompile Include="..\meshcore\openframe_tls_check.c">
       <Filter>Meshcore</Filter>
     </ClCompile>
     <ClCompile Include="..\microscript\ILibDuktape_ScriptContainer.c">
