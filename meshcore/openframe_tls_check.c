@@ -30,8 +30,8 @@ OpenFrame: log-only check of the control channel's server certificate. See openf
 
 #define OPENFRAME_TLS_CHECK_HOST_MAX 256
 #define OPENFRAME_TLS_CHECK_MAX_CERTS 10
-#define OPENFRAME_TLS_CHECK_REASON_MAX 240
-#define OPENFRAME_TLS_CHECK_LINE_MAX 768
+#define OPENFRAME_TLS_CHECK_REASON_MAX 64
+#define OPENFRAME_TLS_CHECK_LINE_MAX 512
 
 typedef enum
 {
@@ -60,7 +60,6 @@ typedef struct OpenFrameTlsCheck_Job
 static OpenFrameTlsCheck_Pair g_openframeTlsPairs[OPENFRAME_TLS_CHECK_MAX_PAIRS];
 static int g_openframeTlsPairCount = 0;
 static int g_openframeTlsLimitLogged = 0;
-static int g_openframeTlsNoChainLogged = 0;
 
 // Set by the chain thread, cleared by the worker when its check is done.
 #ifdef WIN32
@@ -84,15 +83,6 @@ static unsigned long long OpenFrameTlsCheck_NowMs(void)
 #endif
 }
 
-// Keeps a reason on one log line.
-static void OpenFrameTlsCheck_OneLine(char *s)
-{
-	for (; *s != 0; ++s)
-	{
-		if ((unsigned char)*s < 0x20) { *s = ' '; }
-	}
-}
-
 static void OpenFrameTlsCheck_FreeJob(OpenFrameTlsCheck_Job *job)
 {
 	int i;
@@ -101,23 +91,6 @@ static void OpenFrameTlsCheck_FreeJob(OpenFrameTlsCheck_Job *job)
 }
 
 #ifdef WIN32
-static const char* OpenFrameTlsCheck_WinErrorName(DWORD code)
-{
-	switch (code)
-	{
-		case CERT_E_UNTRUSTEDROOT: return "untrusted root";
-		case CERT_E_CHAINING: return "incomplete chain";
-		case CERT_E_CN_NO_MATCH: return "name mismatch";
-		case CERT_E_EXPIRED: return "expired or not yet valid";
-		case CERT_E_WRONG_USAGE: return "wrong usage";
-		case CERT_E_REVOKED: return "revoked";
-		case CRYPT_E_REVOKED: return "revoked";
-		case TRUST_E_CERT_SIGNATURE: return "bad signature";
-		case CERT_E_UNTRUSTEDTESTROOT: return "untrusted test root";
-		default: return "other";
-	}
-}
-
 // Same parameters as the client's schannel crate (tls_stream.rs, validate): the chain the server
 // sent as extra store, server-auth usage, cache-only revocation, SSL policy with the host name,
 // unknown revocation ignored.
@@ -195,7 +168,7 @@ static OpenFrameTlsCheck_Verdict OpenFrameTlsCheck_VerifyOs(OpenFrameTlsCheck_Jo
 	else
 	{
 		verdict = OpenFrameTlsCheck_NotTrusted;
-		snprintf(reason, reasonLen, "0x%08lx %s", (unsigned long)policyStatus.dwError, OpenFrameTlsCheck_WinErrorName(policyStatus.dwError));
+		snprintf(reason, reasonLen, "0x%08lx", (unsigned long)policyStatus.dwError);
 	}
 
 done:
@@ -259,13 +232,9 @@ static OpenFrameTlsCheck_Verdict OpenFrameTlsCheck_VerifyOs(OpenFrameTlsCheck_Jo
 		}
 		else
 		{
-			char description[OPENFRAME_TLS_CHECK_REASON_MAX];
-			CFStringRef text = (error != NULL) ? CFErrorCopyDescription(error) : NULL;
-			description[0] = 0;
-			if (text == NULL || !CFStringGetCString(text, description, sizeof(description), kCFStringEncodingUTF8)) { description[0] = 0; }
+			// The code only: the error's description quotes the certificate's names.
 			verdict = OpenFrameTlsCheck_NotTrusted;
-			snprintf(reason, reasonLen, "%ld %s", (error != NULL) ? (long)CFErrorGetCode(error) : 0L, description);
-			if (text != NULL) { CFRelease(text); }
+			snprintf(reason, reasonLen, "%ld", (error != NULL) ? (long)CFErrorGetCode(error) : 0L);
 		}
 		if (error != NULL) { CFRelease(error); }
 	}
@@ -303,7 +272,7 @@ done:
 
 static void OpenFrameTlsCheck_Run(OpenFrameTlsCheck_Job *job)
 {
-	char reason[OPENFRAME_TLS_CHECK_REASON_MAX + 32];
+	char reason[OPENFRAME_TLS_CHECK_REASON_MAX];
 	char line[OPENFRAME_TLS_CHECK_LINE_MAX];
 	OpenFrameTlsCheck_Verdict verdict = OpenFrameTlsCheck_Error;
 	unsigned long long started = OpenFrameTlsCheck_NowMs();
@@ -324,23 +293,12 @@ static void OpenFrameTlsCheck_Run(OpenFrameTlsCheck_Job *job)
 	verdict = OpenFrameTlsCheck_VerifyOs(job, reason, sizeof(reason));
 #endif
 	elapsed = OpenFrameTlsCheck_NowMs() - started;
-	OpenFrameTlsCheck_OneLine(reason);
 
-	switch (verdict)
-	{
-		case OpenFrameTlsCheck_Trusted:
-			snprintf(line, sizeof(line), "OpenFrame TLS check: server certificate trusted by the OS (host=%s, leaf=%s, chain=%d, %llu ms)",
-				job->host, job->leafHex, job->count, elapsed);
-			break;
-		case OpenFrameTlsCheck_NotTrusted:
-			snprintf(line, sizeof(line), "OpenFrame TLS check: server certificate NOT trusted by the OS, an enforcing agent would refuse this server (host=%s, leaf=%s, chain=%d, reason=%s, %llu ms)",
-				job->host, job->leafHex, job->count, reason, elapsed);
-			break;
-		default:
-			snprintf(line, sizeof(line), "OpenFrame TLS check: could not evaluate the server certificate (host=%s, leaf=%s, chain=%d, reason=%s, %llu ms)",
-				job->host, job->leafHex, job->count, reason, elapsed);
-			break;
-	}
+	snprintf(line, sizeof(line), "OpenFrame TLS check: %s (host=%s, leaf=%s, chain=%d%s%s, %llu ms)",
+		verdict == OpenFrameTlsCheck_Trusted ? "server certificate trusted by the OS"
+		: verdict == OpenFrameTlsCheck_NotTrusted ? "server certificate NOT trusted by the OS, an enforcing agent would refuse this server"
+		: "could not evaluate the server certificate",
+		job->host, job->leafHex, job->count, reason[0] != 0 ? ", reason=" : "", reason, elapsed);
 	job->log(line);
 	OpenFrameTlsCheck_FreeJob(job);
 	OPENFRAME_TLS_BUSY_CLEAR();
@@ -391,16 +349,7 @@ void OpenFrameTlsCheck_Observe(STACK_OF(X509) *chain, const char *host, OpenFram
 	hostLen = strlen(host);
 	if (hostLen == 0 || hostLen >= OPENFRAME_TLS_CHECK_HOST_MAX) { return; }
 
-	if (chain == NULL || sk_X509_num(chain) < 1)
-	{
-		if (g_openframeTlsNoChainLogged == 0)
-		{
-			g_openframeTlsNoChainLogged = 1;
-			log("OpenFrame TLS check: skipped, the server certificate chain is not available");
-		}
-		return;
-	}
-
+	if (chain == NULL || sk_X509_num(chain) < 1) { return; }
 	leaf = sk_X509_value(chain, 0);
 	if (leaf == NULL) { return; }
 	if (X509_digest(leaf, EVP_sha256(), fingerprint, &fingerprintLen) != 1 || fingerprintLen != sizeof(fingerprint)) { return; }
@@ -451,12 +400,7 @@ void OpenFrameTlsCheck_Observe(STACK_OF(X509) *chain, const char *host, OpenFram
 	memcpy(g_openframeTlsPairs[g_openframeTlsPairCount].leaf, fingerprint, sizeof(fingerprint));
 	++g_openframeTlsPairCount;
 
-	if (!OpenFrameTlsCheck_StartWorker(job))
-	{
-		OpenFrameTlsCheck_FreeJob(job);
-		OPENFRAME_TLS_BUSY_CLEAR();
-		log("OpenFrame TLS check: skipped, the worker thread did not start");
-	}
+	if (!OpenFrameTlsCheck_StartWorker(job)) { OpenFrameTlsCheck_FreeJob(job); OPENFRAME_TLS_BUSY_CLEAR(); }
 }
 
 #else
